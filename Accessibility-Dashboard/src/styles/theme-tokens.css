@@ -1,0 +1,93 @@
+@layer base {
+  .bridge-dashboard {
+    --dashboard-accent: #ef6a50;
+    --dashboard-accent-hover: #e85d43;
+    --dashboard-danger: #dc2626;
+  }
+
+  .bridge-dashboard.theme-light {
+    --dashboard-page-bg: #ffffff;
+    --dashboard-top-bg: linear-gradient(180deg, #ffffff 0%, #fbfbfb 58%, #f7f7f7 100%);
+    --dashboard-content-bg: #ffffff;
+    --dashboard-shell-bg: transparent;
+    --dashboard-card-bg: #fbfaf7;
+    --dashboard-content-card-bg: #f7f7f7;
+    --dashboard-nested-surface: rgba(255, 255, 255, 0.7);
+    --dashboard-muted-surface: rgba(246, 241, 235, 0.76);
+    --dashboard-hover-surface: rgba(239, 229, 218, 0.88);
+    --dashboard-border-subtle: rgba(31, 27, 24, 0.055);
+    --dashboard-card-border: rgba(24, 20, 18, 0.045);
+    --dashboard-nested-border: rgba(31, 27, 24, 0.07);
+    --dashboard-text-strong: #171412;
+    --dashboard-text-primary: #0f172a;
+    --dashboard-text-muted: #8a8178;
+    --dashboard-text-secondary: #64748b;
+    --dashboard-drawer-bg: rgba(255, 255, 255, 0.995);
+    --dashboard-drawer-shadow: 0 28px 76px rgba(31, 27, 24, 0.13);
+    --dashboard-header-shadow: 0 14px 28px rgba(17, 17, 17, 0.14);
+    --dashboard-sidebar-active-bg: #111111;
+    --dashboard-sidebar-active-text: #ffffff;
+    --dashboard-sidebar-muted-text: #111111;
+    --dashboard-sidebar-hover-text: #111111;
+    --dashboard-menu-trigger-bg: rgba(255, 255, 255, 0.8);
+    --dashboard-menu-trigger-text: #0f172a;
+    --dashboard-date-day-bg: transparent;
+    --dashboard-date-day-border: rgba(31, 27, 24, 0.13);
+    --dashboard-date-separator: rgba(31, 27, 24, 0.12);
+    --recent-scan-card-bg: #ffffff;
+    --recent-scan-card-border: transparent;
+    --recent-scan-pager-dot-bg: #9ca3af;
+    --recent-scan-pager-dot-hover-bg: #6b7280;
+    --project-table-head-bg: #ffffff;
+    --project-table-row-hover-bg: rgba(15, 23, 42, 0.035);
+    --report-search-popover-bg: #ffffff;
+    --report-search-option-text: #64748b;
+    --report-search-option-hover-bg: #f8fafc;
+    --report-search-option-hover-text: #475569;
+    --site-score-line-color: #111111;
+    --site-score-grid-color: #d8dee8;
+  }
+
+  .bridge-dashboard.theme-dark {
+    --dashboard-page-bg: linear-gradient(180deg, #181b21 0%, #11141a 52%, #0a0c10 100%);
+    --dashboard-top-bg: rgba(17, 20, 26, 0.88);
+    --dashboard-content-bg: #0a0c10;
+    --dashboard-shell-bg: transparent;
+    --dashboard-card-bg: #11141a;
+    --dashboard-content-card-bg: #11141a;
+    --dashboard-nested-surface: #0a0c10;
+    --dashboard-muted-surface: #141b24;
+    --dashboard-hover-surface: #18212c;
+    --dashboard-border-subtle: #23272f;
+    --dashboard-card-border: transparent;
+    --dashboard-nested-border: #23272f;
+    --dashboard-text-strong: #f3f3f3;
+    --dashboard-text-primary: #ffffff;
+    --dashboard-text-muted: #8f8f8f;
+    --dashboard-text-secondary: #b3b3b3;
+    --dashboard-drawer-bg: rgba(12, 14, 17, 0.96);
+    --dashboard-drawer-shadow: 0 28px 76px rgba(0, 0, 0, 0.36);
+    --dashboard-header-shadow: 0 14px 28px rgba(0, 0, 0, 0.28);
+    --dashboard-sidebar-active-bg: #ffffff;
+    --dashboard-sidebar-active-text: #111111;
+    --dashboard-sidebar-muted-text: #9ca3af;
+    --dashboard-sidebar-hover-text: #d1d5db;
+    --dashboard-menu-trigger-bg: #3a3a3a;
+    --dashboard-menu-trigger-text: #ffffff;
+    --dashboard-date-day-bg: rgba(255, 255, 255, 0.045);
+    --dashboard-date-day-border: rgba(255, 255, 255, 0.1);
+    --dashboard-date-separator: rgba(255, 255, 255, 0.14);
+    --recent-scan-card-bg: #0a0c10;
+    --recent-scan-card-border: #272b34;
+    --recent-scan-pager-dot-bg: #4b5563;
+    --recent-scan-pager-dot-hover-bg: #6b7280;
+    --project-table-head-bg: transparent;
+    --project-table-row-hover-bg: rgba(255, 255, 255, 0.045);
+    --report-search-popover-bg: #0c0e11;
+    --report-search-option-text: #b3b3b3;
+    --report-search-option-hover-bg: #141b24;
+    --report-search-option-hover-text: #e5e7eb;
+    --site-score-line-color: #f8fafc;
+    --site-score-grid-color: rgba(226, 232, 240, 0.7);
+  }
+}
