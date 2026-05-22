@@ -412,10 +412,6 @@ export function DashboardPanel({
   ];
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-800">
-        <span className="font-semibold">백엔드 연결됨</span>
-        <span>최근 평가 요청 {data.evaluationRequests.length}건</span>
-      </div>
       <>
           <div className="grid overflow-visible gap-3 xl:grid-cols-[minmax(0,1fr)_420px] 2xl:grid-cols-[minmax(0,1fr)_460px]">
             <div className="grid min-w-0 overflow-visible gap-3 xl:grid-cols-[minmax(220px,0.8fr)_minmax(220px,0.8fr)_minmax(280px,1.4fr)] xl:grid-rows-[280px_348px] 2xl:grid-cols-[minmax(240px,0.78fr)_minmax(240px,0.78fr)_minmax(320px,1.44fr)]">

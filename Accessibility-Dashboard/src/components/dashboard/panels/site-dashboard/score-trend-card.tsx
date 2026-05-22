@@ -19,6 +19,13 @@ type IssueBarShapeProps = {
   y?: number | string;
 };
 
+type ScoreDotProps = {
+  cx?: number | string;
+  cy?: number | string;
+  payload?: ScoreChartItem;
+  active?: boolean;
+};
+
 function toChartNumber(value: number | string | undefined): number {
   if (typeof value === "number") {
     return value;
@@ -69,6 +76,27 @@ function IssueBarShape({ fill, height, width, x, y }: IssueBarShapeProps) {
   );
 }
 
+function ScoreDateDot({ active = false, cx, cy, payload }: ScoreDotProps) {
+  if (!payload) {
+    return null;
+  }
+
+  return (
+    <circle
+      cx={toChartNumber(cx)}
+      cy={toChartNumber(cy)}
+      r={active ? 5 : 3}
+      fill={chartConfig.score.color}
+      stroke={chartConfig.score.color}
+      strokeWidth={0}
+    />
+  );
+}
+
+function ActiveScoreDot(props: ScoreDotProps) {
+  return <ScoreDateDot {...props} active />;
+}
+
 export function ScoreTrendCard({ chartData, summaryItems }: ScoreTrendCardProps) {
   return (
     <article className="dashboard-card flex h-full min-h-0 w-full flex-col rounded-xl border border-slate-200 bg-white p-1">
@@ -78,7 +106,7 @@ export function ScoreTrendCard({ chartData, summaryItems }: ScoreTrendCardProps)
       <div className="mt-2 px-2.5 py-4">
         <ChartContainer
           config={chartConfig}
-          className="h-[360px] w-full overflow-visible [&_.recharts-curve.recharts-tooltip-cursor]:stroke-initial"
+          className="h-[clamp(15rem,32vh,22.5rem)] w-full overflow-visible [&_.recharts-curve.recharts-tooltip-cursor]:stroke-initial"
         >
           <ComposedChart
             data={chartData}
@@ -91,11 +119,14 @@ export function ScoreTrendCard({ chartData, summaryItems }: ScoreTrendCardProps)
             style={{ overflow: "visible" }}
           >
             <XAxis
-              dataKey="label"
+              dataKey="slot"
               axisLine={false}
               tickLine={false}
               tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+              tickFormatter={(value: number | string) => chartData[toChartNumber(value)]?.label ?? ""}
               tickMargin={10}
+              interval={0}
+              minTickGap={0}
               padding={{ left: 2, right: 2 }}
             />
 
@@ -153,12 +184,7 @@ export function ScoreTrendCard({ chartData, summaryItems }: ScoreTrendCardProps)
               stroke={chartConfig.score.color}
               strokeWidth={2.25}
               dot={false}
-              activeDot={{
-                r: 4,
-                fill: chartConfig.score.color,
-                stroke: chartConfig.score.color,
-                strokeWidth: 0
-              }}
+              activeDot={<ActiveScoreDot />}
             />
           </ComposedChart>
         </ChartContainer>
@@ -199,16 +225,22 @@ function ScoreTooltip({
       return order[String(left.dataKey) as ChartSeriesKey] - order[String(right.dataKey) as ChartSeriesKey];
     });
 
-  if (!active || rows.length === 0) {
+  const firstPayload = rows[0]?.payload;
+
+  if (!active || rows.length === 0 || !firstPayload) {
     return null;
   }
 
-  const label = rows[0]?.payload?.date ? formatDateLabel(rows[0].payload.date) : "";
+  const hasEvaluationData = Boolean(firstPayload.date);
+  const label = hasEvaluationData ? formatDateLabel(firstPayload.date) : "평가 기록 없음";
+  const visibleRows = hasEvaluationData
+    ? rows
+    : rows.filter((entry) => String(entry.dataKey) === "score");
 
   return (
     <div
       role="tooltip"
-      className="min-w-[170px] rounded-lg px-3 py-2 text-left shadow-[0_14px_32px_rgba(2,6,23,0.32)]"
+      className="min-w-[170px] rounded-lg px-3 py-2 text-left"
       style={{
         backgroundColor: "rgba(8, 8, 10, 0.96)",
         border: "1px solid rgba(255, 255, 255, 0.08)"
@@ -216,7 +248,7 @@ function ScoreTooltip({
     >
       {label && <p className="text-[11px] font-semibold text-white">{label}</p>}
       <div className="mt-1 grid gap-1.5 text-sm">
-        {rows.map((entry) => {
+        {visibleRows.map((entry) => {
           const key = String(entry.dataKey) as keyof typeof chartConfig;
           const color = entry.color ?? chartConfig[key]?.color ?? chartConfig.score.color;
           return (
@@ -228,7 +260,7 @@ function ScoreTooltip({
                 <span className="text-[11px] font-semibold text-white">{getChartLabel(key)}</span>
               </div>
               <span className="font-bold text-white">
-                {entry.value}
+                {hasEvaluationData ? entry.value : "-"}
                 {getChartValueSuffix(key)}
               </span>
             </div>

@@ -5,10 +5,12 @@ import type {
   CreateEvaluationTargetInput,
   EvaluationIssue,
   EvaluationRequestModel,
+  EvaluationTarget,
   EvaluationTargetModel,
   EvaluationResultSummary,
   ImprovementGuide,
   IssueResultModel,
+  Organization,
   OrganizationModel,
   ScoreResult
 } from "@/types/accessibility-domain";
@@ -200,56 +202,79 @@ async function apiGet<T>(path: string, signal?: AbortSignal): Promise<T> {
   return apiRequest<T>(path, { signal });
 }
 
-function toAccessUrl(targetName: string): string {
-  const value = targetName.trim();
-  if (value.startsWith("http://") || value.startsWith("https://")) {
-    return value;
-  }
-  if (value.includes(".")) {
-    return `https://${value}`;
-  }
-  return value;
-}
-
 function compareByUpdatedAt(left: EvaluationRequestModel, right: EvaluationRequestModel): number {
   return Date.parse(left.updatedAt) - Date.parse(right.updatedAt);
 }
 
-function buildOrganizationsFromRequests(requests: EvaluationRequestModel[]): OrganizationModel[] {
-  const requestsByTargetId = new Map<number, EvaluationRequestModel[]>();
+function fetchOrganizations(signal?: AbortSignal): Promise<Organization[]> {
+  return apiGet<Organization[]>("/organizations", signal);
+}
 
+function fetchEvaluationTargets(organizationId: number, signal?: AbortSignal): Promise<EvaluationTarget[]> {
+  return apiGet<EvaluationTarget[]>(`/organizations/${organizationId}/evaluation-targets`, signal);
+}
+
+function buildLatestRequestByTargetId(requests: EvaluationRequestModel[]): Map<number, EvaluationRequestModel> {
+  const requestsByTargetId = new Map<number, EvaluationRequestModel[]>();
   for (const request of requests) {
     const current = requestsByTargetId.get(request.evaluationTargetId) ?? [];
     current.push(request);
     requestsByTargetId.set(request.evaluationTargetId, current);
   }
 
-  return [...requestsByTargetId.entries()]
-    .map(([targetId, targetRequests]): OrganizationModel => {
+  return new Map(
+    [...requestsByTargetId.entries()].map(([targetId, targetRequests]) => {
       const sortedRequests = [...targetRequests].sort(compareByUpdatedAt);
-      const firstRequest = sortedRequests[0]!;
-      const latestRequest = sortedRequests[sortedRequests.length - 1]!;
-      const targetName = latestRequest.targetName ?? `target#${latestRequest.evaluationTargetId}`;
-      const accessUrl = toAccessUrl(targetName);
-      const evaluationTarget: EvaluationTargetModel = {
-        id: targetId,
-        name: targetName,
-        targetType: "PC Web",
-        accessUrl,
-        status: latestRequest.status,
-        createdAt: firstRequest.createdAt
-      };
+      return [targetId, sortedRequests[sortedRequests.length - 1]!];
+    })
+  );
+}
+
+function buildOrganizationsFromApi(
+  organizations: Organization[],
+  evaluationTargets: EvaluationTarget[],
+  requests: EvaluationRequestModel[]
+): OrganizationModel[] {
+  const targetsByOrganizationId = new Map<number, EvaluationTarget[]>();
+  const latestRequestByTargetId = buildLatestRequestByTargetId(requests);
+
+  for (const target of evaluationTargets) {
+    const currentTargets = targetsByOrganizationId.get(target.organizationId) ?? [];
+    currentTargets.push(target);
+    targetsByOrganizationId.set(target.organizationId, currentTargets);
+  }
+
+  return organizations
+    .map((organization): OrganizationModel => {
+      const targets = targetsByOrganizationId.get(organization.id) ?? [];
+      const evaluationTargetModels = targets.map((target): EvaluationTargetModel => {
+        const latestRequest = latestRequestByTargetId.get(target.id);
+
+        return {
+          id: target.id,
+          name: target.name,
+          targetType: target.targetType,
+          accessUrl: target.accessUrl,
+          status: latestRequest?.status ?? target.status,
+          createdAt: target.createdAt
+        };
+      });
+      const latestRequest = evaluationTargetModels
+        .map((target) => latestRequestByTargetId.get(target.id))
+        .filter((request): request is EvaluationRequestModel => request !== undefined)
+        .sort(compareByUpdatedAt);
+      const latestOrganizationRequest = latestRequest[latestRequest.length - 1];
 
       return {
-        id: targetId,
-        name: targetName,
-        type: "PC Web",
-        homepageUrl: accessUrl,
-        description: `${targetName} requests: ${targetRequests.length}`,
-        status: latestRequest.status,
-        createdAt: firstRequest.createdAt,
-        updatedAt: latestRequest.updatedAt,
-        evaluationTargets: [evaluationTarget]
+        id: organization.id,
+        name: organization.name,
+        type: organization.type,
+        homepageUrl: organization.homepageUrl ?? "",
+        description: organization.description ?? "",
+        status: latestOrganizationRequest?.status ?? organization.status,
+        createdAt: organization.createdAt,
+        updatedAt: latestOrganizationRequest?.updatedAt ?? organization.updatedAt,
+        evaluationTargets: evaluationTargetModels
       };
     })
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
@@ -263,6 +288,10 @@ function fetchEvaluationIssues(requestId: number, signal?: AbortSignal): Promise
   return apiGet<EvaluationIssue[]>(`/results/requests/${requestId}/issues`, signal);
 }
 
+function fetchScoreResult(requestId: number, signal?: AbortSignal): Promise<ScoreResult> {
+  return apiGet<ScoreResult>(`/scores/requests/${requestId}`, signal);
+}
+
 async function fetchEvaluationIssuesSafely(requestId: number, signal?: AbortSignal): Promise<EvaluationIssue[]> {
   try {
     return await fetchEvaluationIssues(requestId, signal);
@@ -273,6 +302,23 @@ async function fetchEvaluationIssuesSafely(requestId: number, signal?: AbortSign
 
     console.warn(`Failed to load evaluation issues for request ${requestId}.`, error);
     return [];
+  }
+}
+
+async function fetchScoreResultSafely(
+  summary: EvaluationResultSummary,
+  requestById: Map<number, EvaluationRequestModel>,
+  signal?: AbortSignal
+): Promise<ScoreResult | null> {
+  try {
+    return await fetchScoreResult(summary.requestId, signal);
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw error;
+    }
+
+    console.warn(`Failed to load score result for request ${summary.requestId}.`, error);
+    return summaryToScoreResult(summary, requestById);
   }
 }
 
@@ -485,26 +531,30 @@ export async function requestEvaluationTargetRescan(targetId: number): Promise<n
 }
 
 export async function fetchDashboardViewModel(signal?: AbortSignal): Promise<DashboardViewModel> {
-  const requests = await apiGet<EvaluationRequestModel[]>("/requests", signal);
+  const [requests, organizations] = await Promise.all([apiGet<EvaluationRequestModel[]>("/requests", signal), fetchOrganizations(signal)]);
+  const evaluationTargets = (
+    await Promise.all(organizations.map((organization) => fetchEvaluationTargets(organization.id, signal)))
+  ).flat();
   const requestById = new Map(requests.map((request) => [request.id, request]));
   const completedRequests = requests.filter((request) => request.status === "COMPLETED");
   const [resultSummaries, evaluationIssuesByRequest] = await Promise.all([
     Promise.all(completedRequests.map((request) => fetchEvaluationResultSummary(request.id, signal))),
     Promise.all(completedRequests.map((request) => fetchEvaluationIssuesSafely(request.id, signal)))
   ]);
+  const scoreResults = (
+    await Promise.all(resultSummaries.map((summary) => fetchScoreResultSafely(summary, requestById, signal)))
+  ).filter((scoreResult): scoreResult is ScoreResult => scoreResult !== null);
   const evaluationIssues = evaluationIssuesByRequest.flat();
   const issueViewModels = buildIssueViewModels(evaluationIssues, requestById);
   const improvementGuides: ImprovementGuide[] = [];
 
   return {
-    organizations: buildOrganizationsFromRequests(requests),
+    organizations: buildOrganizationsFromApi(organizations, evaluationTargets, requests),
     evaluationRequests: requests,
     resultSummaries,
     evaluationIssues,
     analysisResults: issueViewModels.analysisResults,
-    scoreResults: resultSummaries
-      .map((summary) => summaryToScoreResult(summary, requestById))
-      .filter((scoreResult): scoreResult is ScoreResult => scoreResult !== null),
+    scoreResults,
     scoreDetails: [],
     issueResults: issueViewModels.issueResults,
     improvementGuides

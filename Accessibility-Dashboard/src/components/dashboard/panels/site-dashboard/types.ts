@@ -3,6 +3,7 @@ import type { ImprovementGuide, IssueResultModel, SeverityLevel } from "@/types/
 export type ChartSeriesKey = "score" | "issueCount";
 
 export type ScoreChartItem = {
+  slot: number;
   date: string;
   label: string;
   score: number;

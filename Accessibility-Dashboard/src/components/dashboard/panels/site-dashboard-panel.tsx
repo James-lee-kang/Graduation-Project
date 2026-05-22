@@ -13,7 +13,9 @@ import { fallbackWcagCriterion, severityChartItems, wcagCriterionByIssueCode } f
 import { RecentIssuesCard } from "./site-dashboard/recent-issues-card";
 import { ScoreTrendCard } from "./site-dashboard/score-trend-card";
 import type { RecentIssueRow, ScoreChartItem, SiteSummaryItem } from "./site-dashboard/types";
-import { formatDateKey, formatDateLabel, formatShortDate, getAnalyzerTypeLabel, normalizeChartData } from "./site-dashboard/utils";
+import { formatDateLabel, formatShortDate, getAnalyzerTypeLabel } from "./site-dashboard/utils";
+
+const SCORE_CHART_POINT_COUNT = 10;
 
 type SiteDashboardPanelProps = {
   organization: OrganizationModel;
@@ -83,7 +85,7 @@ export function SiteDashboardPanel(props: SiteDashboardPanelProps) {
   void recentIssueDateLabel;
 
   return (
-    <div className="grid min-h-[calc(100vh-var(--dashboard-top-height)-9rem)] items-stretch gap-3 lg:grid-cols-2">
+    <div className="grid min-h-[31rem] items-stretch gap-3 lg:h-[clamp(31rem,calc(100vh-var(--dashboard-top-height)-5rem),35rem)] lg:min-h-0 lg:grid-cols-2">
       <div className="min-h-0">
         <ScoreTrendCard chartData={chartData} summaryItems={summaryItems} />
       </div>
@@ -108,19 +110,27 @@ function buildScoreChartData(
   completedScoreItems: Array<{ request: EvaluationRequestModel; scoreResult: ScoreResult }>,
   issueCountByRequestId: Map<number, number>
 ): ScoreChartItem[] {
-  const latestScoreByDate = new Map<string, ScoreChartItem>();
-
-  for (const item of completedScoreItems) {
+  const latestScoreItems = completedScoreItems.slice(-SCORE_CHART_POINT_COUNT);
+  const emptyPointCount = Math.max(0, SCORE_CHART_POINT_COUNT - latestScoreItems.length);
+  const emptyScoreItems: ScoreChartItem[] = Array.from({ length: emptyPointCount }, (_, index) => ({
+    slot: index,
+    date: "",
+    label: "",
+    score: 0,
+    issueCount: 0
+  }));
+  const scoreItems = latestScoreItems.map((item, index) => {
     const date = item.request.updatedAt;
-    latestScoreByDate.set(formatDateKey(date), {
+    return {
+      slot: emptyPointCount + index,
       date,
       label: formatShortDate(date),
       score: Math.round(item.scoreResult.totalScore),
       issueCount: issueCountByRequestId.get(item.request.id) ?? 0
-    });
-  }
+    };
+  });
 
-  return normalizeChartData([...latestScoreByDate.values()].slice(-18));
+  return [...emptyScoreItems, ...scoreItems];
 }
 
 function buildSummaryItems({
