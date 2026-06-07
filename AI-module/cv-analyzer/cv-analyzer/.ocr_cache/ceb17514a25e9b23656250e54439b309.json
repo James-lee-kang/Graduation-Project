@@ -1,0 +1,182 @@
+[
+  {
+    "text": "MBUSTER",
+    "bbox": {
+      "x": 547,
+      "y": 142,
+      "width": 223,
+      "height": 24
+    },
+    "confidence": 0.95
+  },
+  {
+    "text": "•",
+    "bbox": {
+      "x": 511,
+      "y": 277,
+      "width": 9,
+      "height": 18
+    },
+    "confidence": 0.95
+  },
+  {
+    "text": "서비스",
+    "bbox": {
+      "x": 518,
+      "y": 277,
+      "width": 52,
+      "height": 18
+    },
+    "confidence": 0.95
+  },
+  {
+    "text": "접속",
+    "bbox": {
+      "x": 576,
+      "y": 277,
+      "width": 34,
+      "height": 18
+    },
+    "confidence": 0.95
+  },
+  {
+    "text": "이",
+    "bbox": {
+      "x": 612,
+      "y": 277,
+      "width": 15,
+      "height": 18
+    },
+    "confidence": 0.95
+  },
+  {
+    "text": "차단",
+    "bbox": {
+      "x": 634,
+      "y": 277,
+      "width": 35,
+      "height": 18
+    },
+    "confidence": 0.95
+  },
+  {
+    "text": "되었습니다",
+    "bbox": {
+      "x": 669,
+      "y": 277,
+      "width": 85,
+      "height": 18
+    },
+    "confidence": 0.95
+  },
+  {
+    "text": ".",
+    "bbox": {
+      "x": 756,
+      "y": 277,
+      "width": 4,
+      "height": 18
+    },
+    "confidence": 0.95
+  },
+  {
+    "text": "현재",
+    "bbox": {
+      "x": 509,
+      "y": 305,
+      "width": 23,
+      "height": 12
+    },
+    "confidence": 0.95
+  },
+  {
+    "text": "접속",
+    "bbox": {
+      "x": 537,
+      "y": 305,
+      "width": 23,
+      "height": 12
+    },
+    "confidence": 0.95
+  },
+  {
+    "text": "하신",
+    "bbox": {
+      "x": 561,
+      "y": 305,
+      "width": 23,
+      "height": 12
+    },
+    "confidence": 0.95
+  },
+  {
+    "text": "단말",
+    "bbox": {
+      "x": 590,
+      "y": 305,
+      "width": 23,
+      "height": 12
+    },
+    "confidence": 0.95
+  },
+  {
+    "text": "에서는",
+    "bbox": {
+      "x": 614,
+      "y": 305,
+      "width": 35,
+      "height": 12
+    },
+    "confidence": 0.95
+  },
+  {
+    "text": "접속",
+    "bbox": {
+      "x": 654,
+      "y": 305,
+      "width": 23,
+      "height": 12
+    },
+    "confidence": 0.95
+  },
+  {
+    "text": "이",
+    "bbox": {
+      "x": 679,
+      "y": 305,
+      "width": 10,
+      "height": 12
+    },
+    "confidence": 0.95
+  },
+  {
+    "text": "불가능",
+    "bbox": {
+      "x": 695,
+      "y": 305,
+      "width": 35,
+      "height": 12
+    },
+    "confidence": 0.95
+  },
+  {
+    "text": "합니다",
+    "bbox": {
+      "x": 731,
+      "y": 305,
+      "width": 36,
+      "height": 12
+    },
+    "confidence": 0.95
+  },
+  {
+    "text": ".",
+    "bbox": {
+      "x": 767,
+      "y": 305,
+      "width": 3,
+      "height": 12
+    },
+    "confidence": 0.95
+  }
+]
