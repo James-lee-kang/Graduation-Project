@@ -19,10 +19,11 @@
   Step 7: result_final.json을 백엔드 서버에 POST 전송
 
 [총점 계산 공식]
-  총점 = (규칙 기반 점수 × 50%) + ((100 - 난이도 점수) × 30%) + (CV 통과율 × 20%)
+  총점 = (규칙 기반 점수 × 50%) + (난이도 page_score × 30%) + (CV 통과율 × 20%)
   
-  난이도 점수는 "높을수록 어려움"이므로 100에서 빼서 반전함.
-  예: 난이도 20점(쉬움) → 100 - 20 = 80점이 총점에 반영됨.
+  난이도의 page_score는 difficulty_engine.py에서 이미
+  "100 - 감점" 방식으로 계산된 값이므로 (높을수록 좋음),
+  별도의 반전 없이 그대로 사용함.
 
 [등급 기준]
   A+(95↑), A(90↑), B+(85↑), B(80↑), C(70↑), D(60↑), F(60 미만)
@@ -172,11 +173,12 @@ def calculate_total_score(rule_score: Optional[Dict],
     3개 모듈의 개별 점수를 가중 합산하여 총점과 등급을 계산
     
     [총점 공식]
-    총점 = (규칙 기반 점수 × 50%) + ((100 - 난이도 점수) × 30%) + (CV 통과율 × 20%)
+    총점 = (규칙 기반 점수 × 50%) + (난이도 page_score × 30%) + (CV 통과율 × 20%)
     
     [각 모듈 점수의 의미]
     - 규칙 기반: scorer.js가 계산한 100점 감점 방식 점수 (높을수록 좋음)
-    - 난이도: difficulty_engine.py의 overall_score (높을수록 어려움 → 100에서 빼서 반전)
+    - 난이도: difficulty_engine.py의 meta.page_score
+             (이미 100 - 감점 방식으로 계산됨, 높을수록 좋음 → 반전 불필요)
     - CV: contrast_analyzer.py의 pass_rate (명암비 통과율 %, 높을수록 좋음)
     
     [모듈 부분 실패 시 가중치 재분배]
@@ -197,10 +199,11 @@ def calculate_total_score(rule_score: Optional[Dict],
             scores["rule_based"] = score_val
         weights["rule_based"] = WEIGHT_RULE_BASED
 
-    # 난이도 점수 추출 — 100에서 빼서 "높을수록 좋음"으로 반전
+    # 난이도 점수 추출
+    # page_score는 difficulty_engine.py에서 이미 "100 - 감점"으로 계산됨
+    # (높을수록 좋음) → 반전 없이 그대로 사용
     if difficulty_score:
-        difficulty_val = difficulty_score.get("overall_score", 0)
-        scores["difficulty"] = 100 - difficulty_val
+        scores["difficulty"] = difficulty_score.get("meta", {}).get("page_score", 0)
         weights["difficulty"] = WEIGHT_DIFFICULTY
 
     # CV 점수 추출 — 명암비 통과율(%)을 그대로 사용
@@ -366,6 +369,11 @@ def main():
     
     각 Step은 이전 Step의 출력 파일이 존재하는지 확인하고,
     없으면 해당 Step을 건너뜀 (부분 실패 허용).
+    
+    [결과 파일 로딩 시 step 성공 여부 반영]
+    각 모듈의 JSON 결과를 로딩할 때 해당 step의 성공 여부를 확인함.
+    step이 실패했으면 이전 실행에서 남아있는 결과 파일을 읽지 않고
+    None으로 처리하여, 실패한 모듈의 가중치가 재분배됨.
     """
     if len(sys.argv) < 2:
         print("사용법: python run_all.py <URL>")
@@ -473,12 +481,14 @@ def main():
     # ── Step 6: 결과 통합 + 총점 계산 ──
     # 각 모듈이 생성한 JSON 파일을 읽어서 총점을 계산하고,
     # 모든 결과를 하나의 result_final.json으로 합침.
+    # 각 step의 성공 여부를 확인하여, 실패한 모듈의 이전 결과 파일이
+    # 남아있더라도 읽지 않음 (이전 실행 결과가 현재 결과에 혼입되는 것을 방지)
     run_step(6, total_steps, "결과 통합 및 총점 계산")
 
-    rule_result = load_json(OUTPUT_DIR / "result_api.json")
-    difficulty_result = load_json(OUTPUT_DIR / "result_text_difficulty.json")
-    suggestion_result = load_json(OUTPUT_DIR / "result_text_suggestions.json")
-    cv_result = load_json(OUTPUT_DIR / "result_cv.json")
+    rule_result = load_json(OUTPUT_DIR / "result_api.json") if step1_ok else None
+    difficulty_result = load_json(OUTPUT_DIR / "result_text_difficulty.json") if step3_ok else None
+    suggestion_result = load_json(OUTPUT_DIR / "result_text_suggestions.json") if step4_ok else None
+    cv_result = load_json(OUTPUT_DIR / "result_cv.json") if step5_ok else None
 
     total_score = calculate_total_score(rule_result, difficulty_result, cv_result)
 
@@ -522,7 +532,7 @@ def main():
 
     module_names = {
         "rule_based": "규칙 기반",
-        "difficulty": "난이도 (접근성 변환)",
+        "difficulty": "난이도",
         "cv": "CV 시각 분석",
     }
     for module, score in total_score["module_scores"].items():
