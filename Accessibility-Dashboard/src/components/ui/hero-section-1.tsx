@@ -216,7 +216,7 @@ export function HeroSection({ onLoginClick }: HeroSectionProps) {
                     <Button
                       type="submit"
                       disabled={isAnalyzing || !url.trim()}
-                      className="rounded-full bg-slate-850 text-white font-bold hover:bg-slate-950 transition px-6 py-2.5 flex items-center gap-1 shrink-0"
+                      className="rounded-full bg-slate-900 text-white font-bold hover:bg-slate-800 transition px-6 py-2.5 flex items-center gap-1 shrink-0"
                     >
                       <span>분석 시작</span>
                       <ChevronRight className="size-4" />
