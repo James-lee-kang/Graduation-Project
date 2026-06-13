@@ -133,14 +133,14 @@ export function HeroSection({ onLoginClick }: HeroSectionProps) {
   return (
     <>
       <HeroHeader onLoginClick={onLoginClick} />
-      <main className="overflow-hidden bg-[radial-gradient(circle_at_top,_#f8fbff_0%,_#f1f5f9_45%,_#e9eef5_100%)]">
+      <main className="bridge-dashboard theme-dark overflow-hidden min-h-screen bg-[radial-gradient(circle_at_top,_#181b21_0%,_#11141a_50%,_#0a0c10_100%)] text-[#f3f3f3]">
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-0 isolate z-[2] hidden opacity-50 lg:block"
+          className="pointer-events-none absolute inset-0 isolate z-[2] hidden opacity-30 lg:block"
         >
-          <div className="absolute left-0 top-0 h-[80rem] w-[35rem] -translate-y-[350px] -rotate-45 rounded-full bg-[radial-gradient(68.54%_68.72%_at_55.02%_31.46%,hsla(214,25%,85%,.24)_0,hsla(214,18%,65%,.08)_50%,hsla(214,16%,45%,0)_80%)]" />
-          <div className="absolute left-0 top-0 h-[80rem] w-56 -rotate-45 rounded-full bg-[radial-gradient(50%_50%_at_50%_50%,hsla(214,25%,85%,.20)_0,hsla(214,16%,45%,.05)_80%,transparent_100%)] [translate:5%_-50%]" />
-          <div className="absolute left-0 top-0 h-[80rem] w-56 -translate-y-[350px] -rotate-45 bg-[radial-gradient(50%_50%_at_50%_50%,hsla(214,25%,85%,.18)_0,hsla(214,16%,45%,.03)_80%,transparent_100%)]" />
+          <div className="absolute left-0 top-0 h-[80rem] w-[35rem] -translate-y-[350px] -rotate-45 rounded-full bg-[radial-gradient(68.54%_68.72%_at_55.02%_31.46%,rgba(79,70,229,0.06)_0,rgba(79,70,229,0.02)_50%,transparent_80%)]" />
+          <div className="absolute left-0 top-0 h-[80rem] w-56 -rotate-45 rounded-full bg-[radial-gradient(50%_50%_at_50%_50%,rgba(79,70,229,0.05)_0,rgba(79,70,229,0.01)_80%,transparent_100%)] [translate:5%_-50%]" />
+          <div className="absolute left-0 top-0 h-[80rem] w-56 -translate-y-[350px] -rotate-45 bg-[radial-gradient(50%_50%_at_50%_50%,rgba(79,70,229,0.04)_0,rgba(79,70,229,0.01)_80%,transparent_100%)]" />
         </div>
 
         <section>
@@ -182,16 +182,16 @@ export function HeroSection({ onLoginClick }: HeroSectionProps) {
 
             <div
               aria-hidden
-              className="absolute inset-0 -z-10 size-full [background:radial-gradient(125%_125%_at_50%_100%,transparent_0%,#f1f5f9_75%)]"
+              className="absolute inset-0 -z-10 size-full [background:radial-gradient(125%_125%_at_50%_100%,transparent_0%,#0a0c10_75%)]"
             />
 
             <div className="mx-auto max-w-7xl px-6">
               <div className="text-center sm:mx-auto lg:mr-auto lg:mt-0">
                 <AnimatedGroup variants={transitionVariants}>
-                  <h1 className="mx-auto mt-8 max-w-4xl text-balance text-5xl font-black tracking-tight text-slate-900 md:text-7xl lg:mt-16 xl:text-[5.25rem]">
+                  <h1 className="mx-auto mt-8 max-w-4xl text-balance text-5xl font-black tracking-tight text-white md:text-7xl lg:mt-16 xl:text-[5.25rem]">
                     UNI Access: 웹 접근성 평가를 쉽고 정확하게
                   </h1>
-                  <p className="mx-auto mt-8 max-w-2xl text-balance text-lg text-slate-600">
+                  <p className="mx-auto mt-8 max-w-2xl text-balance text-lg text-slate-400">
                     고령자와 장애인을 위한 페이지 적합도를 점수화하고, 프로젝트 단위로 통합 관리하는
                     접근성 대시보드
                   </p>
@@ -201,7 +201,7 @@ export function HeroSection({ onLoginClick }: HeroSectionProps) {
                   variants={transitionVariants}
                   className="mt-12 w-full max-w-2xl mx-auto px-4"
                 >
-                  <form onSubmit={handleStartAnalysis} className="relative flex items-center p-1 rounded-full border border-slate-200 bg-white shadow-sm hover:border-slate-300 focus-within:ring-2 focus-within:ring-indigo-500/10 focus-within:border-indigo-400 transition-all duration-300">
+                  <form onSubmit={handleStartAnalysis} className="relative flex items-center p-1 rounded-full border border-[#23272f] bg-[#11141a]/90 shadow-lg focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-400 transition-all duration-300">
                     <div className="flex items-center pl-4 text-slate-400 shrink-0">
                       <Globe className="size-5" />
                     </div>
@@ -211,12 +211,12 @@ export function HeroSection({ onLoginClick }: HeroSectionProps) {
                       value={url}
                       onChange={(e) => setUrl(e.target.value)}
                       disabled={isAnalyzing}
-                      className="w-full bg-transparent px-3 py-3 text-slate-800 placeholder-slate-400 font-medium outline-none text-sm border-none"
+                      className="w-full bg-transparent px-3 py-3 text-white placeholder-slate-500 font-medium outline-none text-sm border-none"
                     />
                     <Button
                       type="submit"
                       disabled={isAnalyzing || !url.trim()}
-                      className="rounded-full bg-slate-900 text-white font-bold hover:bg-slate-800 transition px-6 py-2.5 flex items-center gap-1 shrink-0"
+                      className="rounded-full bg-[#ef6a50] text-white font-bold hover:bg-[#e85d43] transition px-6 py-2.5 flex items-center gap-1 shrink-0"
                     >
                       <span>분석 시작</span>
                       <ChevronRight className="size-4" />
@@ -224,16 +224,16 @@ export function HeroSection({ onLoginClick }: HeroSectionProps) {
                   </form>
 
                   {errorMsg && (
-                    <div className="mt-4 flex items-center gap-2 text-sm font-semibold text-red-600 bg-red-50 border border-red-200/50 rounded-xl p-3 max-w-xl mx-auto animate-pulse">
+                    <div className="mt-4 flex items-center gap-2 text-sm font-semibold text-red-500 bg-red-950/25 border border-red-500/30 rounded-xl p-3 max-w-xl mx-auto animate-pulse">
                       <AlertCircle className="size-4 shrink-0" />
                       <span>{errorMsg}</span>
                     </div>
                   )}
 
                   <div className="mt-6 flex items-center justify-center gap-5 text-xs font-semibold">
-                    <span className="text-indigo-600 hover:text-indigo-700 hover:underline cursor-pointer">• 가입없이 빠른 무료 검사</span>
+                    <span className="text-indigo-400 hover:text-indigo-300 hover:underline cursor-pointer">• 가입없이 빠른 무료 검사</span>
                     <span className="text-slate-400">• axe-core 검사 지원</span>
-                    <span className="text-slate-500 hover:text-slate-700 hover:underline cursor-pointer">• 의견 및 피드백 보내기</span>
+                    <span className="text-slate-400 hover:text-slate-300 hover:underline cursor-pointer">• 의견 및 피드백 보내기</span>
                   </div>
                 </AnimatedGroup>
               </div>
@@ -318,8 +318,8 @@ export function HeroSection({ onLoginClick }: HeroSectionProps) {
               }}
             >
               <div className="relative -mr-56 mt-8 overflow-hidden px-2 sm:mr-0 sm:mt-12 md:mt-20">
-                <div aria-hidden className="absolute inset-0 z-10 bg-gradient-to-b from-transparent from-35% to-slate-100" />
-                <div className="relative mx-auto max-w-6xl overflow-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-lg shadow-slate-950/10 ring-1 ring-white/60">
+                <div aria-hidden className="absolute inset-0 z-10 bg-gradient-to-b from-transparent from-35% to-[#0a0c10]" />
+                <div className="relative mx-auto max-w-6xl overflow-hidden rounded-2xl border border-[#23272f] bg-[#0c0e11] p-4 shadow-2xl ring-1 ring-white/5">
                   <DashboardPreviewMockup />
                 </div>
               </div>
@@ -357,7 +357,7 @@ const HeroHeader = ({ onLoginClick }: { onLoginClick?: () => void }) => {
         <div
           className={cn(
             'mx-auto mt-2 max-w-6xl px-6 transition-all duration-300 lg:px-12',
-            isScrolled && 'max-w-4xl rounded-2xl bg-white/70 shadow-sm backdrop-blur-lg lg:px-5'
+            isScrolled && 'max-w-4xl rounded-2xl bg-[#11141a]/85 border border-[#23272f] shadow-md backdrop-blur-lg lg:px-5'
           )}
         >
           <div className="relative flex flex-wrap items-center justify-between gap-6 py-3 lg:gap-0 lg:py-4">
@@ -380,7 +380,7 @@ const HeroHeader = ({ onLoginClick }: { onLoginClick?: () => void }) => {
               <ul className="flex gap-8 text-sm">
                 {menuItems.map((item) => (
                   <li key={item.name}>
-                    <a href={item.href} className="block text-slate-600 duration-150 hover:text-slate-900">
+                    <a href={item.href} className="block text-slate-400 duration-150 hover:text-white">
                       <span>{item.name}</span>
                     </a>
                   </li>
@@ -388,12 +388,12 @@ const HeroHeader = ({ onLoginClick }: { onLoginClick?: () => void }) => {
               </ul>
             </div>
 
-            <div className="mb-6 hidden w-full flex-wrap items-center justify-end space-y-8 rounded-3xl border border-slate-200 bg-white p-6 shadow-2xl shadow-zinc-300/20 group-data-[state=active]:block md:flex-nowrap lg:m-0 lg:flex lg:w-fit lg:gap-6 lg:space-y-0 lg:border-transparent lg:bg-transparent lg:p-0 lg:shadow-none">
+            <div className="mb-6 hidden w-full flex-wrap items-center justify-end space-y-8 rounded-3xl border border-[#23272f] bg-[#0c0e11] p-6 shadow-2xl shadow-black/80 group-data-[state=active]:block md:flex-nowrap lg:m-0 lg:flex lg:w-fit lg:gap-6 lg:space-y-0 lg:border-transparent lg:bg-transparent lg:p-0 lg:shadow-none">
               <div className="lg:hidden">
                 <ul className="space-y-6 text-base">
                   {menuItems.map((item) => (
                     <li key={item.name}>
-                      <a href={item.href} className="block text-slate-600 duration-150 hover:text-slate-900">
+                      <a href={item.href} className="block text-slate-400 duration-150 hover:text-white">
                         <span>{item.name}</span>
                       </a>
                     </li>
@@ -402,13 +402,13 @@ const HeroHeader = ({ onLoginClick }: { onLoginClick?: () => void }) => {
               </div>
 
               <div className="flex w-full flex-col space-y-3 sm:flex-row sm:gap-3 sm:space-y-0 md:w-fit">
-                <Button variant="outline" size="sm" className={cn(isScrolled && 'lg:hidden')} onClick={() => onLoginClick?.()}>
+                <Button variant="outline" size="sm" className={cn('border-[#23272f] bg-[#11141a] text-slate-200 hover:bg-[#1c202a] hover:text-white', isScrolled && 'lg:hidden')} onClick={() => onLoginClick?.()}>
                   <span>Login</span>
                 </Button>
-                <Button size="sm" className={cn(isScrolled && 'lg:hidden')}>
+                <Button size="sm" className={cn('bg-[#ef6a50] text-white hover:bg-[#e85d43] border-none font-bold', isScrolled && 'lg:hidden')}>
                   <span>Sign Up</span>
                 </Button>
-                <Button size="sm" className={cn(isScrolled ? 'lg:inline-flex' : 'hidden')} onClick={() => onLoginClick?.()}>
+                <Button size="sm" className={cn('bg-[#ef6a50] text-white hover:bg-[#e85d43] border-none font-bold', isScrolled ? 'lg:inline-flex' : 'hidden')} onClick={() => onLoginClick?.()}>
                   <span>Get Started</span>
                 </Button>
               </div>
@@ -424,7 +424,7 @@ const Logo = ({ className }: { className?: string }) => {
   return (
     <div className={cn('flex items-center gap-2', className)}>
       <div className="h-5 w-5 rounded-sm bg-gradient-to-br from-indigo-400 to-emerald-400" />
-      <span className="text-sm font-black tracking-[0.18em] text-slate-800">UNI Access</span>
+      <span className="text-sm font-black tracking-[0.18em] text-white">UNI Access</span>
     </div>
   );
 };
