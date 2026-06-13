@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Menu, X, Globe, ArrowRight, AlertCircle } from 'lucide-react';
+import { Menu, X, Globe, AlertCircle, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AnimatedGroup } from '@/components/ui/animated-group';
 import { cn } from '@/lib/utils';
@@ -199,10 +199,10 @@ export function HeroSection({ onLoginClick }: HeroSectionProps) {
 
                 <AnimatedGroup
                   variants={transitionVariants}
-                  className="mt-12 w-full max-w-xl mx-auto px-4"
+                  className="mt-12 w-full max-w-2xl mx-auto px-4"
                 >
-                  <form onSubmit={handleStartAnalysis} className="relative flex items-center p-1.5 rounded-2xl border border-slate-200 bg-white/70 shadow-lg shadow-slate-900/5 backdrop-blur-md focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-500 transition-all duration-300">
-                    <div className="flex items-center pl-3 text-slate-400 shrink-0">
+                  <form onSubmit={handleStartAnalysis} className="relative flex items-center p-1 rounded-full border border-slate-200 bg-white shadow-sm hover:border-slate-300 focus-within:ring-2 focus-within:ring-indigo-500/10 focus-within:border-indigo-400 transition-all duration-300">
+                    <div className="flex items-center pl-4 text-slate-400 shrink-0">
                       <Globe className="size-5" />
                     </div>
                     <input
@@ -211,15 +211,15 @@ export function HeroSection({ onLoginClick }: HeroSectionProps) {
                       value={url}
                       onChange={(e) => setUrl(e.target.value)}
                       disabled={isAnalyzing}
-                      className="w-full bg-transparent px-3 py-3 text-slate-800 placeholder-slate-400 font-medium outline-none text-base border-none"
+                      className="w-full bg-transparent px-3 py-3 text-slate-800 placeholder-slate-400 font-medium outline-none text-sm border-none"
                     />
                     <Button
                       type="submit"
                       disabled={isAnalyzing || !url.trim()}
-                      className="rounded-xl bg-slate-900 text-white font-bold hover:bg-slate-800 transition px-5 py-6 flex items-center gap-1.5 shrink-0"
+                      className="rounded-full bg-slate-850 text-white font-bold hover:bg-slate-950 transition px-6 py-2.5 flex items-center gap-1 shrink-0"
                     >
                       <span>분석 시작</span>
-                      <ArrowRight className="size-4" />
+                      <ChevronRight className="size-4" />
                     </Button>
                   </form>
 
@@ -230,10 +230,10 @@ export function HeroSection({ onLoginClick }: HeroSectionProps) {
                     </div>
                   )}
 
-                  <div className="mt-4 flex items-center justify-center gap-4 text-xs font-semibold text-slate-400">
-                    <span>• 가입없이 빠른 무료 평가</span>
-                    <span>• axe-core 검사 지원</span>
-                    <span>• AI 언어 난이도 교정</span>
+                  <div className="mt-6 flex items-center justify-center gap-5 text-xs font-semibold">
+                    <span className="text-indigo-600 hover:text-indigo-700 hover:underline cursor-pointer">• 가입없이 빠른 무료 검사</span>
+                    <span className="text-slate-400">• axe-core 검사 지원</span>
+                    <span className="text-slate-500 hover:text-slate-700 hover:underline cursor-pointer">• 의견 및 피드백 보내기</span>
                   </div>
                 </AnimatedGroup>
               </div>
@@ -241,31 +241,32 @@ export function HeroSection({ onLoginClick }: HeroSectionProps) {
 
             {/* Analysis Loading Overlay Modal */}
             {isAnalyzing && (
-              <div className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-slate-950/70 backdrop-blur-md text-white">
-                <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-slate-900/60 p-8 shadow-2xl shadow-black/50 text-center relative overflow-hidden">
-                  <div className="absolute -left-16 -top-16 size-32 rounded-full bg-indigo-500/20 blur-2xl" />
-                  <div className="absolute -right-16 -bottom-16 size-32 rounded-full bg-emerald-500/20 blur-2xl" />
+              <div className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-slate-950/70 backdrop-blur-md text-white px-4">
+                <div className="w-full max-w-md rounded-[28px] border border-[#23272f] bg-[#0C0E11]/95 p-8 shadow-2xl shadow-black/80 text-center relative overflow-hidden backdrop-blur-xl">
+                  <div className="absolute -left-16 -top-16 size-32 rounded-full bg-indigo-500/10 blur-2xl" />
+                  <div className="absolute -right-16 -bottom-16 size-32 rounded-full bg-emerald-500/10 blur-2xl" />
 
                   <div className="relative z-10 flex flex-col items-center">
-                    <div className="relative flex size-20 items-center justify-center rounded-2xl bg-indigo-500/10 border border-indigo-400/20 shadow-lg">
-                      <div className="absolute inset-0 animate-pulse rounded-2xl bg-indigo-400/5" />
-                      <div className="size-10 animate-spin rounded-full border-4 border-indigo-500 border-t-transparent" />
+                    <div className="relative flex size-16 items-center justify-center rounded-2xl bg-indigo-500/5 border border-indigo-500/20 shadow-inner">
+                      <div className="size-8 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
                     </div>
 
-                    <h2 className="mt-8 text-2xl font-black tracking-tight text-white">
+                    <h2 className="mt-6 text-xl font-bold tracking-tight text-white">
                       웹 접근성 분석 평가 진행 중
                     </h2>
-                    <p className="mt-2 text-sm text-slate-400 max-w-md">
+                    <p className="mt-2 text-xs text-slate-400 leading-relaxed max-w-sm">
                       입력하신 웹사이트의 접근성을 수집 및 평가하고 있습니다.<br />
                       이 과정은 최대 40~50초 정도 소요될 수 있습니다.
                     </p>
 
-                    <div className="mt-8 w-full">
-                      <div className="flex justify-between items-center text-xs font-bold text-slate-400 mb-2">
+                    <div className="w-full border-t border-[#23272f] my-6" />
+
+                    <div className="w-full">
+                      <div className="flex justify-between items-center text-xs font-semibold text-slate-400 mb-2">
                         <span>진행률</span>
-                        <span className="text-indigo-400 text-sm">{progress}%</span>
+                        <span className="text-indigo-400 font-bold">{progress}%</span>
                       </div>
-                      <div className="h-3 w-full rounded-full bg-white/5 border border-white/5 overflow-hidden">
+                      <div className="h-2 w-full rounded-full bg-[#13161c] border border-[#23272f] overflow-hidden">
                         <div
                           className="h-full rounded-full bg-gradient-to-r from-indigo-500 via-purple-500 to-emerald-400 transition-all duration-500 ease-out"
                           style={{ width: `${progress}%` }}
@@ -273,7 +274,7 @@ export function HeroSection({ onLoginClick }: HeroSectionProps) {
                       </div>
                     </div>
 
-                    <div className="mt-8 w-full text-left space-y-3 border-t border-white/5 pt-6 max-w-sm mx-auto">
+                    <div className="mt-6 w-full text-left space-y-3.5 max-w-sm mx-auto">
                       {steps.slice(1, 8).map((stepMsg, idx) => {
                         const stepNum = idx + 1;
                         const isDone = currentStepIndex > stepNum;
@@ -283,13 +284,13 @@ export function HeroSection({ onLoginClick }: HeroSectionProps) {
                           <div
                             key={idx}
                             className={cn(
-                              "flex items-center gap-3 text-sm transition-all duration-300",
-                              isDone ? "text-emerald-400 font-medium" : isCurrent ? "text-indigo-300 font-black scale-[1.02] translate-x-1" : "text-slate-500 opacity-60"
+                              "flex items-center gap-3 text-xs transition-all duration-300",
+                              isDone ? "text-[#10b981] font-semibold" : isCurrent ? "text-indigo-300 font-black scale-[1.01] translate-x-1" : "text-slate-600 opacity-60"
                             )}
                           >
                             <span className={cn(
-                              "flex size-5 items-center justify-center rounded-full text-[10px] font-bold border",
-                              isDone ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400" : isCurrent ? "bg-indigo-500/20 border-indigo-400 text-indigo-300 animate-pulse" : "bg-transparent border-slate-700 text-slate-500"
+                              "flex size-5 items-center justify-center rounded-full text-[10px] font-bold border shrink-0",
+                              isDone ? "bg-[#10b981]/10 border-[#10b981]/25 text-[#10b981]" : isCurrent ? "bg-indigo-500/20 border-indigo-400 text-indigo-300 animate-pulse" : "bg-transparent border-slate-800 text-slate-600"
                             )}>
                               {isDone ? "✓" : stepNum}
                             </span>
