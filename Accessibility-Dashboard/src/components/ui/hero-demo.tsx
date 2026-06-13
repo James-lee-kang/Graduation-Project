@@ -1,5 +1,7 @@
+import { useNavigate } from "react-router-dom";
 import { HeroSection } from '@/components/ui/hero-section-1';
 
 export function HeroDemo() {
-  return <HeroSection />;
+  const navigate = useNavigate();
+  return <HeroSection onLoginClick={() => navigate('/dashboard')} />;
 }

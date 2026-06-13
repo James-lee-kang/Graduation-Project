@@ -11,6 +11,8 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
+import com.accessibility.platform.request.dto.EvaluateUrlRequest;
+
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/requests")
@@ -21,6 +23,11 @@ public class EvaluationRequestController {
     @PostMapping
     public ApiResponse<EvaluationRequestResponse> create(@Valid @RequestBody EvaluationRequestCreateRequest request) {
         return ApiResponse.ok(evaluationRequestService.create(request));
+    }
+
+    @PostMapping("/evaluate")
+    public ApiResponse<EvaluationRequestResponse> evaluateUrl(@Valid @RequestBody EvaluateUrlRequest request) {
+        return ApiResponse.ok(evaluationRequestService.createForUrl(request));
     }
 
     @GetMapping

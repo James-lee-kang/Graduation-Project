@@ -54,7 +54,29 @@ public class AiEvaluationIngestionService {
         JsonNode result = parse(resultJson);
         String url = text(result, "url", "");
         EvaluationTarget target = findOrCreateTarget(url);
-        EvaluationRequest request = requestRepository.save(new EvaluationRequest(target, "AI-module result_final.json import"));
+
+        EvaluationRequest request;
+        if (result.has("request_id") && !result.get("request_id").isNull() && !result.get("request_id").asText().isBlank()) {
+            Long reqId = result.get("request_id").asLong();
+            request = requestRepository.findById(reqId)
+                    .orElseGet(() -> requestRepository.save(new EvaluationRequest(target, "AI-module result_final.json import")));
+
+            // Clean up existing results for this request ID to allow re-runs
+            List<AnalysisResult> existingAnalyses = analysisResultRepository.findByEvaluationRequestId(reqId);
+            for (AnalysisResult analysis : existingAnalyses) {
+                List<IssueResult> issues = issueResultRepository.findByAnalysisResultId(analysis.getId());
+                issueResultRepository.deleteAll(issues);
+            }
+            analysisResultRepository.deleteAll(existingAnalyses);
+
+            scoreResultRepository.findByEvaluationRequestId(reqId).ifPresent(scoreResult -> {
+                List<ScoreDetail> details = scoreDetailRepository.findByScoreResultId(scoreResult.getId());
+                scoreDetailRepository.deleteAll(details);
+                scoreResultRepository.delete(scoreResult);
+            });
+        } else {
+            request = requestRepository.save(new EvaluationRequest(target, "AI-module result_final.json import"));
+        }
 
         ScoreResult scoreResult = saveScore(result, request);
         saveAnalysisResults(result, request);

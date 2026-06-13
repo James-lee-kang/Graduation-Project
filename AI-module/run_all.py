@@ -65,9 +65,9 @@ from typing import Dict, Any, Optional
 PROJECT_ROOT = Path(__file__).parent.resolve()
 
 # 각 모듈의 소스 코드 경로
-RULE_BASED_DIR = PROJECT_ROOT / "rule-based-analyzer"    # 모듈 1: 규칙 기반 (Node.js)
-TEXT_LEVEL_DIR = PROJECT_ROOT / "text-level-analyzer"    # 모듈 2: 난이도 분석 (Python)
-CV_ANALYZER_DIR = PROJECT_ROOT / "cv-analyzer"           # 모듈 3: CV 시각 분석 (Python)
+RULE_BASED_DIR = PROJECT_ROOT / "rule-based-analyzer" / "rule-based-analyzer"    # 모듈 1: 규칙 기반 (Node.js)
+TEXT_LEVEL_DIR = PROJECT_ROOT / "text-level-analyzer" / "text-level-analyzer"    # 모듈 2: 난이도 분석 (Python)
+CV_ANALYZER_DIR = PROJECT_ROOT / "cv-analyzer" / "cv-analyzer"           # 모듈 3: CV 시각 분석 (Python)
 
 # 결과 파일 출력 디렉토리 — 모든 모듈의 결과가 이 폴더에 모임
 OUTPUT_DIR = PROJECT_ROOT / "output"
@@ -75,7 +75,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 # Google Vision API 서비스 계정 키 경로
 # .gitignore에 포함되어 있으므로 각 개발자가 로컬에 설정해야 함
-VISION_CREDENTIALS = CV_ANALYZER_DIR / "uniaccess-495010-08a5c6701cd7.json"
+VISION_CREDENTIALS = PROJECT_ROOT / "cv-analyzer" / "uniaccess-495010-08a5c6701cd7.json"
 
 # 백엔드 서버 주소 (Spring Boot 서버)
 API_BASE_URL = "http://localhost:8080/api/v1"
@@ -260,7 +260,7 @@ def calculate_total_score(rule_score: Optional[Dict],
 
 
 def build_final_result(url, rule_result, difficulty_result,
-                       suggestion_result, cv_result, total_score, elapsed):
+                       suggestion_result, cv_result, total_score, elapsed, request_id=None):
     """
     모든 모듈의 결과 + 총점을 하나의 JSON으로 합침.
     이 JSON(result_final.json)이 백엔드가 받아서 DB에 저장하는 최종 결과물임
@@ -273,7 +273,7 @@ def build_final_result(url, rule_result, difficulty_result,
     프론트엔드 대시보드는 이 JSON 하나로
     총점/등급, 모듈별 점수, 위반 항목 목록, 수정 가이드를 모두 렌더링
     """
-    return {
+    res = {
         "url": url,
         "analyzed_at": datetime.now().isoformat(),
         "elapsed_seconds": elapsed,
@@ -303,6 +303,9 @@ def build_final_result(url, rule_result, difficulty_result,
             },
         },
     }
+    if request_id is not None:
+        res["request_id"] = request_id
+    return res
 
 
 # ── 백엔드 전송 ──────────────────────────────────────────────────────────────
@@ -376,11 +379,17 @@ def main():
     None으로 처리하여, 실패한 모듈의 가중치가 재분배됨.
     """
     if len(sys.argv) < 2:
-        print("사용법: python run_all.py <URL>")
-        print("예시:   python run_all.py https://www.gov.kr")
+        print("사용법: python run_all.py <URL> [request_id]")
+        print("예시:   python run_all.py https://www.gov.kr 42")
         sys.exit(1)
 
     url = sys.argv[1]
+    request_id = None
+    if len(sys.argv) >= 3:
+        try:
+            request_id = int(sys.argv[2])
+        except ValueError:
+            print(f"경고: 제공된 request_id ({sys.argv[2]})가 올바른 정수가 아닙니다. 무시됩니다.")
     start_time = time.time()
 
     print("=" * 60)
@@ -502,6 +511,7 @@ def main():
         cv_result=cv_result,
         total_score=total_score,
         elapsed=elapsed,
+        request_id=request_id,
     )
 
     # 최종 통합 결과를 JSON 파일로 저장함

@@ -1,5 +1,5 @@
-﻿import { Suspense, lazy, useState } from "react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Suspense, lazy, useState } from "react";
+import { Route, Routes } from "react-router-dom";
 
 const DashboardShell = lazy(() => import("@/components/ui/sidebar-demo").then((module) => ({ default: module.SidebarDemo })));
 const DEFAULT_USER_NAME = "정하진";
@@ -34,10 +34,12 @@ function DashboardRoute() {
   );
 }
 
+import { HeroDemo } from "@/components/ui/hero-demo";
+
 function App() {
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/dashboard" replace />} />
+      <Route path="/" element={<HeroDemo />} />
       <Route path="/*" element={<DashboardRoute />} />
     </Routes>
   );

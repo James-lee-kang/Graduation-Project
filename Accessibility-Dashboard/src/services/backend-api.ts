@@ -519,15 +519,29 @@ export async function deleteEvaluationTargetModel({
 }
 
 export async function requestEvaluationTargetRescan(targetId: number): Promise<number | null> {
-  void targetId;
-  throw new ApiRequestError({
+  const response = await apiRequest<EvaluationRequestModel>("/requests", {
     method: "POST",
-    path: "/requests",
-    payload: null,
-    status: null,
-    url: buildApiUrl("/requests"),
-    message: "아직 지원되지 않는 기능입니다."
+    body: {
+      evaluationTargetId: targetId,
+      requestNote: "다시 스캔 요청"
+    }
   });
+  return response.id;
+}
+
+export async function startUrlEvaluation(url: string): Promise<EvaluationRequestModel> {
+  return apiRequest<EvaluationRequestModel>("/requests/evaluate", {
+    method: "POST",
+    body: { url }
+  });
+}
+
+export async function fetchEvaluationRequest(requestId: number): Promise<EvaluationRequestModel> {
+  return apiRequest<EvaluationRequestModel>(`/requests/${requestId}`);
+}
+
+export async function fetchEvaluationTarget(targetId: number): Promise<EvaluationTarget> {
+  return apiRequest<EvaluationTarget>(`/targets/${targetId}`);
 }
 
 export async function fetchDashboardViewModel(signal?: AbortSignal): Promise<DashboardViewModel> {

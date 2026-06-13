@@ -1,8 +1,10 @@
-import React from 'react';
-import { Menu, X } from 'lucide-react';
+import React, { useState } from 'react';
+import { Menu, X, Globe, ArrowRight, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { AnimatedGroup } from '@/components/ui/animated-group';
 import { cn } from '@/lib/utils';
+import { useNavigate } from 'react-router-dom';
+import { startUrlEvaluation, fetchEvaluationRequest, fetchEvaluationTarget } from '@/services/backend-api';
 
 const transitionVariants = {
   item: {
@@ -28,6 +30,106 @@ interface HeroSectionProps {
 }
 
 export function HeroSection({ onLoginClick }: HeroSectionProps) {
+  const navigate = useNavigate();
+  const [url, setUrl] = useState('');
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+  const [progress, setProgress] = useState(0);
+
+  const steps = [
+    "대시보드 분석 요청 대기 중...",
+    "규칙 기반 접근성 평가 진행 중 (axe-core KWCAG)",
+    "분석 대상 텍스트 추출 및 한국어 전처리 진행 중",
+    "형태소 분석 및 인지 난이도 분석 진행 중",
+    "이해하기 어려운 난이도 문장의 대체안 생성 중 (GPT-4o-mini)",
+    "Google Vision API 기반 스크린샷 명암비(CV) 분석 진행 중",
+    "종합 분석 결과 산출 및 점수 연산 진행 중",
+    "평가 데이터 DB 등록 및 대시보드 화면 갱신 중"
+  ];
+
+  const handleStartAnalysis = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!url.trim()) return;
+
+    let targetUrl = url.trim();
+    if (!/^https?:\/\//i.test(targetUrl)) {
+      targetUrl = 'https://' + targetUrl;
+    }
+
+    try {
+      setErrorMsg('');
+      setIsAnalyzing(true);
+      setProgress(5);
+      setCurrentStepIndex(1);
+
+      // 1. Call backend to start request
+      const request = await startUrlEvaluation(targetUrl);
+      const requestId = request.id;
+
+      // 2. Start simulated progress runner
+      let simulatedProgress = 5;
+      let step = 1;
+
+      const progressInterval = setInterval(() => {
+        simulatedProgress += Math.random() * 2 + 1;
+        if (simulatedProgress >= 95) {
+          simulatedProgress = 95;
+        }
+        setProgress(Math.floor(simulatedProgress));
+
+        // Determine step index based on progress
+        if (simulatedProgress < 15) step = 1;
+        else if (simulatedProgress < 30) step = 2;
+        else if (simulatedProgress < 45) step = 3;
+        else if (simulatedProgress < 65) step = 4;
+        else if (simulatedProgress < 85) step = 5;
+        else if (simulatedProgress < 90) step = 6;
+        else step = 7;
+
+        setCurrentStepIndex(step);
+      }, 900);
+
+      // 3. Poll request status
+      const poll = async () => {
+        try {
+          const reqStatus = await fetchEvaluationRequest(requestId);
+          if (reqStatus.status === 'COMPLETED') {
+            clearInterval(progressInterval);
+            setProgress(100);
+            setCurrentStepIndex(8);
+
+            // Fetch target details to get organization ID
+            const targetDetails = await fetchEvaluationTarget(reqStatus.evaluationTargetId);
+            
+            setTimeout(() => {
+              setIsAnalyzing(false);
+              navigate(`/projects/${targetDetails.organizationId}/pages/${targetDetails.id}`);
+            }, 1000);
+          } else if (reqStatus.status === 'FAILED') {
+            clearInterval(progressInterval);
+            setIsAnalyzing(false);
+            setErrorMsg('평가 분석 중 오류가 발생했습니다. 대상 URL이 올바른지 확인해주세요.');
+          } else {
+            // Keep polling
+            setTimeout(poll, 2000);
+          }
+        } catch (err) {
+          clearInterval(progressInterval);
+          setIsAnalyzing(false);
+          setErrorMsg('서버와 연결을 시도하는 도중 오류가 발생했습니다.');
+        }
+      };
+
+      // Start polling
+      setTimeout(poll, 2500);
+
+    } catch (err: any) {
+      setIsAnalyzing(false);
+      setErrorMsg(err?.message || '분석 요청을 시작하지 못했습니다.');
+    }
+  };
+
   return (
     <>
       <HeroHeader onLoginClick={onLoginClick} />
@@ -96,34 +198,110 @@ export function HeroSection({ onLoginClick }: HeroSectionProps) {
                 </AnimatedGroup>
 
                 <AnimatedGroup
-                  variants={{
-                    container: {
-                      visible: {
-                        transition: {
-                          staggerChildren: 0.05,
-                          delayChildren: 0.75
-                        }
-                      }
-                    },
-                    ...transitionVariants
-                  }}
-                  className="mt-12 flex flex-col items-center justify-center gap-2 md:flex-row"
+                  variants={transitionVariants}
+                  className="mt-12 w-full max-w-xl mx-auto px-4"
                 >
-                  <div key={1} className="rounded-[14px] border border-slate-300/70 bg-slate-900/5 p-0.5">
+                  <form onSubmit={handleStartAnalysis} className="relative flex items-center p-1.5 rounded-2xl border border-slate-200 bg-white/70 shadow-lg shadow-slate-900/5 backdrop-blur-md focus-within:ring-2 focus-within:ring-indigo-500/20 focus-within:border-indigo-500 transition-all duration-300">
+                    <div className="flex items-center pl-3 text-slate-400 shrink-0">
+                      <Globe className="size-5" />
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="접근성 평가 분석을 시작할 URL을 입력하세요 (예: gov.kr)"
+                      value={url}
+                      onChange={(e) => setUrl(e.target.value)}
+                      disabled={isAnalyzing}
+                      className="w-full bg-transparent px-3 py-3 text-slate-800 placeholder-slate-400 font-medium outline-none text-base border-none"
+                    />
                     <Button
-                      size="lg"
-                      className="rounded-xl px-5 text-base"
-                      onClick={() => onLoginClick?.()}
+                      type="submit"
+                      disabled={isAnalyzing || !url.trim()}
+                      className="rounded-xl bg-slate-900 text-white font-bold hover:bg-slate-800 transition px-5 py-6 flex items-center gap-1.5 shrink-0"
                     >
-                      <span className="text-nowrap">로그인 시작</span>
+                      <span>분석 시작</span>
+                      <ArrowRight className="size-4" />
                     </Button>
+                  </form>
+
+                  {errorMsg && (
+                    <div className="mt-4 flex items-center gap-2 text-sm font-semibold text-red-600 bg-red-50 border border-red-200/50 rounded-xl p-3 max-w-xl mx-auto animate-pulse">
+                      <AlertCircle className="size-4 shrink-0" />
+                      <span>{errorMsg}</span>
+                    </div>
+                  )}
+
+                  <div className="mt-4 flex items-center justify-center gap-4 text-xs font-semibold text-slate-400">
+                    <span>• 가입없이 빠른 무료 평가</span>
+                    <span>• axe-core 검사 지원</span>
+                    <span>• AI 언어 난이도 교정</span>
                   </div>
-                  <Button key={2} size="lg" variant="ghost" className="h-10 rounded-xl px-5">
-                    <span className="text-nowrap">데모 요청</span>
-                  </Button>
                 </AnimatedGroup>
               </div>
             </div>
+
+            {/* Analysis Loading Overlay Modal */}
+            {isAnalyzing && (
+              <div className="fixed inset-0 z-[9999] flex flex-col items-center justify-center bg-slate-950/70 backdrop-blur-md text-white">
+                <div className="w-full max-w-lg rounded-3xl border border-white/10 bg-slate-900/60 p-8 shadow-2xl shadow-black/50 text-center relative overflow-hidden">
+                  <div className="absolute -left-16 -top-16 size-32 rounded-full bg-indigo-500/20 blur-2xl" />
+                  <div className="absolute -right-16 -bottom-16 size-32 rounded-full bg-emerald-500/20 blur-2xl" />
+
+                  <div className="relative z-10 flex flex-col items-center">
+                    <div className="relative flex size-20 items-center justify-center rounded-2xl bg-indigo-500/10 border border-indigo-400/20 shadow-lg">
+                      <div className="absolute inset-0 animate-pulse rounded-2xl bg-indigo-400/5" />
+                      <div className="size-10 animate-spin rounded-full border-4 border-indigo-500 border-t-transparent" />
+                    </div>
+
+                    <h2 className="mt-8 text-2xl font-black tracking-tight text-white">
+                      웹 접근성 분석 평가 진행 중
+                    </h2>
+                    <p className="mt-2 text-sm text-slate-400 max-w-md">
+                      입력하신 웹사이트의 접근성을 수집 및 평가하고 있습니다.<br />
+                      이 과정은 최대 40~50초 정도 소요될 수 있습니다.
+                    </p>
+
+                    <div className="mt-8 w-full">
+                      <div className="flex justify-between items-center text-xs font-bold text-slate-400 mb-2">
+                        <span>진행률</span>
+                        <span className="text-indigo-400 text-sm">{progress}%</span>
+                      </div>
+                      <div className="h-3 w-full rounded-full bg-white/5 border border-white/5 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-indigo-500 via-purple-500 to-emerald-400 transition-all duration-500 ease-out"
+                          style={{ width: `${progress}%` }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-8 w-full text-left space-y-3 border-t border-white/5 pt-6 max-w-sm mx-auto">
+                      {steps.slice(1, 8).map((stepMsg, idx) => {
+                        const stepNum = idx + 1;
+                        const isDone = currentStepIndex > stepNum;
+                        const isCurrent = currentStepIndex === stepNum;
+                        
+                        return (
+                          <div
+                            key={idx}
+                            className={cn(
+                              "flex items-center gap-3 text-sm transition-all duration-300",
+                              isDone ? "text-emerald-400 font-medium" : isCurrent ? "text-indigo-300 font-black scale-[1.02] translate-x-1" : "text-slate-500 opacity-60"
+                            )}
+                          >
+                            <span className={cn(
+                              "flex size-5 items-center justify-center rounded-full text-[10px] font-bold border",
+                              isDone ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400" : isCurrent ? "bg-indigo-500/20 border-indigo-400 text-indigo-300 animate-pulse" : "bg-transparent border-slate-700 text-slate-500"
+                            )}>
+                              {isDone ? "✓" : stepNum}
+                            </span>
+                            <span className="truncate">{stepMsg}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <AnimatedGroup
               variants={{

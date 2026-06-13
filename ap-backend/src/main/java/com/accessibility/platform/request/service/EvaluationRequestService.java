@@ -8,6 +8,13 @@ import com.accessibility.platform.request.dto.EvaluationRequestStatusUpdateReque
 import com.accessibility.platform.request.repository.EvaluationRequestRepository;
 import com.accessibility.platform.target.domain.EvaluationTarget;
 import com.accessibility.platform.target.service.EvaluationTargetService;
+import com.accessibility.platform.request.dto.EvaluateUrlRequest;
+import com.accessibility.platform.organization.domain.Organization;
+import com.accessibility.platform.organization.domain.OrganizationType;
+import com.accessibility.platform.organization.repository.OrganizationRepository;
+import com.accessibility.platform.target.domain.TargetType;
+import com.accessibility.platform.target.repository.EvaluationTargetRepository;
+import com.accessibility.platform.integration.service.AiEvaluationRunnerService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,12 +28,63 @@ public class EvaluationRequestService {
 
     private final EvaluationRequestRepository evaluationRequestRepository;
     private final EvaluationTargetService evaluationTargetService;
+    private final EvaluationTargetRepository evaluationTargetRepository;
+    private final OrganizationRepository organizationRepository;
+    private final AiEvaluationRunnerService aiEvaluationRunnerService;
 
     @Transactional
     public EvaluationRequestResponse create(EvaluationRequestCreateRequest request) {
         EvaluationTarget target = evaluationTargetService.getTarget(request.evaluationTargetId());
         EvaluationRequest evaluationRequest = new EvaluationRequest(target, request.requestNote());
-        return EvaluationRequestResponse.from(evaluationRequestRepository.save(evaluationRequest));
+        EvaluationRequest savedRequest = evaluationRequestRepository.save(evaluationRequest);
+
+        // Run the Python analysis asynchronously in the background
+        aiEvaluationRunnerService.runEvaluationAsync(savedRequest.getId(), target.getAccessUrl());
+
+        return EvaluationRequestResponse.from(savedRequest);
+    }
+
+    @Transactional
+    public EvaluationRequestResponse createForUrl(EvaluateUrlRequest request) {
+        String url = request.url();
+        EvaluationTarget target = evaluationTargetRepository.findByAccessUrl(url)
+                .orElseGet(() -> {
+                    Organization organization = organizationRepository.findByName("AI Module Imported")
+                            .orElseGet(() -> organizationRepository.save(new Organization(
+                                    "AI Module Imported",
+                                    OrganizationType.ETC,
+                                    null,
+                                    "AI-module imported evaluation results"
+                            )));
+
+                    return evaluationTargetRepository.save(new EvaluationTarget(
+                            organization,
+                            targetName(url),
+                            TargetType.WEB,
+                            url,
+                            "Created automatically from Web UI URL input"
+                    ));
+                });
+
+        EvaluationRequest evaluationRequest = new EvaluationRequest(target, "Web UI initiated request");
+        EvaluationRequest savedRequest = evaluationRequestRepository.save(evaluationRequest);
+
+        // Run the Python analysis asynchronously in the background
+        aiEvaluationRunnerService.runEvaluationAsync(savedRequest.getId(), target.getAccessUrl());
+
+        return EvaluationRequestResponse.from(savedRequest);
+    }
+
+    private String targetName(String url) {
+        if (url == null || url.isBlank()) {
+            return "Web UI Evaluation Target";
+        }
+        try {
+            String host = java.net.URI.create(url).getHost();
+            return host == null || host.isBlank() ? url : host;
+        } catch (IllegalArgumentException e) {
+            return url;
+        }
     }
 
     public List<EvaluationRequestResponse> findAll() {
