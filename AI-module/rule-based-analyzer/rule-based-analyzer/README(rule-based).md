@@ -107,7 +107,7 @@ KWCAG 33개 검사항목 정의와 axe-core 규칙 ID 매핑 데이터를 담고
 |---|---|---|
 | `name` | KWCAG 항목명 | 출력 및 대시보드 표시 |
 | `wcag` | 대응 WCAG 번호 배열 | 2단계 폴백 매핑 |
-| `module` | 담당 모듈 (규칙기반 / AI분석 / CV / 수동) | 모듈 분업 구분 |
+| `module` | 담당 모듈 (규칙기반 / 문장 난이도 분석 / CV / 수동) | 모듈 분업 구분 |
 | `weight` | 항목 중요도 (high / medium / low) | scorer.js 감점 배수 결정 |
 | `severity` | 위반 시 영향도 (critical / major / minor) | scorer.js 기본 감점값 결정 |
 | `axeRules` | 대응 axe-core 규칙 ID 목록 | 1단계 직접 매핑 |
