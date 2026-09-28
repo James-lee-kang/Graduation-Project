@@ -81,6 +81,11 @@ public class FaviconService {
      * Reads a public web page and caches a small decoded favicon, returning its local API path.
      * Failure is deliberately non-fatal because a favicon is optional metadata.
      */
+    /** Whether the dashboard can show this stored favicon without fetching it again. */
+    public boolean hasServableFavicon(String faviconUrl) {
+        return cache.isServable(faviconUrl);
+    }
+
     public Optional<String> findFaviconUrl(String pageUrl) {
         Future<Optional<String>> lookup;
         long deadline = System.nanoTime() + LOOKUP_TIMEOUT.toNanos();
