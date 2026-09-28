@@ -440,30 +440,6 @@ class RunAllPipelineTests(unittest.TestCase):
             with self.subTest(output=output):
                 self.assertFalse(run_all.document_content_unavailable(output))
 
-    def test_text_without_analyzed_sentences_is_not_scored_as_perfect(self):
-        rule = {"score": {"score": 80}}
-        empty_text = {"meta": {"page_score": 100.0, "total_analyzed": 0}, "results": []}
-        total = run_all.calculate_total_score(rule, empty_text, None)
-        self.assertEqual(total["total_score"], 80)
-        self.assertNotIn("difficulty", total["module_scores"])
-        final = run_all.build_final_result(
-            "https://example.test/", rule, empty_text, None, None, None, total, 0, 1
-        )
-        text = final["modules"]["text_difficulty"]
-        self.assertEqual((text["status"], text["reason"]), ("not_measured", "NO_TEXT_ANALYZED"))
-        self.assertIsNone(text["meta"]["page_score"])
-
-        measured = {"meta": {"page_score": 70.0, "total_analyzed": 3}, "results": []}
-        legacy = {"meta": {"page_score": 70.0}, "results": []}
-        for difficulty in (measured, legacy):
-            with self.subTest(difficulty=difficulty):
-                scored = run_all.calculate_total_score(rule, difficulty, None)
-                self.assertEqual(scored["module_scores"]["difficulty"], 70.0)
-                self.assertIs(run_all.difficulty_result_payload(difficulty), difficulty)
-        self.assertFalse(run_all.difficulty_result_is_not_measured(
-            {"meta": {"page_score": 100.0, "total_analyzed": False}}
-        ))
-
     def test_pipeline_uses_current_python_and_completes_with_rule_only_result(self):
         target_url = "https://example.test/fixture"
 

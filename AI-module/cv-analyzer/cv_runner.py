@@ -173,7 +173,7 @@ class CVRunner:
         
         summary = contrast_result["summary"]
         if summary["total"] == 0:
-            # OCR 결과가 모두 기호이거나 색을 구분할 수 없으면 점수에 반영할 표본이 없다.
+            # OCR 결과의 색을 모두 구분할 수 없으면 점수에 반영할 표본이 없다.
             print("  [경고] 명암비를 측정할 수 있는 텍스트가 없습니다. 빈 결과를 반환합니다.")
             result = self._build_empty_result(ocr_result, reason="NO_MEASURABLE_TEXT", skipped=summary)
             if output_path is None:
@@ -276,7 +276,6 @@ class CVRunner:
                 "min_contrast_ratio": summary["min_ratio"],# ← 가장 낮은 명암비
                 "worst_text": summary["worst_text"],       # ← 명암비가 가장 낮은 텍스트
                 # 판정에서 제외한 인식 결과. 위반·통과 어느 쪽에도 세지 않음
-                "skipped_non_text": summary["skipped_non_text"],
                 "skipped_unmeasured": summary["skipped_unmeasured"],
             },
             
@@ -349,7 +348,6 @@ class CVRunner:
                 "avg_contrast_ratio": 0,
                 "min_contrast_ratio": 0,
                 "worst_text": None,
-                "skipped_non_text": (skipped or {}).get("skipped_non_text", 0),
                 "skipped_unmeasured": (skipped or {}).get("skipped_unmeasured", 0),
             },
             "violations": [],
@@ -357,7 +355,7 @@ class CVRunner:
             "note": "OCR에서 텍스트가 추출되지 않았습니다. "
                     "이미지에 텍스트가 없거나, OCR 엔진 설정을 확인하세요."
                     if reason == "NO_TEXT_DETECTED" else
-                    "인식한 텍스트가 모두 기호이거나 글자색과 배경색을 구분할 수 없어 명암비를 측정하지 않았습니다.",
+                    "인식한 텍스트의 글자색과 배경색을 구분할 수 없어 명암비를 측정하지 않았습니다.",
         }
 
 

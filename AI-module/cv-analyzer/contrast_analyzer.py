@@ -234,11 +234,6 @@ def measure_text_colors(image: Image.Image,
     return foreground, background
 
 
-def has_readable_characters(text: str) -> bool:
-    """문자나 숫자가 하나도 없는 OCR 결과(|, /, ▼ 등 구분선·아이콘)는 텍스트 콘텐츠가 아니다."""
-    return any(character.isalnum() for character in text)
-
-
 # ── 메인 분석 클래스 ─────────────────────────────────────────────────────────
 
 
@@ -341,7 +336,6 @@ class ContrastAnalyzer:
               "avg_ratio": 8.45,          ← 전체 평균 명암비
               "min_ratio": 2.31,          ← 가장 낮은 명암비
               "worst_text": "자세히 보기", ← 명암비가 가장 낮은 텍스트
-              "skipped_non_text": 4,      ← 문자·숫자가 없어 제외한 인식 결과
               "skipped_unmeasured": 1     ← 글자색과 배경색을 구분하지 못해 제외한 텍스트
             }
           }
@@ -352,7 +346,6 @@ class ContrastAnalyzer:
         violations = []
         passes = []
         all_ratios = []
-        skipped_non_text = 0
         skipped_unmeasured = 0
         
         for i, ocr_item in enumerate(ocr_results):
@@ -362,11 +355,6 @@ class ContrastAnalyzer:
             
             # 텍스트가 없으면 건너뜀
             if not text:
-                continue
-
-            # 구분선·화살표처럼 문자나 숫자가 없는 인식 결과는 텍스트 콘텐츠가 아님
-            if not has_readable_characters(text):
-                skipped_non_text += 1
                 continue
             
             # bbox 딕셔너리를 (x, y, width, height) 튜플로 변환
@@ -432,7 +420,6 @@ class ContrastAnalyzer:
             "avg_ratio": round(sum(all_ratios) / total, 2) if total > 0 else 0,
             "min_ratio": round(min(all_ratios), 2) if all_ratios else 0,
             "worst_text": violations[0]["text"] if violations else None,
-            "skipped_non_text": skipped_non_text,
             "skipped_unmeasured": skipped_unmeasured,
         }
         

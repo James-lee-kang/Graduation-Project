@@ -643,30 +643,6 @@ def valid_difficulty_result(result: Any) -> bool:
     )
 
 
-def difficulty_result_is_not_measured(result: Any) -> bool:
-    """
-    분석한 문장이 없으면 난이도를 측정한 것이 아니다.
-    감점할 문장이 없다는 이유로 100점을 주지 않도록 총점에서 제외한다.
-    total_analyzed가 없는 이전 결과는 측정된 것으로 본다.
-    """
-    meta = result.get("meta") if isinstance(result, dict) else None
-    count = meta.get("total_analyzed") if isinstance(meta, dict) else None
-    return isinstance(count, int) and not isinstance(count, bool) and count == 0
-
-
-def difficulty_result_payload(result: Any) -> Dict:
-    if not valid_difficulty_result(result):
-        return {"status": "failed", "message": "난이도 분석 실패"}
-    if difficulty_result_is_not_measured(result):
-        return {
-            **result,
-            "status": "not_measured",
-            "reason": "NO_TEXT_ANALYZED",
-            "meta": {**result["meta"], "page_score": None},
-        }
-    return result
-
-
 def document_content_unavailable(rule_output: Any) -> bool:
     """규칙 분석기가 페이지 본문을 확인하지 못했다고 기록했는지 확인한다."""
     metadata = rule_output.get("metadata") if isinstance(rule_output, dict) else None
@@ -831,7 +807,7 @@ def calculate_total_score(rule_score: Optional[Dict],
     # 난이도 점수 추출
     # page_score는 difficulty_engine.py에서 이미 "100 - 감점"으로 계산됨
     # (높을수록 좋음) → 반전 없이 그대로 사용
-    if isinstance(difficulty_score, dict) and not difficulty_result_is_not_measured(difficulty_score):
+    if isinstance(difficulty_score, dict):
         meta = difficulty_score.get("meta", {})
         page_score = meta.get("page_score") if isinstance(meta, dict) else None
         numeric_score = finite_numeric_score(page_score)
@@ -932,7 +908,9 @@ def build_final_result(url, rule_result, difficulty_result,
             "rule_based": rule_result or {
                 "status": "failed", "message": "규칙 기반 평가 실패"
             },
-            "text_difficulty": difficulty_result_payload(difficulty_result),
+            "text_difficulty": difficulty_result if valid_difficulty_result(difficulty_result) else {
+                "status": "failed", "message": "난이도 분석 실패"
+            },
             "text_suggestions": suggestion_result if valid_suggestion_result(suggestion_result) else {
                 "status": "failed", "message": "수정 제안 생성 실패"
             },
