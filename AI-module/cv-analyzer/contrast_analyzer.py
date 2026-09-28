@@ -37,6 +37,7 @@ ai-analysis/cv/contrast_analyzer.py
 """
 
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Tuple, List, Dict, Any, Optional
@@ -125,6 +126,16 @@ def contrast_ratio(color1: Tuple[int, int, int],
     darker = min(lum1, lum2)
     
     return (lighter + 0.05) / (darker + 0.05)
+
+
+def displayed_ratio(ratio: float) -> float:
+    """
+    표시·저장용 명암비. 소수 둘째 자리에서 버린다.
+    반올림하면 4.4976:1이 4.50:1로 보여 기준을 충족한 것처럼 읽히므로,
+    표시값은 실제 값보다 크지 않게 한다. 합격 판정은 항상 원래 값으로 한다.
+    """
+    # 부동소수점 오차(4.56 * 100 = 455.999...)로 한 단계 더 버려지지 않게 한다.
+    return math.floor(round(ratio * 100, 6)) / 100
 
 
 def check_wcag_compliance(ratio: float) -> Dict[str, bool]:
@@ -291,8 +302,8 @@ class ContrastAnalyzer:
         return {
             "foreground": list(fg),
             "background": list(bg),
-            "ratio": round(ratio, 2),
-            "ratio_display": f"{ratio:.2f}:1",
+            "ratio": displayed_ratio(ratio),
+            "ratio_display": f"{displayed_ratio(ratio):.2f}:1",
             **compliance,
             "kwcag_pass": ratio >= self.KWCAG_NORMAL_THRESHOLD,
         }
@@ -388,7 +399,8 @@ class ContrastAnalyzer:
             # 텍스트 크기에 따라 적용할 명암비 기준을 선택함
             threshold = (self.KWCAG_LARGE_THRESHOLD if is_large_text 
                         else self.KWCAG_NORMAL_THRESHOLD)
-            is_pass = result["ratio"] >= threshold
+            # 표시값이 아닌 실제 명암비로 판정함 (4.4976:1은 4.5:1 기준 미달)
+            is_pass = contrast_ratio(fg_color, bg_color) >= threshold
             
             item = {
                 "text": text,
