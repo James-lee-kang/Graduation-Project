@@ -1,9 +1,11 @@
 import { clearSiteCreateRecovery, readSiteCreateRecovery } from "@/services/site-create-recovery-storage";
 import { UserFacingError } from "@/services/user-facing-error";
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { ErrorBoundary, isLazyChunkLoadError } from "@/components/shared/error-boundary";
 import { ModalErrorFallback, ModalLoadFallback } from "../shared/modal-load-fallback";
+import { RoutePanelErrorFallback, RoutePanelFallback } from "../shared/route-panel-fallbacks";
 
 import { getApiErrorMessage, isAbortError } from "@/services/backend-api";
 import type {
@@ -22,6 +24,13 @@ import { useMutationOperation } from "../shared/use-mutation-operation";
 import { QuickAnalysisProgress } from "./quick-analysis-progress";
 import { AnalysisTrendPanel } from "./site-dashboard/analysis-trend-panel";
 import { severityChartItems } from "./site-dashboard/constants";
+import {
+  DashboardViewTabs,
+  getDashboardViewPanelId,
+  getDashboardViewTabId,
+  parseDashboardView,
+  type DashboardView
+} from "./site-dashboard/dashboard-view-tabs";
 import { PageAnalysisActions } from "./site-dashboard/page-analysis-actions";
 import { RenderedPageEvidenceCard } from "./site-dashboard/rendered-page-evidence-card";
 import { SeverityDistributionPanel } from "./site-dashboard/severity-distribution-panel";
@@ -36,6 +45,8 @@ import "@/styles/page-evidence-layout.css";
 
 const IssueLocationDialog = lazy(() => import("./site-dashboard/issue-location-dialog")
   .then(module => ({ default: module.IssueLocationDialog })));
+const FinalReportPanel = lazy(() => import("./site-dashboard/final-report-panel")
+  .then(module => ({ default: module.FinalReportPanel })));
 
 type SiteDashboardPanelProps = {
   evaluationTarget: EvaluationTargetModel;
@@ -235,6 +246,47 @@ function SiteDashboardResults(props: SiteDashboardPanelProps) {
     setSelectedIssueFocusRequestId((current) => current + 1);
   }
 
+  // The URL owns the selected view so reload, links and Back keep it. The
+  // read-only preview must not rewrite the landing or preview page address.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [previewView, setPreviewView] = useState<DashboardView>("results");
+  const view = previewEvidence ? previewView : parseDashboardView(searchParams.get("view"));
+  const [hasOpenedReport, setHasOpenedReport] = useState(view === "report");
+  const pendingPageFocusRef = useRef(false);
+  const evidenceGridItemRef = useRef<HTMLDivElement>(null);
+
+  function changeView(next: DashboardView) {
+    if (next === view) return;
+    if (previewEvidence) {
+      setPreviewView(next);
+      return;
+    }
+    // The page detail route has no other query parameters to preserve.
+    setSearchParams(next === "report" ? { view: "report" } : {});
+  }
+
+  function showIssueOnPage(issueId: number) {
+    pendingPageFocusRef.current = true;
+    changeView("results");
+    revealHiddenIssue(issueId);
+  }
+
+  // The report mounts on first use and then keeps its filters. When a report
+  // button moves to the page, that button is hidden with its panel: bring the
+  // page view into sight and keep keyboard focus on it instead of the body.
+  // Router updates commit as a transition, so act once the view has changed.
+  useEffect(() => {
+    if (view === "report") {
+      setHasOpenedReport(true);
+      return;
+    }
+    if (!pendingPageFocusRef.current) return;
+    pendingPageFocusRef.current = false;
+    const gridItem = evidenceGridItemRef.current;
+    gridItem?.scrollIntoView({ block: "start" });
+    gridItem?.querySelector<HTMLElement>(".site-report-focus-guard")?.focus({ preventScroll: true });
+  }, [view]);
+
   useEffect(() => {
     setSelectedIssueId((current) => {
       if (current !== null && latestIssues.some((issue) => issue.id === current)) {
@@ -297,93 +349,131 @@ function SiteDashboardResults(props: SiteDashboardPanelProps) {
     null;
 
   return (
-    <div className="site-dashboard-layout grid min-h-[31rem] grid-cols-1 items-stretch">
-      <div className="site-page-evidence-grid-item">
-        <RenderedPageEvidenceCard
-          accessUrl={evaluationTarget.accessUrl}
-          headerActions={<PageAnalysisActions
-            analyzedAt={latestAnalyzedAt}
-            isRequestingAnalysis={isRequestingAnalysis}
-            analysisRequestError={analysisRequestError}
-            onRequestAnalysis={!previewEvidence && onRequestEvaluationTargetAnalysis && onAnalysisAccepted
-              ? handleRequestAnalysis
-              : undefined}
-          />}
-          faviconUrl={evaluationTarget.faviconUrl}
-          captureMetadata={captureMetadata}
-          errorMessage={resultDetailsErrorMessage ?? liveSessionErrorMessage}
-          evaluationRequestId={latestResultRequestId}
-          liveSession={liveSession}
-          liveSessionLoadState={evidenceLiveSessionLoadState}
-          previewRuntimeUrl={previewEvidence?.previewRuntimeUrl}
-          rows={replayIssueRows}
-          selectedIssueId={selectedIssueId}
-          selectedIssueFocusRequestId={selectedIssueFocusRequestId}
-          targetName={evaluationTarget.name}
-          onRetry={retryEvidence}
-          onRetryLiveSession={retryLiveSession}
-          onLocatorReportChange={handleLocatorReportChange}
-          onSelectIssue={setSelectedIssueId}
-        />
-      </div>
-      <div className="site-dashboard-rail">
-        {(showsPreviousResult || analysisRequestError || captureMetadataLoadState === "loading" || captureMetadataLoadState === "error") && (
-          <div className="site-result-notices">
-            {showsPreviousResult && <p className="site-result-notice" role="status">
-              최신 재분석에 실패했습니다. {formatDateTime(latestAnalyzedAt)} 분석의 이전 성공 결과를 표시하고 있습니다.
-            </p>}
-            {analysisRequestError && (
-              <p id="site-analysis-request-error" className="site-result-notice" role="alert">
-                {analysisRequestError}
-              </p>
-            )}
-            {captureMetadataLoadState === "loading" && (
-              <p className="site-capture-metadata-status site-result-notice" role="status">
-                분석 당시 화면 정보를 불러오는 중입니다.
-              </p>
-            )}
-            {captureMetadataLoadState === "error" && (
-              <div className="site-capture-metadata-status site-result-notice" role="alert">
-                <p>분석 당시 화면 정보를 불러오지 못했습니다.</p>
-                {captureMetadataErrorMessage && <p>{captureMetadataErrorMessage}</p>}
-                <button type="button" onClick={retryCaptureMetadata}>
-                  화면 정보 다시 불러오기
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-
-        <AnalysisTrendPanel
-          evaluationRequests={evaluationRequests}
-          evaluationTargetId={evaluationTarget.id}
-          resultSummaries={resultSummaries}
-          scoreResults={scoreResults}
-        />
-
-        {showsRailDetailCards && (
-          <>
-            <SeverityDistributionPanel issues={latestIssues}>
-              {liveSessionLoadState === "error" && <p className="site-result-notice" role="status">
-                현재 페이지에 연결하지 못했습니다. 저장된 분석 결과를 표시합니다.
+    <div className="site-dashboard-view" data-active-view={view}>
+      <DashboardViewTabs value={view} onChange={changeView} />
+      <div
+        id={getDashboardViewPanelId("results")}
+        role="tabpanel"
+        aria-labelledby={getDashboardViewTabId("results")}
+        className="site-dashboard-layout grid min-h-[31rem] grid-cols-1 items-stretch"
+      >
+        <div ref={evidenceGridItemRef} className="site-page-evidence-grid-item">
+          <RenderedPageEvidenceCard
+            accessUrl={evaluationTarget.accessUrl}
+            headerActions={<PageAnalysisActions
+              analyzedAt={latestAnalyzedAt}
+              isRequestingAnalysis={isRequestingAnalysis}
+              analysisRequestError={analysisRequestError}
+              onRequestAnalysis={!previewEvidence && onRequestEvaluationTargetAnalysis && onAnalysisAccepted
+                ? handleRequestAnalysis
+                : undefined}
+            />}
+            faviconUrl={evaluationTarget.faviconUrl}
+            captureMetadata={captureMetadata}
+            errorMessage={resultDetailsErrorMessage ?? liveSessionErrorMessage}
+            evaluationRequestId={latestResultRequestId}
+            liveSession={liveSession}
+            liveSessionLoadState={evidenceLiveSessionLoadState}
+            previewRuntimeUrl={previewEvidence?.previewRuntimeUrl}
+            rows={replayIssueRows}
+            selectedIssueId={selectedIssueId}
+            selectedIssueFocusRequestId={selectedIssueFocusRequestId}
+            targetName={evaluationTarget.name}
+            onRetry={retryEvidence}
+            onRetryLiveSession={retryLiveSession}
+            onLocatorReportChange={handleLocatorReportChange}
+            onSelectIssue={setSelectedIssueId}
+          />
+        </div>
+        <div className="site-dashboard-rail">
+          {(showsPreviousResult || analysisRequestError || captureMetadataLoadState === "loading" || captureMetadataLoadState === "error") && (
+            <div className="site-result-notices">
+              {showsPreviousResult && <p className="site-result-notice" role="status">
+                최신 재분석에 실패했습니다. {formatDateTime(latestAnalyzedAt)} 분석의 이전 성공 결과를 표시하고 있습니다.
               </p>}
-            </SeverityDistributionPanel>
-            <UnavailableLocatorPanel
-              mode="recoverable"
-              checkState={locatorCheckState}
-              rows={recoverableHiddenLocatorIssueRows}
-              onSelectIssue={revealHiddenIssue}
-              onShowLocation={setLocationIssueId}
-              issueStates={currentLocatorReport?.issueStates}
-            />
-            <UnavailableLocatorPanel
-              checkState={locatorCheckState}
-              hasHiddenIssues={recoverableHiddenLocatorIssueRows.length > 0}
-              rows={unavailableLocatorIssueRows}
-              onShowLocation={setLocationIssueId}
-              issueStates={currentLocatorReport?.issueStates}
-            />
-          </>
+              {analysisRequestError && (
+                <p id="site-analysis-request-error" className="site-result-notice" role="alert">
+                  {analysisRequestError}
+                </p>
+              )}
+              {captureMetadataLoadState === "loading" && (
+                <p className="site-capture-metadata-status site-result-notice" role="status">
+                  분석 당시 화면 정보를 불러오는 중입니다.
+                </p>
+              )}
+              {captureMetadataLoadState === "error" && (
+                <div className="site-capture-metadata-status site-result-notice" role="alert">
+                  <p>분석 당시 화면 정보를 불러오지 못했습니다.</p>
+                  {captureMetadataErrorMessage && <p>{captureMetadataErrorMessage}</p>}
+                  <button type="button" onClick={retryCaptureMetadata}>
+                    화면 정보 다시 불러오기
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          <AnalysisTrendPanel
+            evaluationRequests={evaluationRequests}
+            evaluationTargetId={evaluationTarget.id}
+            resultSummaries={resultSummaries}
+            scoreResults={scoreResults}
+          />
+
+          {showsRailDetailCards && (
+            <>
+              <SeverityDistributionPanel issues={latestIssues}>
+                {liveSessionLoadState === "error" && <p className="site-result-notice" role="status">
+                  현재 페이지에 연결하지 못했습니다. 저장된 분석 결과를 표시합니다.
+                </p>}
+              </SeverityDistributionPanel>
+              <UnavailableLocatorPanel
+                mode="recoverable"
+                checkState={locatorCheckState}
+                rows={recoverableHiddenLocatorIssueRows}
+                onSelectIssue={revealHiddenIssue}
+                onShowLocation={setLocationIssueId}
+                issueStates={currentLocatorReport?.issueStates}
+              />
+              <UnavailableLocatorPanel
+                checkState={locatorCheckState}
+                hasHiddenIssues={recoverableHiddenLocatorIssueRows.length > 0}
+                rows={unavailableLocatorIssueRows}
+                onShowLocation={setLocationIssueId}
+                issueStates={currentLocatorReport?.issueStates}
+              />
+            </>
+          )}
+        </div>
+      </div>
+      <div
+        id={getDashboardViewPanelId("report")}
+        role="tabpanel"
+        aria-labelledby={getDashboardViewTabId("report")}
+        className="site-dashboard-report-panel"
+        hidden={view !== "report"}
+      >
+        {hasOpenedReport && (
+          <ErrorBoundary resetKey={`final-report:${latestResultRequestId ?? "none"}`} fallback={RoutePanelErrorFallback}>
+            <Suspense fallback={<RoutePanelFallback />}>
+              <FinalReportPanel
+                active={view === "report"}
+                target={evaluationTarget}
+                analyzedAt={latestAnalyzedAt}
+                requestId={latestResultRequestId}
+                scoreResults={scoreResults}
+                resultSummaries={resultSummaries}
+                rows={replayIssueRows}
+                loadState={resultDetailsLoadState}
+                errorMessage={resultDetailsErrorMessage}
+                onRetry={retryResultDetails}
+                locatorCheckState={locatorCheckState}
+                issueStates={currentLocatorReport?.issueStates}
+                onShowOnPage={showIssueOnPage}
+                onShowDetails={setLocationIssueId}
+              />
+            </Suspense>
+          </ErrorBoundary>
         )}
       </div>
       {locationRow ? (

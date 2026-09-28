@@ -55,6 +55,7 @@ const pageEvidenceScale = viteTest("verify-page-evidence.mjs", {
 });
 const siteDashboardRail = viteTest("verify-site-dashboard-rail.mjs");
 const resultHardening = viteTest("verify-result-hardening.mjs");
+const finalReport = viteTest("verify-final-report.mjs");
 const landingDesign = viteTest("verify-landing-design.mjs");
 const landingScrollSnap = viteTest("verify-landing-scroll-snap.mjs");
 const landingMediaQuality = viteTest("verify-landing-media-quality.mjs");
@@ -102,6 +103,7 @@ const ci = [
   siteCreateAccessibilityGuards,
   pageEvidenceCore,
   resultHardening,
+  finalReport,
   siteDashboardRail
 ];
 

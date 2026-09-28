@@ -14,6 +14,71 @@
   scroll-margin-top: 1rem;
 }
 
+/* Result/report tabs. The result panel stays mounted and laid out while the
+   report is open, so its live page connection and markers survive the switch. */
+.bridge-dashboard.dashboard-site-detail .site-dashboard-view {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--dashboard-site-grid-gap);
+}
+
+.bridge-dashboard.dashboard-site-detail .site-dashboard-view[data-active-view="report"] > .site-dashboard-layout {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-dashboard-tabs {
+  display: flex;
+  align-self: flex-start;
+  max-width: 100%;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border-radius: 999px;
+  background: var(--site-row-surface);
+}
+
+.bridge-dashboard.dashboard-site-detail .site-dashboard-tabs__tab {
+  min-height: 2.25rem;
+  padding: 0.375rem 1rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--dashboard-text-muted);
+  background: transparent;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-dashboard-tabs__tab:hover {
+  color: var(--dashboard-text-strong);
+}
+
+.bridge-dashboard.dashboard-site-detail .site-dashboard-tabs__tab[aria-selected="true"] {
+  border-color: var(--dashboard-card-border);
+  color: var(--dashboard-text-strong);
+  background: var(--site-glass-bg-opaque);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  font-weight: 800;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-dashboard-tabs__tab:focus-visible {
+  outline: 2px solid var(--dashboard-accent);
+  outline-offset: 2px;
+}
+
+@media (forced-colors: active) {
+  .bridge-dashboard.dashboard-site-detail .site-dashboard-tabs__tab[aria-selected="true"] {
+    border: 2px solid Highlight;
+  }
+}
+
 .bridge-dashboard.dashboard-site-detail .site-page-evidence-card {
   --site-page-chrome-height: clamp(2.5rem, 2rem + 0.5cqi, 3rem);
   --site-page-preview-height: clamp(30rem, 62dvh, 50rem);
@@ -581,11 +646,20 @@
 }
 
 @media (min-width: 1024px) {
-  .bridge-dashboard.dashboard-site-detail .site-dashboard-layout {
+  .bridge-dashboard.dashboard-site-detail .site-dashboard-view {
+    flex: 1 1 auto;
+  }
+
+  .bridge-dashboard.dashboard-site-detail .site-dashboard-layout,
+  .bridge-dashboard.dashboard-site-detail .site-dashboard-report-panel {
     flex: 1 1 auto;
     /* Reclaim the route gutter without resizing the rail's cqi container. */
     width: calc(100% + 2rem);
     margin-inline: -1rem;
+  }
+
+  .bridge-dashboard.dashboard-site-detail .site-dashboard-tabs {
+    margin-left: -1rem;
   }
 
   .bridge-dashboard.dashboard-site-detail .site-page-evidence-grid-item {
