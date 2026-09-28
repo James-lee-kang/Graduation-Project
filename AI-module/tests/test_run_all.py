@@ -397,6 +397,73 @@ class RunAllPipelineTests(unittest.TestCase):
         self.assertEqual([command[0] for command in commands], ["node"])
         send_to_backend.assert_not_called()
 
+    def test_page_without_content_exits_as_unavailable_without_scoring(self):
+        target_url = "https://example.test/fixture"
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory)
+            commands = []
+
+            def fake_run_command(command, **kwargs):
+                commands.append(command)
+                # run.js writes only this marker and exits with status 2.
+                (output_dir / "result_api.json").write_text(json.dumps({"metadata": {
+                    "url": target_url,
+                    "document_health": {"status": "EMPTY", "has_body": True,
+                                        "visible_text_length": 0, "visible_content_count": 0},
+                }}), encoding="utf-8")
+                return False
+
+            with (
+                patch.object(run_all, "OUTPUT_DIR", output_dir),
+                patch.object(run_all, "create_ephemeral_cv_capture_path",
+                             return_value=output_dir / "private-cv-input.png"),
+                patch.object(run_all, "run_command", side_effect=fake_run_command),
+                patch.object(run_all, "send_to_backend") as send_to_backend,
+                patch.object(run_all.atexit, "register"),
+                patch.object(sys, "argv", ["run_all.py", target_url, "37"]),
+                redirect_stdout(io.StringIO()),
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    run_all.main()
+            final_exists = (output_dir / "result_final.json").exists()
+
+        self.assertEqual(raised.exception.code, run_all.TARGET_PAGE_UNAVAILABLE_EXIT_CODE)
+        self.assertEqual([command[0] for command in commands], ["node"])
+        self.assertFalse(final_exists)
+        send_to_backend.assert_not_called()
+
+    def test_stale_empty_document_marker_does_not_block_a_current_result(self):
+        stale = {"metadata": {"document_health": {"status": "EMPTY"}}}
+        self.assertTrue(run_all.document_content_unavailable(stale))
+        for output in (None, {}, {"metadata": {"url": "x"}},
+                       {"metadata": {"document_health": {"status": "MEANINGFUL"}}}):
+            with self.subTest(output=output):
+                self.assertFalse(run_all.document_content_unavailable(output))
+
+    def test_text_without_analyzed_sentences_is_not_scored_as_perfect(self):
+        rule = {"score": {"score": 80}}
+        empty_text = {"meta": {"page_score": 100.0, "total_analyzed": 0}, "results": []}
+        total = run_all.calculate_total_score(rule, empty_text, None)
+        self.assertEqual(total["total_score"], 80)
+        self.assertNotIn("difficulty", total["module_scores"])
+        final = run_all.build_final_result(
+            "https://example.test/", rule, empty_text, None, None, None, total, 0, 1
+        )
+        text = final["modules"]["text_difficulty"]
+        self.assertEqual((text["status"], text["reason"]), ("not_measured", "NO_TEXT_ANALYZED"))
+        self.assertIsNone(text["meta"]["page_score"])
+
+        measured = {"meta": {"page_score": 70.0, "total_analyzed": 3}, "results": []}
+        legacy = {"meta": {"page_score": 70.0}, "results": []}
+        for difficulty in (measured, legacy):
+            with self.subTest(difficulty=difficulty):
+                scored = run_all.calculate_total_score(rule, difficulty, None)
+                self.assertEqual(scored["module_scores"]["difficulty"], 70.0)
+                self.assertIs(run_all.difficulty_result_payload(difficulty), difficulty)
+        self.assertFalse(run_all.difficulty_result_is_not_measured(
+            {"meta": {"page_score": 100.0, "total_analyzed": False}}
+        ))
+
     def test_pipeline_uses_current_python_and_completes_with_rule_only_result(self):
         target_url = "https://example.test/fixture"
 

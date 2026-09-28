@@ -60,6 +60,37 @@ class AiEvaluationRunnerTransactionIntegrationTest {
                 .andExpect(jsonPath("$.data.failureCode").value("TARGET_PAGE_UNAVAILABLE"));
     }
 
+    @Test
+    void failsRequestsLeftActiveByAPreviousProcessOnly() {
+        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+        List<Long> ids = transaction.execute(status -> {
+            EvaluationRequest pending = createRequest("Interrupted pending", "https://example.com/pending");
+            EvaluationRequest running = createRequest("Interrupted running", "https://example.com/running");
+            running.changeStatus(EvaluationRequestStatus.IN_PROGRESS);
+            EvaluationRequest completed = createRequest("Previously completed", "https://example.com/completed");
+            completed.changeStatus(EvaluationRequestStatus.COMPLETED);
+            LocalDateTime beforeStart = LocalDateTime.now().minusDays(1);
+            for (EvaluationRequest request : List.of(pending, running, completed)) {
+                org.springframework.test.util.ReflectionTestUtils.setField(request, "requestedAt", beforeStart);
+            }
+            // Accepted by this process: its worker still owns it.
+            EvaluationRequest current = createRequest("Current process", "https://example.com/current");
+            return List.of(pending.getId(), running.getId(), completed.getId(), current.getId());
+        });
+
+        runnerService.failRequestsInterruptedByPreviousProcess();
+
+        List<EvaluationRequest> requests = ids.stream().map(id -> requestRepository.findById(id).orElseThrow()).toList();
+        assertThat(requests).extracting(EvaluationRequest::getStatus).containsExactly(
+                EvaluationRequestStatus.FAILED,
+                EvaluationRequestStatus.FAILED,
+                EvaluationRequestStatus.COMPLETED,
+                EvaluationRequestStatus.PENDING
+        );
+        assertThat(requests.subList(0, 2)).extracting(EvaluationRequest::getFailureCode)
+                .containsOnly(com.accessibility.platform.request.domain.EvaluationFailureCode.ANALYSIS_FAILED);
+    }
+
     @Autowired
     AiEvaluationRunnerService runnerService;
 
