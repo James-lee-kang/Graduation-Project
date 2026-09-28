@@ -585,6 +585,73 @@ async function sendToBackend(requestId, apiData) {
  *    (모바일 접근성은 추후 별도 뷰포트로 확장 예정)
  * ─────────────────────────────────────────────────────────────────────────
  */
+// A page whose content never arrived must not be scored: axe finds nothing in
+// an empty document and would report a perfect score. The threshold follows
+// the live report's document health: some visible text or visible content.
+const DOCUMENT_CONTENT_MIN_TEXT_LENGTH = 20;
+const DOCUMENT_CONTENT_GRACE_MS = 15000;
+const DOCUMENT_CONTENT_POLL_MS = 1000;
+// CLI exit status for a page without analyzable content. run_all.py reports
+// it as an unavailable target page instead of an analysis result.
+const DOCUMENT_CONTENT_UNAVAILABLE_EXIT_CODE = 2;
+
+class DocumentContentUnavailableError extends Error {
+  constructor(documentHealth) {
+    super('페이지 본문을 확인하지 못해 접근성 검사를 진행하지 않았습니다.');
+    this.name = 'DocumentContentUnavailableError';
+    this.documentHealth = documentHealth;
+  }
+}
+
+async function measureDocumentContent(page) {
+  return page.evaluate(() => {
+    const body = document.body;
+    if (!body) return { hasBody: false, visibleTextLength: 0, visibleContentCount: 0 };
+    const visibleText = (body.innerText || '').replace(/\s+/g, ' ').trim();
+    const isVisible = (element) => {
+      const rect = element.getBoundingClientRect();
+      if (rect.width < 8 || rect.height < 8) return false;
+      const style = getComputedStyle(element);
+      return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) > 0;
+    };
+    let visibleContentCount = 0;
+    for (const element of body.querySelectorAll(
+      'img, svg, picture, video, canvas, iframe, object, embed, [role="img"], '
+      + 'a[href], button, input:not([type="hidden"]), select, textarea, [role="button"]',
+    )) {
+      if (isVisible(element) && ++visibleContentCount >= 50) break;
+    }
+    return { hasBody: true, visibleTextLength: visibleText.length, visibleContentCount };
+  }).catch(() => ({ hasBody: false, visibleTextLength: 0, visibleContentCount: 0 }));
+}
+
+function hasMeaningfulDocumentContent(content) {
+  return content.hasBody && (
+    content.visibleTextLength >= DOCUMENT_CONTENT_MIN_TEXT_LENGTH
+    || content.visibleContentCount > 0
+  );
+}
+
+// Slow pages can commit the document before the body streams in. Keep polling
+// for a short grace period before treating the content as unavailable.
+async function waitForDocumentContent(page, {
+  graceMs = DOCUMENT_CONTENT_GRACE_MS,
+  pollMs = DOCUMENT_CONTENT_POLL_MS,
+} = {}) {
+  const deadline = Date.now() + graceMs;
+  let content = await measureDocumentContent(page);
+  while (!hasMeaningfulDocumentContent(content) && Date.now() < deadline) {
+    await page.waitForTimeout(pollMs);
+    content = await measureDocumentContent(page);
+  }
+  return {
+    status: hasMeaningfulDocumentContent(content) ? 'MEANINGFUL' : 'EMPTY',
+    has_body: content.hasBody,
+    visible_text_length: content.visibleTextLength,
+    visible_content_count: content.visibleContentCount,
+  };
+}
+
 async function run(url, outputPath, options = {}) {
   console.log(`\n검사 대상: ${url}`);
   console.log('─'.repeat(50));
@@ -642,6 +709,20 @@ async function run(url, outputPath, options = {}) {
       }
     }
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
+
+    const documentHealth = await waitForDocumentContent(page, {
+      graceMs: Number.isFinite(options.contentGraceMs)
+        ? Math.max(0, options.contentGraceMs)
+        : DOCUMENT_CONTENT_GRACE_MS,
+    });
+    if (documentHealth.status !== 'MEANINGFUL') {
+      // Record why no score was produced; run_all.py reads only this marker
+      // and never ingests it as an analysis result.
+      fs.writeFileSync(siblingOutputPath(output, '_api.json'), JSON.stringify({
+        metadata: { url: analysisFinalUrl, document_health: documentHealth },
+      }, null, 2), 'utf-8');
+      throw new DocumentContentUnavailableError(documentHealth);
+    }
 
     // Freeze CSS/Web Animations before both axe and snapshot serialization so
     // the reported element rectangles describe the analyzed DOM state.
@@ -733,6 +814,7 @@ async function run(url, outputPath, options = {}) {
     console.log('8. API 형태로 변환 중...');
     const apiData = toApiFormat(kwcagResult, scoreResult);
     apiData.metadata.scan_duration_ms = scanDuration;  // placeholder를 실측값으로 덮어쓰기
+    apiData.metadata.document_health = documentHealth;
 
     // ── 8) 로컬 JSON 저장 ──
     //   두 종류를 모두 저장:
@@ -863,13 +945,17 @@ if (require.main === module) {
     ? args[cvScreenshotIndex + 1]
     : null;
   const outputArgument = args[1] && !args[1].startsWith('--') ? args[1] : undefined;
-  run(args[0], outputArgument, { cvScreenshotPath }).catch(() => process.exit(1));
+  run(args[0], outputArgument, { cvScreenshotPath }).catch((error) => process.exit(
+    error instanceof DocumentContentUnavailableError ? DOCUMENT_CONTENT_UNAVAILABLE_EXIT_CODE : 1,
+  ));
 }
 
 module.exports = {
+  DocumentContentUnavailableError,
   challengeSignals,
   detectCrossOriginBotChallenge,
   loadStaticInitialResponseFallback,
+  measureDocumentContent,
   run,
   siblingOutputPath,
   toApiFormat,

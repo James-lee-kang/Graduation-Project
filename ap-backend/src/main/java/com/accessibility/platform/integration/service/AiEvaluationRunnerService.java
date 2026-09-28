@@ -7,6 +7,8 @@ import com.accessibility.platform.request.repository.EvaluationRequestRepository
 import com.accessibility.platform.score.repository.ScoreResultRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -21,6 +23,7 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
@@ -47,6 +50,8 @@ public class AiEvaluationRunnerService {
     private final Environment environment;
     private final String configuredPythonExecutable;
     private final long processTimeoutSeconds;
+    // Requests accepted before this process existed belong to a previous worker.
+    private final LocalDateTime processStartedAt = LocalDateTime.now();
     private final AtomicReference<Long> activeRequestId = new AtomicReference<>();
     private final AtomicReference<Process> activeProcess = new AtomicReference<>();
     private volatile ExecutorService executorService;
@@ -120,6 +125,24 @@ public class AiEvaluationRunnerService {
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * The worker queue lives only in memory. A graceful shutdown marks its work
+     * FAILED (see {@link #destroy()}), but a crash or forced stop leaves
+     * PENDING/IN_PROGRESS rows that no worker will ever finish. Fail them on
+     * startup so the dashboard stops waiting and the user can analyze again.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void failRequestsInterruptedByPreviousProcess() {
+        List<Long> requestIds = requestRepository.findIdsByStatusInAndRequestedAtBefore(
+                List.of(EvaluationRequestStatus.PENDING, EvaluationRequestStatus.IN_PROGRESS),
+                processStartedAt
+        );
+        for (Long requestId : requestIds) {
+            log.warn("Marking EvaluationRequest {} FAILED: interrupted by a previous process", requestId);
+            markFailedSafely(requestId, EvaluationFailureCode.ANALYSIS_FAILED);
         }
     }
 

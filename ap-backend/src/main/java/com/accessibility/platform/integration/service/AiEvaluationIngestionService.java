@@ -361,13 +361,17 @@ public class AiEvaluationIngestionService {
 
     private void saveTextAnalysis(JsonNode difficulty, JsonNode suggestions, EvaluationRequest request, LocalDateTime completedAt) {
         JsonNode meta = difficulty.path("meta");
+        // No analyzed sentence is not a perfect score; keep it distinguishable.
+        boolean notMeasured = "not_measured".equals(difficulty.path("status").asText());
         AnalysisResult analysis = analysisResultRepository.save(new AnalysisResult(
                 request,
                 AnalyzerType.AI_TEXT,
                 status(difficulty),
-                "page_score=" + meta.path("page_score").asText("0")
-                        + ", flagged=" + meta.path("flagged_count").asInt(0)
-                        + ", suggestion_needed=" + meta.path("suggestion_needed").asInt(0),
+                notMeasured
+                        ? "not_measured, reason=" + text(difficulty, "reason", "NO_TEXT_ANALYZED")
+                        : "page_score=" + meta.path("page_score").asText("0")
+                            + ", flagged=" + meta.path("flagged_count").asInt(0)
+                            + ", suggestion_needed=" + meta.path("suggestion_needed").asInt(0),
                 null,
                 completedAt
         ));

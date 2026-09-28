@@ -164,8 +164,10 @@ WEIGHT_DIFFICULTY = 0.30
 WEIGHT_CV = 0.20
 
 # The backend treats any non-zero process status as a failed evaluation request.
-# Keep this distinct from the navigation-blocked status (2) so runtime logs show
+# Status 2 means the target page was unavailable: navigation was blocked or the
+# page content never arrived (backend TARGET_PAGE_UNAVAILABLE). Status 3 shows
 # that the pipeline ran but produced no score-bearing module result.
+TARGET_PAGE_UNAVAILABLE_EXIT_CODE = 2
 NO_SCORABLE_RESULT_EXIT_CODE = 3
 
 # Most local analyzers finish quickly, while the browser-based rule scan may
@@ -641,6 +643,37 @@ def valid_difficulty_result(result: Any) -> bool:
     )
 
 
+def difficulty_result_is_not_measured(result: Any) -> bool:
+    """
+    분석한 문장이 없으면 난이도를 측정한 것이 아니다.
+    감점할 문장이 없다는 이유로 100점을 주지 않도록 총점에서 제외한다.
+    total_analyzed가 없는 이전 결과는 측정된 것으로 본다.
+    """
+    meta = result.get("meta") if isinstance(result, dict) else None
+    count = meta.get("total_analyzed") if isinstance(meta, dict) else None
+    return isinstance(count, int) and not isinstance(count, bool) and count == 0
+
+
+def difficulty_result_payload(result: Any) -> Dict:
+    if not valid_difficulty_result(result):
+        return {"status": "failed", "message": "난이도 분석 실패"}
+    if difficulty_result_is_not_measured(result):
+        return {
+            **result,
+            "status": "not_measured",
+            "reason": "NO_TEXT_ANALYZED",
+            "meta": {**result["meta"], "page_score": None},
+        }
+    return result
+
+
+def document_content_unavailable(rule_output: Any) -> bool:
+    """규칙 분석기가 페이지 본문을 확인하지 못했다고 기록했는지 확인한다."""
+    metadata = rule_output.get("metadata") if isinstance(rule_output, dict) else None
+    health = metadata.get("document_health") if isinstance(metadata, dict) else None
+    return isinstance(health, dict) and health.get("status") == "EMPTY"
+
+
 def valid_suggestion_result(result: Any) -> bool:
     if not valid_difficulty_result(result):
         return False
@@ -725,7 +758,7 @@ def calculate_total_score(rule_score: Optional[Dict],
     # 난이도 점수 추출
     # page_score는 difficulty_engine.py에서 이미 "100 - 감점"으로 계산됨
     # (높을수록 좋음) → 반전 없이 그대로 사용
-    if isinstance(difficulty_score, dict):
+    if isinstance(difficulty_score, dict) and not difficulty_result_is_not_measured(difficulty_score):
         meta = difficulty_score.get("meta", {})
         page_score = meta.get("page_score") if isinstance(meta, dict) else None
         numeric_score = finite_numeric_score(page_score)
@@ -826,9 +859,7 @@ def build_final_result(url, rule_result, difficulty_result,
             "rule_based": rule_result or {
                 "status": "failed", "message": "규칙 기반 평가 실패"
             },
-            "text_difficulty": difficulty_result if valid_difficulty_result(difficulty_result) else {
-                "status": "failed", "message": "난이도 분석 실패"
-            },
+            "text_difficulty": difficulty_result_payload(difficulty_result),
             "text_suggestions": suggestion_result if valid_suggestion_result(suggestion_result) else {
                 "status": "failed", "message": "수정 제안 생성 실패"
             },
@@ -1018,6 +1049,14 @@ def main():
         timeout_seconds=RULE_BASED_STEP_TIMEOUT_SECONDS,
     )
 
+    # An empty document is an unavailable page, not a perfect score. The rule
+    # analyzer writes only this marker and exits without a score.
+    if document_content_unavailable(
+        load_json(result_api) if is_fresh_nonempty_file(result_api, step1_started_ns) else None
+    ):
+        print("  [분석 중단] 페이지 본문을 확인하지 못했습니다. 빈 문서를 점수로 저장하지 않습니다.")
+        sys.exit(TARGET_PAGE_UNAVAILABLE_EXIT_CODE)
+
     step1_outputs_fresh = step1_process_ok and all(
         is_fresh_nonempty_file(path, step1_started_ns)
         for path in rule_output_paths
@@ -1055,7 +1094,7 @@ def main():
     elif not rule_result_valid:
         print("  [분석 실패] 규칙 기반 결과에 유효한 점수가 없습니다.")
     elif not navigation_valid:
-        sys.exit(2)
+        sys.exit(TARGET_PAGE_UNAVAILABLE_EXIT_CODE)
     elif not capture_metadata_valid:
         print("  [분석 실패] 현재 요청의 캡처 메타데이터가 유효하지 않습니다.")
 

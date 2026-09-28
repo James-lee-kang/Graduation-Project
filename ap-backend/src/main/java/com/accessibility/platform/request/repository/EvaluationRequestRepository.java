@@ -23,6 +23,12 @@ public interface EvaluationRequestRepository extends JpaRepository<EvaluationReq
     @Query("select request from EvaluationRequest request where request.id = :id")
     Optional<EvaluationRequest> findByIdForUpdate(@Param("id") Long id);
 
+    @Query("select request.id from EvaluationRequest request where request.status in :statuses and request.requestedAt < :before order by request.id")
+    List<Long> findIdsByStatusInAndRequestedAtBefore(
+            @Param("statuses") List<com.accessibility.platform.request.domain.EvaluationRequestStatus> statuses,
+            @Param("before") java.time.LocalDateTime before
+    );
+
     @Query("select request.evaluationTarget.accessUrl from EvaluationRequest request where request.id = :id")
     Optional<String> findTargetUrlById(@Param("id") Long id);
 
