@@ -84,8 +84,10 @@ public class EvaluationRequestService {
         return EvaluationRequestResponse.from(savedRequest);
     }
 
+    // Also replaces legacy remote URLs and cache entries missing on this
+    // machine, so a rescan restores the favicon. A failed lookup keeps the value.
     private void enrichFaviconIfMissing(EvaluationTarget target) {
-        if (target.getFaviconUrl() == null || target.getFaviconUrl().isBlank()) {
+        if (!faviconService.hasServableFavicon(target.getFaviconUrl())) {
             faviconService.findFaviconUrl(target.getAccessUrl()).ifPresent(target::updateFaviconUrl);
         }
     }

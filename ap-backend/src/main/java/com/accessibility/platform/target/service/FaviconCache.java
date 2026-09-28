@@ -65,6 +65,16 @@ public class FaviconCache {
         } catch (IOException | java.security.NoSuchAlgorithmException unavailable) { return Optional.empty(); }
     }
 
+    /**
+     * Whether a stored favicon URL points to bytes this cache can serve. Legacy
+     * remote URLs, and cache paths whose file is gone (another machine, a
+     * cleared cache directory), are not servable and should be fetched again.
+     */
+    public boolean isServable(String faviconUrl) {
+        return faviconUrl != null && faviconUrl.startsWith(PREFIX)
+                && read(faviconUrl.substring(PREFIX.length())).isPresent();
+    }
+
     public static boolean validKey(String key) { return key != null && key.matches("[a-f0-9]{64}\\.(png|svg)"); }
     private static long modified(Path path) {
         try { return Files.getLastModifiedTime(path).toMillis(); }

@@ -225,7 +225,9 @@ public class AiEvaluationIngestionService {
 
         if (existingTarget.isPresent()) {
             EvaluationTarget target = existingTarget.get();
-            if (target.getFaviconUrl() == null || target.getFaviconUrl().isBlank()) {
+            // Also replaces legacy remote URLs and cache entries missing on this
+            // machine. A failed lookup keeps the stored value.
+            if (!faviconService.hasServableFavicon(target.getFaviconUrl())) {
                 faviconService.findFaviconUrl(target.getAccessUrl()).ifPresent(target::updateFaviconUrl);
             }
             return target;
