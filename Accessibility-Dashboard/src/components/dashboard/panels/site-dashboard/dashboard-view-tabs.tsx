@@ -13,14 +13,7 @@ const views: Array<{ value: DashboardView; label: string }> = [
   { value: "report", label: "최종 리포트" }
 ];
 
-export function getDashboardViewTabId(view: DashboardView): string {
-  return `site-dashboard-tab-${view}`;
-}
-
-export function getDashboardViewPanelId(view: DashboardView): string {
-  return `site-dashboard-panel-${view}`;
-}
-
+// Tab and panel ids: site-dashboard-tab-<view> and site-dashboard-panel-<view>.
 // WAI-ARIA tabs with automatic activation: arrow keys, Home and End move the
 // selection, and only the selected tab stays in the page Tab order.
 export function DashboardViewTabs({ value, onChange }: {
@@ -48,10 +41,10 @@ export function DashboardViewTabs({ value, onChange }: {
             ref={(element) => { tabRefs.current[index] = element; }}
             type="button"
             role="tab"
-            id={getDashboardViewTabId(view.value)}
+            id={`site-dashboard-tab-${view.value}`}
             className="site-dashboard-tabs__tab"
             aria-selected={selected}
-            aria-controls={getDashboardViewPanelId(view.value)}
+            aria-controls={`site-dashboard-panel-${view.value}`}
             tabIndex={selected ? 0 : -1}
             onClick={() => onChange(view.value)}
             onKeyDown={(event) => handleKeyDown(event, index)}

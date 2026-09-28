@@ -223,6 +223,17 @@ try {
   assert.equal(await metricText("위치 표시 불가"), "2건", "the hidden live viewer still reports locations");
   console.log("PASS direct report links");
 
+  // A failed text analysis is excluded from the score; the report must not
+  // present it as a clean result with zero text issues.
+  fixture.score.textStatus = "FAILED";
+  await page.goto(`${baseUrl}/projects/1/pages/101?view=report`);
+  await report.waitFor();
+  const textEngine = report.locator(".site-final-report__engine-list li", { hasText: "텍스트" });
+  assert.equal((await textEngine.locator("strong").innerText()).trim(), "검사 실패");
+  assert.match(await report.getByRole("note").first().innerText(), /텍스트 검사가 실패해/);
+  delete fixture.score.textStatus;
+  console.log("PASS failed text analysis is shown as not checked");
+
   fixture.assertIsolated();
   assert.deepEqual(errors, []);
   await context.close();

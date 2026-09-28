@@ -38,3 +38,10 @@ ALTER TABLE IF EXISTS score_result
     ALTER COLUMN IF EXISTS cv_score DROP NOT NULL;
 ALTER TABLE IF EXISTS score_result
     ADD COLUMN IF NOT EXISTS cv_status VARCHAR(20);
+
+-- A failed text analysis has no difficulty score. Historical rows keep their
+-- stored value and an unknown (NULL) status.
+ALTER TABLE IF EXISTS score_result
+    ALTER COLUMN IF EXISTS ai_score DROP NOT NULL;
+ALTER TABLE IF EXISTS score_result
+    ADD COLUMN IF NOT EXISTS text_status VARCHAR(20);

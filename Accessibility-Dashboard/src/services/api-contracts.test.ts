@@ -185,6 +185,15 @@ describe("parseDashboardOverviewResponse", () => {
     expect(parseDashboardOverviewResponse(payload, "$.data").scoreResults[0]).toMatchObject(cvFields);
   });
 
+  it.each([{ textStatus: "SUCCESS" }, { textStatus: "FAILED" }, { textStatus: null }])(
+    "preserves the text analysis state through the dashboard contract: %j",
+    (textFields) => {
+      const overview = createValidOverview();
+      const payload = { ...overview, scoreResults: [{ ...overview.scoreResults[0], ...textFields }] };
+      expect(parseDashboardOverviewResponse(payload, "$.data").scoreResults[0]).toMatchObject(textFields);
+    }
+  );
+
   it("accepts older score responses without CV fields", () => {
     const overview = createValidOverview();
     const payload = { ...overview, scoreResults: [{ id: 601, evaluationRequestId: 501, totalScore: 91 }] };
@@ -192,7 +201,7 @@ describe("parseDashboardOverviewResponse", () => {
   });
 
   it.each([
-    ["cvScore", "0"], ["cvScore", -1], ["cvScore", 101], ["cvStatus", "unknown"]
+    ["cvScore", "0"], ["cvScore", -1], ["cvScore", 101], ["cvStatus", "unknown"], ["textStatus", "NOT_MEASURED"]
   ])("rejects malformed CV metadata: %s=%s", (field, value) => {
     const overview = createValidOverview();
     const payload = { ...overview, scoreResults: [{ ...overview.scoreResults[0], [field]: value }] };

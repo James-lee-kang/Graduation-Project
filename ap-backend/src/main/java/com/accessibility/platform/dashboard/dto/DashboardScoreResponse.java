@@ -2,6 +2,7 @@ package com.accessibility.platform.dashboard.dto;
 
 import com.accessibility.platform.score.domain.ScoreResult;
 import com.accessibility.platform.score.domain.CvScoreStatus;
+import com.accessibility.platform.score.domain.TextScoreStatus;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -14,6 +15,7 @@ public record DashboardScoreResponse(
         BigDecimal aiScore,
         BigDecimal cvScore,
         CvScoreStatus cvStatus,
+        TextScoreStatus textStatus,
         LocalDateTime createdAt,
         LocalDateTime updatedAt
 ) {
@@ -26,6 +28,7 @@ public record DashboardScoreResponse(
                 scoreResult.getAiScore(),
                 scoreResult.getCvScore(),
                 scoreResult.getCvStatus(),
+                scoreResult.getTextStatus(),
                 scoreResult.getCreatedAt(),
                 scoreResult.getUpdatedAt()
         );

@@ -14,7 +14,7 @@ sys.path.insert(0, str(AI_MODULE_DIR / "cv-analyzer"))
 
 import cv_runner
 import run_all
-from contrast_analyzer import ContrastAnalyzer, measure_text_colors
+from contrast_analyzer import ContrastAnalyzer, contrast_ratio, displayed_ratio, measure_text_colors
 from PIL import Image, ImageDraw
 
 
@@ -118,6 +118,24 @@ class CvMeasurementTests(unittest.TestCase):
         image.paste(text_image((3, 199, 90), (255, 255, 255), size=(60, 20), box=(0, 0, 60, 20)), (50, 20))
         foreground, background = measure_text_colors(image, (50, 20, 60, 20))
         self.assertEqual((foreground, background), ((255, 255, 255), (3, 199, 90)))
+
+    def test_contrast_just_below_the_threshold_fails_and_is_not_displayed_as_passing(self):
+        text, background = (110, 121, 120), (255, 255, 255)
+        self.assertLess(contrast_ratio(text, background), 4.5)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "page.png"
+            text_image(background, text).save(path)
+            result = ContrastAnalyzer().analyze_screenshot(
+                str(path), [{"text": "Sample", "bbox": {"x": 30, "y": 20, "width": 60, "height": 20}}]
+            )
+        self.assertEqual(result["passes"], [])
+        violation = result["violations"][0]
+        self.assertEqual((violation["ratio"], violation["ratio_display"]), (4.49, "4.49:1"))
+        self.assertFalse(violation["kwcag_pass"])
+        # Display values never exceed the measured ratio, including float edge cases.
+        self.assertEqual(displayed_ratio(4.56), 4.56)
+        self.assertEqual(displayed_ratio(21.0), 21.0)
+        self.assertEqual(displayed_ratio(4.5), 4.5)
 
     def test_boxes_without_a_distinct_text_color_are_not_measured(self):
         uniform = Image.new("RGB", (120, 60), (0, 128, 0))

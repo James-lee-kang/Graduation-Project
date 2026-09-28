@@ -585,44 +585,93 @@ async function sendToBackend(requestId, apiData) {
  *    (모바일 접근성은 추후 별도 뷰포트로 확장 예정)
  * ─────────────────────────────────────────────────────────────────────────
  */
-// A page whose content never arrived must not be scored: axe finds nothing in
-// an empty document and would report a perfect score. The threshold follows
-// the live report's document health: some visible text or visible content.
+// A page that did not deliver its own content must not be scored: axe finds
+// nothing wrong in an empty, error or security-check document and would report
+// a good score. Such a page is reported as unavailable instead. The content
+// threshold follows the live report's document health.
 const DOCUMENT_CONTENT_MIN_TEXT_LENGTH = 20;
 const DOCUMENT_CONTENT_GRACE_MS = 15000;
 const DOCUMENT_CONTENT_POLL_MS = 1000;
-// CLI exit status for a page without analyzable content. run_all.py reports
-// it as an unavailable target page instead of an analysis result.
-const DOCUMENT_CONTENT_UNAVAILABLE_EXIT_CODE = 2;
+// A security check that keeps the original URL replaces the page with a short
+// notice. Normal pages that embed a CAPTCHA field keep their own text and links.
+const CHALLENGE_MAX_TEXT_LENGTH = 600;
+const CHALLENGE_MAX_LINK_COUNT = 4;
+const CHALLENGE_TEXT_PATTERN = new RegExp([
+  'verify (?:that )?you are (?:a )?human', 'are you a robot', 'security (?:verification|check)',
+  'automated (?:access|browser|traffic)', 'webdriver detected', 'access denied',
+  '자동화된 (?:접근|요청|프로그램)', '비정상적인 (?:접근|요청|트래픽)', '로봇이 아닙니다', '보안 확인',
+].join('|'), 'i');
+const DOCUMENT_CONTENT_SELECTOR = 'img, svg, picture, video, canvas, iframe, object, embed, [role="img"], '
+  + 'a[href], button, input:not([type="hidden"]), select, textarea, [role="button"]';
+// CLI exit status for an unavailable target page. run_all.py reports it as
+// TARGET_PAGE_UNAVAILABLE instead of an analysis result.
+const TARGET_PAGE_UNAVAILABLE_EXIT_CODE = 2;
 
-class DocumentContentUnavailableError extends Error {
+const unavailableMessages = {
+  EMPTY: '페이지 본문을 확인하지 못해 접근성 검사를 진행하지 않았습니다.',
+  HTTP_ERROR: '대상 페이지가 HTTP 오류를 반환해 접근성 검사를 진행하지 않았습니다.',
+  BLOCKED: '보안 확인·자동 접근 차단 화면이 표시되어 접근성 검사를 진행하지 않았습니다.',
+};
+
+class TargetPageUnavailableError extends Error {
   constructor(documentHealth) {
-    super('페이지 본문을 확인하지 못해 접근성 검사를 진행하지 않았습니다.');
-    this.name = 'DocumentContentUnavailableError';
+    super(unavailableMessages[documentHealth.status] ?? unavailableMessages.EMPTY);
+    this.name = 'TargetPageUnavailableError';
     this.documentHealth = documentHealth;
   }
 }
 
+// Reads the visible text and content of the document, including open shadow
+// roots so web-component pages are measured like any other page.
 async function measureDocumentContent(page) {
-  return page.evaluate(() => {
+  const unreadable = {
+    hasBody: false, visibleText: '', visibleTextLength: 0, visibleContentCount: 0, visibleLinkCount: 0,
+  };
+  return page.evaluate(({ selector, textLimit }) => {
     const body = document.body;
-    if (!body) return { hasBody: false, visibleTextLength: 0, visibleContentCount: 0 };
-    const visibleText = (body.innerText || '').replace(/\s+/g, ' ').trim();
-    const isVisible = (element) => {
-      const rect = element.getBoundingClientRect();
-      if (rect.width < 8 || rect.height < 8) return false;
+    if (!body) {
+      return { hasBody: false, visibleText: '', visibleTextLength: 0, visibleContentCount: 0, visibleLinkCount: 0 };
+    }
+    const shown = (element) => {
+      if (typeof element.checkVisibility === 'function') {
+        return element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+      }
       const style = getComputedStyle(element);
       return style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) > 0;
     };
-    let visibleContentCount = 0;
-    for (const element of body.querySelectorAll(
-      'img, svg, picture, video, canvas, iframe, object, embed, [role="img"], '
-      + 'a[href], button, input:not([type="hidden"]), select, textarea, [role="button"]',
-    )) {
-      if (isVisible(element) && ++visibleContentCount >= 50) break;
+    const roots = [body];
+    for (let index = 0; index < roots.length && roots.length < 500; index += 1) {
+      for (const element of roots[index].querySelectorAll('*')) {
+        if (element.shadowRoot) roots.push(element.shadowRoot);
+      }
     }
-    return { hasBody: true, visibleTextLength: visibleText.length, visibleContentCount };
-  }).catch(() => ({ hasBody: false, visibleTextLength: 0, visibleContentCount: 0 }));
+    const skipped = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
+    let visibleText = '';
+    let visibleContentCount = 0;
+    let visibleLinkCount = 0;
+    for (const root of roots) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node && visibleText.length < textLimit; node = walker.nextNode()) {
+        const parent = node.parentElement;
+        const value = node.textContent.replace(/\s+/g, ' ').trim();
+        if (!value || !parent || skipped.has(parent.tagName) || !shown(parent)) continue;
+        visibleText += (visibleText ? ' ' : '') + value;
+      }
+      for (const element of root.querySelectorAll(selector)) {
+        const rect = element.getBoundingClientRect();
+        if (rect.width < 8 || rect.height < 8 || !shown(element)) continue;
+        visibleContentCount += 1;
+        if (element.matches('a[href]')) visibleLinkCount += 1;
+      }
+    }
+    return {
+      hasBody: true,
+      visibleText: visibleText.slice(0, textLimit),
+      visibleTextLength: visibleText.length,
+      visibleContentCount,
+      visibleLinkCount,
+    };
+  }, { selector: DOCUMENT_CONTENT_SELECTOR, textLimit: 4000 }).catch(() => unreadable);
 }
 
 function hasMeaningfulDocumentContent(content) {
@@ -632,20 +681,35 @@ function hasMeaningfulDocumentContent(content) {
   );
 }
 
-// Slow pages can commit the document before the body streams in. Keep polling
-// for a short grace period before treating the content as unavailable.
-async function waitForDocumentContent(page, {
+function isSecurityCheckPage(title, content) {
+  return content.visibleTextLength <= CHALLENGE_MAX_TEXT_LENGTH
+    && content.visibleLinkCount <= CHALLENGE_MAX_LINK_COUNT
+    && CHALLENGE_TEXT_PATTERN.test(`${title}\n${content.visibleText}`);
+}
+
+// Decides whether the loaded document is the target page's own content. Slow
+// pages can commit the document before the body streams in, so an empty
+// document is polled for a short grace period; an HTTP error is final.
+async function assessTargetPage(page, {
+  httpStatus = null,
   graceMs = DOCUMENT_CONTENT_GRACE_MS,
   pollMs = DOCUMENT_CONTENT_POLL_MS,
 } = {}) {
-  const deadline = Date.now() + graceMs;
+  const httpError = Number.isInteger(httpStatus) && httpStatus >= 400;
+  const deadline = Date.now() + (httpError ? 0 : graceMs);
   let content = await measureDocumentContent(page);
   while (!hasMeaningfulDocumentContent(content) && Date.now() < deadline) {
     await page.waitForTimeout(pollMs);
     content = await measureDocumentContent(page);
   }
+  const title = await page.title().catch(() => '');
+  const status = httpError ? 'HTTP_ERROR'
+    : !hasMeaningfulDocumentContent(content) ? 'EMPTY'
+      : isSecurityCheckPage(title, content) ? 'BLOCKED'
+        : 'MEANINGFUL';
   return {
-    status: hasMeaningfulDocumentContent(content) ? 'MEANINGFUL' : 'EMPTY',
+    status,
+    http_status: Number.isInteger(httpStatus) ? httpStatus : null,
     has_body: content.hasBody,
     visible_text_length: content.visibleTextLength,
     visible_content_count: content.visibleContentCount,
@@ -680,6 +744,15 @@ async function run(url, outputPath, options = {}) {
     //   → 이후 고정 settle 구간에서 CSR(Vue/React 등) 초기 변경을 추가 관찰
     // timeout: 60000 (60초) — 공공 사이트 일부가 로딩이 느려 넉넉히 잡음
     let initialSnapshot = null;
+    // The last main-document response (after redirects) tells whether the
+    // server delivered the page or an error page.
+    let mainDocumentStatus = null;
+    page.on('response', (response) => {
+      const request = response.request();
+      if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+        mainDocumentStatus = response.status();
+      }
+    });
     const initialResponseCapture = await captureInitialMainResponse(page);
     try {
       await page.goto(url, { waitUntil: 'load', timeout: 60000 });
@@ -692,6 +765,14 @@ async function run(url, outputPath, options = {}) {
 
     let analysisFinalUrl = withoutUrlFragment(page.url());
     let replaySourceMode = 'RENDERED_DOM';
+    // Record why no score was produced; run_all.py reads only this marker and
+    // never ingests it as an analysis result.
+    const reportUnavailablePage = (documentHealth) => {
+      fs.writeFileSync(siblingOutputPath(output, '_api.json'), JSON.stringify({
+        metadata: { url: analysisFinalUrl, document_health: documentHealth },
+      }, null, 2), 'utf-8');
+      throw new TargetPageUnavailableError(documentHealth);
+    };
     if (initialSnapshot) {
       const challenge = await detectCrossOriginBotChallenge(page, initialSnapshot.url);
       if (challenge.detected && usableInitialHtml(initialSnapshot)) {
@@ -703,25 +784,26 @@ async function run(url, outputPath, options = {}) {
         analysisFinalUrl = withoutUrlFragment(initialSnapshot.url);
         replaySourceMode = 'INITIAL_RESPONSE_STATIC';
       } else if (challenge.detected) {
-        throw new Error(
-          '봇/보안 대기 화면을 감지했지만 사용할 수 있는 최초 2xx HTML을 보존하지 못했습니다.',
-        );
+        console.log('   [수집 실패] 봇/보안 대기 화면을 감지했지만 사용할 수 있는 최초 2xx HTML이 없습니다.');
+        reportUnavailablePage({
+          status: 'BLOCKED', http_status: mainDocumentStatus,
+          has_body: true, visible_text_length: 0, visible_content_count: 0,
+        });
       }
     }
     await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
 
-    const documentHealth = await waitForDocumentContent(page, {
+    // The static fallback reproduces a 2xx initial response; its content is
+    // still checked because that response can itself be a security check.
+    const documentHealth = await assessTargetPage(page, {
+      httpStatus: replaySourceMode === 'RENDERED_DOM' ? mainDocumentStatus : initialSnapshot.status,
       graceMs: Number.isFinite(options.contentGraceMs)
         ? Math.max(0, options.contentGraceMs)
         : DOCUMENT_CONTENT_GRACE_MS,
     });
     if (documentHealth.status !== 'MEANINGFUL') {
-      // Record why no score was produced; run_all.py reads only this marker
-      // and never ingests it as an analysis result.
-      fs.writeFileSync(siblingOutputPath(output, '_api.json'), JSON.stringify({
-        metadata: { url: analysisFinalUrl, document_health: documentHealth },
-      }, null, 2), 'utf-8');
-      throw new DocumentContentUnavailableError(documentHealth);
+      console.log(`   [수집 실패] ${unavailableMessages[documentHealth.status]}`);
+      reportUnavailablePage(documentHealth);
     }
 
     // Freeze CSS/Web Animations before both axe and snapshot serialization so
@@ -946,16 +1028,16 @@ if (require.main === module) {
     : null;
   const outputArgument = args[1] && !args[1].startsWith('--') ? args[1] : undefined;
   run(args[0], outputArgument, { cvScreenshotPath }).catch((error) => process.exit(
-    error instanceof DocumentContentUnavailableError ? DOCUMENT_CONTENT_UNAVAILABLE_EXIT_CODE : 1,
+    error instanceof TargetPageUnavailableError ? TARGET_PAGE_UNAVAILABLE_EXIT_CODE : 1,
   ));
 }
 
 module.exports = {
-  DocumentContentUnavailableError,
+  TargetPageUnavailableError,
+  assessTargetPage,
   challengeSignals,
   detectCrossOriginBotChallenge,
   loadStaticInitialResponseFallback,
-  measureDocumentContent,
   run,
   siblingOutputPath,
   toApiFormat,

@@ -643,11 +643,20 @@ def valid_difficulty_result(result: Any) -> bool:
     )
 
 
-def document_content_unavailable(rule_output: Any) -> bool:
-    """규칙 분석기가 페이지 본문을 확인하지 못했다고 기록했는지 확인한다."""
+# 규칙 분석기가 대상 페이지 대신 받은 문서의 종류와 안내 문구
+TARGET_PAGE_UNAVAILABLE_REASONS = {
+    "EMPTY": "페이지 본문을 확인하지 못했습니다",
+    "HTTP_ERROR": "대상 페이지가 HTTP 오류를 반환했습니다",
+    "BLOCKED": "보안 확인·자동 접근 차단 화면이 표시되었습니다",
+}
+
+
+def target_page_unavailable_reason(rule_output: Any) -> Optional[str]:
+    """규칙 분석기가 대상 페이지를 받지 못했다고 기록했으면 그 이유를 돌려준다."""
     metadata = rule_output.get("metadata") if isinstance(rule_output, dict) else None
     health = metadata.get("document_health") if isinstance(metadata, dict) else None
-    return isinstance(health, dict) and health.get("status") == "EMPTY"
+    status = health.get("status") if isinstance(health, dict) else None
+    return TARGET_PAGE_UNAVAILABLE_REASONS.get(status) if isinstance(status, str) else None
 
 
 def valid_suggestion_result(result: Any) -> bool:
@@ -1100,12 +1109,13 @@ def main():
         timeout_seconds=RULE_BASED_STEP_TIMEOUT_SECONDS,
     )
 
-    # An empty document is an unavailable page, not a perfect score. The rule
-    # analyzer writes only this marker and exits without a score.
-    if document_content_unavailable(
+    # An empty, HTTP error or security-check document is an unavailable page,
+    # not a score. The rule analyzer writes only this marker and exits.
+    unavailable_reason = target_page_unavailable_reason(
         load_json(result_api) if is_fresh_nonempty_file(result_api, step1_started_ns) else None
-    ):
-        print("  [분석 중단] 페이지 본문을 확인하지 못했습니다. 빈 문서를 점수로 저장하지 않습니다.")
+    )
+    if unavailable_reason:
+        print(f"  [분석 중단] {unavailable_reason}. 대상 페이지가 아닌 문서를 점수로 저장하지 않습니다.")
         sys.exit(TARGET_PAGE_UNAVAILABLE_EXIT_CODE)
 
     step1_outputs_fresh = step1_process_ok and all(

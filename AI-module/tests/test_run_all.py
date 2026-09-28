@@ -432,13 +432,17 @@ class RunAllPipelineTests(unittest.TestCase):
         self.assertFalse(final_exists)
         send_to_backend.assert_not_called()
 
-    def test_stale_empty_document_marker_does_not_block_a_current_result(self):
-        stale = {"metadata": {"document_health": {"status": "EMPTY"}}}
-        self.assertTrue(run_all.document_content_unavailable(stale))
+    def test_only_recorded_unavailable_page_states_stop_the_pipeline(self):
+        for status in ("EMPTY", "HTTP_ERROR", "BLOCKED"):
+            with self.subTest(status=status):
+                output = {"metadata": {"document_health": {"status": status}}}
+                self.assertIsNotNone(run_all.target_page_unavailable_reason(output))
         for output in (None, {}, {"metadata": {"url": "x"}},
-                       {"metadata": {"document_health": {"status": "MEANINGFUL"}}}):
+                       {"metadata": {"document_health": {"status": "MEANINGFUL"}}},
+                       {"metadata": {"document_health": {"status": "toString"}}},
+                       {"metadata": {"document_health": {"status": ["EMPTY"]}}}):
             with self.subTest(output=output):
-                self.assertFalse(run_all.document_content_unavailable(output))
+                self.assertIsNone(run_all.target_page_unavailable_reason(output))
 
     def test_pipeline_uses_current_python_and_completes_with_rule_only_result(self):
         target_url = "https://example.test/fixture"
