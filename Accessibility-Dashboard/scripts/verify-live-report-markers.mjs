@@ -1666,6 +1666,35 @@ try {
     ).at(-1)?.payload.reason, issue.id), reason, "retrying an unavailable location must preserve its actual failure reason");
   }
 
+  // Visual-engine findings carry only the analysis box. The viewer places a
+  // coordinate target there and reuses the marker, scrolling and detail path.
+  const coordinateBox = { x: 48, y: 1400, width: 120, height: 24 };
+  const coordinateIssue = {
+    ...createIssue(501, "", "텍스트 콘텐츠의 명도 대비", "HIGH", "visual", "5.4.3"),
+    path: null, pathSteps: [], box: coordinateBox
+  };
+  await page.evaluate(issues => window.__sendLiveCommand({
+    source: "accessibility-dashboard", type: "INIT_ISSUES", issues, selectedIssueId: null, markersVisible: true
+  }), [coordinateIssue]);
+  await page.waitForFunction(() => window.__liveEvents.some(event =>
+    event.payload?.type === "LOCATOR_STATUS" && event.payload.issueId === 501));
+  await page.evaluate(() => window.__sendLiveCommand({ source: "accessibility-dashboard", type: "FOCUS_ISSUE", issueId: 501 }));
+  await page.waitForFunction(() => window.__liveEvents.filter(event =>
+    event.payload?.type === "LOCATOR_STATUS" && event.payload.issueId === 501).at(-1)?.payload.status === "VISIBLE");
+  assert.equal(await page.evaluate(() => window.__liveEvents.some(event =>
+    event.payload?.type === "ISSUE_DETAIL_FALLBACK" && event.payload.issueId === 501)), false,
+    "a coordinate finding opens its marker instead of the unavailable fallback");
+  const coordinateTarget = await frame.locator(".ap-live-coordinate-target").evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    return { x: rect.left + scrollX, y: rect.top + scrollY, width: rect.width, height: rect.height };
+  });
+  assert.deepEqual(coordinateTarget, coordinateBox, "the target uses the analysis box in document coordinates");
+  assert.equal(await frame.locator('.ap-live-marker[data-issue-id="501"]').isVisible(), true);
+  await page.evaluate(() => window.__sendLiveCommand({
+    source: "accessibility-dashboard", type: "INIT_ISSUES", issues: [], selectedIssueId: null, markersVisible: true
+  }));
+  await frame.locator(".ap-live-coordinate-target").waitFor({ state: "detached" });
+
   await page.goto(`http://127.0.0.1:${address.port}/keyboard`, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => window.__liveConnected === true);
   assert.notEqual(new URL(page.url()).origin,

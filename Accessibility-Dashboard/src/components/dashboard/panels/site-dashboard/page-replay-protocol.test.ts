@@ -16,6 +16,8 @@ import {
   toPageReplayIssue
 } from "./page-replay-protocol";
 import type { DashboardToPageReplayMessage } from "./page-replay-protocol";
+import { getReplayIssuePathSteps } from "./issue-locator";
+import { getLocatorExplanation } from "./locator-explanation";
 import type { RecentIssueRow } from "./types";
 
 describe("report keyboard exits", () => {
@@ -160,6 +162,55 @@ describe("replay locator adaptation", () => {
     expect(valid.carouselContext).toEqual({ carouselId: 3, slideIndex: 1, slideCount: 4 });
     expect(invalid.carouselContext).toBeNull();
     expect(oversized.carouselContext).toBeNull();
+  });
+
+  it("sends coordinate-only findings as a box instead of a coordinate label selector", () => {
+    const locator = {
+      pathSteps: [], x: 803, y: 13, width: 39, height: 12, coordinateSpace: "SCREENSHOT_PX"
+    };
+    const issue = replayIssue("text=다운로드", "CV_VISION", locator);
+    expect(issue.box).toEqual({ x: 803, y: 13, width: 39, height: 12 });
+    expect(issue.pathSteps).toEqual([]);
+    expect(issue.path).toBeNull();
+
+    const row: RecentIssueRow = {
+      issue: { id: 8, analysisResultId: 2, issueCode: "5.4.3", issueTitle: "명도 대비", severity: "HIGH",
+        locationPath: "x=803, y=13, width=39, height=12", locator, message: "", resolved: false,
+        createdAt: "2026-08-31T00:00:00", updatedAt: "2026-08-31T00:00:00" },
+      severity: { key: "HIGH", label: "높음", color: "#fb8a3d" },
+      analyzerType: "CV_VISION"
+    };
+    expect(toPageReplayIssue(row, 2).box).toEqual({ x: 401.5, y: 6.5, width: 19.5, height: 6 });
+    expect(getReplayIssuePathSteps(row.issue)).toEqual([]);
+  });
+
+  it("keeps DOM paths and ignores unusable coordinate boxes", () => {
+    const withPath = replayIssue("", "RULE_BASED", {
+      pathSteps: [{ context: "DOCUMENT", selector: "#target" }],
+      x: 10, y: 10, width: 20, height: 20, coordinateSpace: "DOCUMENT_CSS_PX"
+    });
+    expect(withPath.box).toBeNull();
+    expect(withPath.path).toBe("#target");
+    for (const locator of [
+      { pathSteps: [], x: 10, y: 10, width: 0, height: 20, coordinateSpace: "SCREENSHOT_PX" },
+      { pathSteps: [], x: 10, y: 10, width: 20, height: 20, coordinateSpace: null },
+      { pathSteps: [], x: null, y: 10, width: 20, height: 20, coordinateSpace: "SCREENSHOT_PX" }
+    ]) {
+      const issue = replayIssue("", "CV_VISION", locator);
+      expect(issue.box).toBeNull();
+      // Without a usable box the stored path text stays the legacy fallback.
+      expect(issue.pathSteps).toEqual([{ context: "DOCUMENT", selector: "#target" }]);
+    }
+  });
+});
+
+describe("locator explanation", () => {
+  it("describes coordinate-placed markers as approximate", () => {
+    expect(getLocatorExplanation({ status: "VISIBLE" }, { coordinateOnly: true }).label).toBe("분석 당시 좌표에 표시");
+    expect(getLocatorExplanation({ status: "OFFSCREEN" }, { coordinateOnly: true }).label).toBe("분석 당시 좌표에 표시");
+    expect(getLocatorExplanation({ status: "VISIBLE" }).label).toBe("현재 화면에서 찾음");
+    expect(getLocatorExplanation({ status: "UNAVAILABLE", reason: "EMPTY_PATH" }, { coordinateOnly: true }).label)
+      .toBe("요소 경로 없음");
   });
 });
 

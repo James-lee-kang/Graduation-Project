@@ -2,7 +2,7 @@ import { ChevronLeft, ChevronRight, LocateFixed } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 
 import { formatIssueCodeLabel } from "./constants";
-import { getLocatorExplanation } from "./locator-explanation";
+import { getLocatorLabel } from "./locator-labels";
 import { formatIssueDescription, toPageReplayIssue } from "./page-replay-protocol";
 import type { LocatorCheckState, LocatorIssueState, RecentIssueRow } from "./types";
 
@@ -239,7 +239,7 @@ export function UnavailableLocatorPanel({
                 </div>
                 <h4 data-copyable>{replayIssue.title}</h4>
                 <p data-copyable className="site-unavailable-locator-panel__reason">
-                  {getLocatorExplanation(issueStates?.[row.issue.id]).label}
+                  {getLocatorLabel(issueStates?.[row.issue.id])}
                 </p>
                 <p data-copyable className="site-unavailable-locator-panel__message">
                   {formatIssueDescription(row.issue.message, row.analyzerType, row.issue.ruleId) || "상세 설명이 없습니다."}

@@ -81,6 +81,7 @@ type PageEvidenceConnectionOptions = {
   onSelectIssue: (issueId: number | null) => void;
   previewRuntimeUrl?: string;
   rows: RecentIssueRow[];
+  deviceScaleFactor: number | null;
   selectedIssueId: number | null;
   selectedIssueFocusRequestId: number;
   replayViewportMetrics: ReplayViewportMetrics;
@@ -92,7 +93,7 @@ type PageEvidenceConnectionOptions = {
  */
 export function usePageEvidenceConnection({
   evaluationRequestId, liveSession, liveSessionLoadState, onRetryLiveSession,
-  onLocatorReportChange, onSelectIssue, previewRuntimeUrl, rows, selectedIssueId,
+  onLocatorReportChange, onSelectIssue, previewRuntimeUrl, rows, deviceScaleFactor, selectedIssueId,
   selectedIssueFocusRequestId, replayViewportMetrics, chromeHeight
 }: PageEvidenceConnectionOptions) {
   const [documentTitle, setDocumentTitle] = useState<string | null>(null);
@@ -141,7 +142,10 @@ export function usePageEvidenceConnection({
     createLiveReportAutomaticRecoveryState(evaluationRequestId)
   );
 
-  const replayIssues = useMemo(() => rows.map(toPageReplayIssue), [rows]);
+  const replayIssues = useMemo(
+    () => rows.map((row) => toPageReplayIssue(row, deviceScaleFactor)),
+    [deviceScaleFactor, rows]
+  );
   const {
     frameKind: activeFrameKind,
     loadState: effectiveLoadState

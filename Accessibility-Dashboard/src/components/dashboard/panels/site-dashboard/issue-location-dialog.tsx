@@ -3,7 +3,7 @@ import { useId } from "react";
 import { createPortal } from "react-dom";
 
 import { useDialogAccessibility } from "../../shared/use-dialog-accessibility";
-import { getReplayIssuePathSteps } from "./issue-locator";
+import { getIssueCoordinateBox, getReplayIssuePathSteps } from "./issue-locator";
 import { getLocatorExplanation } from "./locator-explanation";
 import { formatIssueDescription, toPageReplayIssue } from "./page-replay-protocol";
 import type { LocatorIssueState, RecentIssueRow } from "./types";
@@ -47,7 +47,7 @@ function IssueLocationContent({ row, state, descriptionId }: {
   const description = formatIssueDescription(issue.message, row.analyzerType, issue.ruleId);
   const hasLocalizedDescription = row.analyzerType === "RULE_BASED" && description !== issue.message.trim();
   const locator = issue.locator;
-  const explanation = getLocatorExplanation(state);
+  const explanation = getLocatorExplanation(state, { coordinateOnly: getIssueCoordinateBox(issue) !== null });
   const pathSteps = locator?.pathSteps.length ? locator.pathSteps : getReplayIssuePathSteps(issue);
   const coordinateSpace = locator?.coordinateSpace;
   const coordinateLabel = coordinateSpace === "DOCUMENT_CSS_PX"

@@ -172,6 +172,16 @@ class CVRunner:
         )
         
         summary = contrast_result["summary"]
+        if summary["total"] == 0:
+            # OCR 결과가 모두 기호이거나 색을 구분할 수 없으면 점수에 반영할 표본이 없다.
+            print("  [경고] 명암비를 측정할 수 있는 텍스트가 없습니다. 빈 결과를 반환합니다.")
+            result = self._build_empty_result(ocr_result, reason="NO_MEASURABLE_TEXT", skipped=summary)
+            if output_path is None:
+                output_path = "result_cv.json"
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
+            print(f"Result saved: {output_path}")
+            return result
         print(f"  분석 완료: {summary['total']}개 텍스트")
         print(f"  통과: {summary['pass_count']}개 | 위반: {summary['fail_count']}개")
         print(f"  통과율: {summary['pass_rate']}%")
@@ -265,6 +275,9 @@ class CVRunner:
                 "avg_contrast_ratio": summary["avg_ratio"],# ← 전체 평균 명암비
                 "min_contrast_ratio": summary["min_ratio"],# ← 가장 낮은 명암비
                 "worst_text": summary["worst_text"],       # ← 명암비가 가장 낮은 텍스트
+                # 판정에서 제외한 인식 결과. 위반·통과 어느 쪽에도 세지 않음
+                "skipped_non_text": summary["skipped_non_text"],
+                "skipped_unmeasured": summary["skipped_unmeasured"],
             },
             
             # ── 위반 상세 (수정 추천 포함) ──
@@ -309,7 +322,10 @@ class CVRunner:
             },
         }
     
-    def _build_empty_result(self, ocr_result: Dict) -> Dict[str, Any]:
+    def _build_empty_result(self,
+                            ocr_result: Dict,
+                            reason: str = "NO_TEXT_DETECTED",
+                            skipped: Optional[Dict] = None) -> Dict[str, Any]:
         """
         OCR에서 텍스트가 하나도 추출되지 않았을 때 반환하는 빈 결과
         이미지에 텍스트가 없는 경우(예: 순수 이미지 페이지)에 해당
@@ -319,7 +335,7 @@ class CVRunner:
         return {
             "module": "cv_visual_contrast",
             "status": "not_measured",
-            "reason": "NO_TEXT_DETECTED",
+            "reason": reason,
             "version": "1.0.0",
             "analyzed_at": datetime.now().isoformat(),
             "elapsed_seconds": 0,
@@ -333,11 +349,15 @@ class CVRunner:
                 "avg_contrast_ratio": 0,
                 "min_contrast_ratio": 0,
                 "worst_text": None,
+                "skipped_non_text": (skipped or {}).get("skipped_non_text", 0),
+                "skipped_unmeasured": (skipped or {}).get("skipped_unmeasured", 0),
             },
             "violations": [],
             "pass_count_detail": {"aa_normal": 0, "aa_large": 0},
             "note": "OCR에서 텍스트가 추출되지 않았습니다. "
-                    "이미지에 텍스트가 없거나, OCR 엔진 설정을 확인하세요.",
+                    "이미지에 텍스트가 없거나, OCR 엔진 설정을 확인하세요."
+                    if reason == "NO_TEXT_DETECTED" else
+                    "인식한 텍스트가 모두 기호이거나 글자색과 배경색을 구분할 수 없어 명암비를 측정하지 않았습니다.",
         }
 
 
