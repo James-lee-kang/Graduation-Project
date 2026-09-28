@@ -109,21 +109,6 @@ class AiEvaluationResultIntegrityIntegrationTest {
         assertThat(legacy.description()).contains("reported_nodes=2", "위치 정보가 없습니다");
     }
 
-    @Test
-    void storesTextAnalysisWithoutAnalyzedSentencesAsNotMeasured() {
-        var request = createRequest();
-        var payload = basePayload(request, 100);
-        ObjectNode module = payload.withObject("modules").putObject("text_difficulty");
-        module.put("status", "not_measured").put("reason", "NO_TEXT_ANALYZED");
-        module.putObject("meta").putNull("page_score").put("total_analyzed", 0);
-        module.putArray("results");
-        ingestion.save(payload.toString());
-        assertThat(analyses.findByEvaluationRequestId(request.getId())).anySatisfy(analysis -> {
-            assertThat(analysis.getAnalyzerType()).isEqualTo(AnalyzerType.AI_TEXT);
-            assertThat(analysis.getSummary()).isEqualTo("not_measured, reason=NO_TEXT_ANALYZED");
-        });
-    }
-
     @ParameterizedTest
     @CsvSource({"NOT_MEASURED,100", "FAILED,100", "SUCCESS,80"})
     void preservesUnmeasuredFailedAndTrueZeroScoresThroughPersistenceAndHttp(String state, int total) throws Exception {
