@@ -129,9 +129,19 @@ public class LiveReportUrlSafetyValidator {
     }
 
     private boolean isPublicIpv6(byte[] bytes) {
+        // IPv6-only networks (for example mobile hotspots) answer with the
+        // well-known NAT64 prefix 64:ff9b::/96 (RFC 6052), which embeds the
+        // destination IPv4 address in the last 32 bits. Apply the IPv4 policy
+        // to that embedded address so a NAT64 answer cannot tunnel to a
+        // private, loopback or reserved IPv4 destination. The local-use prefix
+        // 64:ff9b:1::/48 (RFC 8215) remains blocked below.
+        if (isWellKnownNat64(bytes)) {
+            return isPublicIpv4(Arrays.copyOfRange(bytes, 12, 16));
+        }
+
         // Current globally routable unicast space is 2000::/3. Keeping the
-        // allow-list narrow also blocks IPv4-compatible/NAT64 addresses that
-        // could otherwise tunnel a request to an IPv4 private address.
+        // allow-list narrow also blocks IPv4-compatible addresses that could
+        // otherwise tunnel a request to an IPv4 private address.
         if ((unsigned(bytes[0]) & 0xe0) != 0x20) {
             return false;
         }
@@ -150,6 +160,11 @@ public class LiveReportUrlSafetyValidator {
                 && !(unsigned(bytes[0]) == 0x3f
                     && unsigned(bytes[1]) == 0xff
                     && (unsigned(bytes[2]) & 0xf0) == 0);
+    }
+
+    private boolean isWellKnownNat64(byte[] bytes) {
+        byte[] prefix = {0x00, 0x64, (byte) 0xff, (byte) 0x9b, 0, 0, 0, 0, 0, 0, 0, 0};
+        return Arrays.equals(bytes, 0, prefix.length, prefix, 0, prefix.length);
     }
 
     private int unsigned(byte value) {
