@@ -124,7 +124,7 @@ class CvMeasurementTests(unittest.TestCase):
         self.assertIsNone(measure_text_colors(uniform, (30, 20, 60, 20)))
         self.assertIsNone(measure_text_colors(uniform, (200, 200, 10, 10)), "a box outside the image")
 
-    def test_symbols_and_unmeasurable_text_are_excluded_from_the_pass_rate(self):
+    def test_symbols_are_judged_and_unmeasurable_text_is_excluded_from_the_pass_rate(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "page.png"
             image = text_image((0, 0, 0), (255, 255, 255), size=(240, 60))
@@ -137,9 +137,9 @@ class CvMeasurementTests(unittest.TestCase):
                 {"text": " ▼ ", "bbox": box(30)},
                 {"text": "빈칸", "bbox": box(165)},
             ])
-        self.assertEqual(result["summary"]["total"], 1)
-        self.assertEqual(result["summary"]["pass_count"], 1)
-        self.assertEqual(result["summary"]["skipped_non_text"], 2)
+        # Symbol-only OCR results are measured like any other text.
+        self.assertEqual(result["summary"]["total"], 3)
+        self.assertEqual(result["summary"]["pass_count"], 3)
         self.assertEqual(result["summary"]["skipped_unmeasured"], 1)
         self.assertEqual(result["violations"], [])
 
@@ -148,11 +148,11 @@ class CvMeasurementTests(unittest.TestCase):
             image = Path(directory) / "page.png"
             Image.new("RGB", (120, 60), (255, 255, 255)).save(image)
             output = Path(directory) / "cv.json"
-            texts = [{"text": "/", "bbox": {"x": 10, "y": 10, "width": 20, "height": 20}}]
+            texts = [{"text": "빈칸", "bbox": {"x": 10, "y": 10, "width": 20, "height": 20}}]
             with patch.object(cv_runner, "run_ocr", return_value={"backend": "fixture", "texts": texts}), redirect_stdout(io.StringIO()):
                 result = cv_runner.CVRunner().analyze(str(image), str(output))
         self.assertEqual(result["reason"], "NO_MEASURABLE_TEXT")
-        self.assertEqual(result["summary"]["skipped_non_text"], 1)
+        self.assertEqual(result["summary"]["skipped_unmeasured"], 1)
         final = self.final_result(result)
         self.assertEqual(final["modules"]["cv_visual"]["status"], "not_measured")
         self.assertEqual(final["modules"]["cv_visual"]["reason"], "NO_MEASURABLE_TEXT")
