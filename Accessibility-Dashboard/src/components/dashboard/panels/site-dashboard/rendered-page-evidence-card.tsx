@@ -146,7 +146,8 @@ export function RenderedPageEvidenceCard({
     handleFrameLoad, handleFrameError, retryFrame, enterReportFocus
   } = usePageEvidenceConnection({
     evaluationRequestId, liveSession, liveSessionLoadState, onRetryLiveSession,
-    onLocatorReportChange, onSelectIssue, previewRuntimeUrl, rows, selectedIssueId,
+    onLocatorReportChange, onSelectIssue, previewRuntimeUrl, rows,
+    deviceScaleFactor: captureMetadata?.deviceScaleFactor ?? null, selectedIssueId,
     selectedIssueFocusRequestId, replayViewportMetrics, chromeHeight
   });
   const headerTitle = documentTitle === null ? "" : documentTitle || "제목 없음";

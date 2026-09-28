@@ -2,7 +2,12 @@ import type { AnalyzerType, IssueLocatorCarouselContext, IssueLocatorPathStep } 
 
 import { normalizeIssueCode } from "./constants";
 import { localizeRuleDescription } from "./rule-issue-description";
-import { getReplayIssueCarouselContext, getReplayIssuePathSteps } from "./issue-locator";
+import {
+  getIssueCoordinateBox,
+  getReplayIssueCarouselContext,
+  getReplayIssuePathSteps,
+  type IssueCoordinateBox
+} from "./issue-locator";
 import type { RecentIssueRow } from "./types";
 
 export const DASHBOARD_REPLAY_SOURCE = "accessibility-dashboard" as const;
@@ -109,6 +114,8 @@ export type PageReplayIssue = {
   textAnalysis: ReplayTextAnalysisDetail | null;
   path: string | null;
   pathSteps: IssueLocatorPathStep[];
+  /** Document CSS px box for findings without a DOM path (visual engine). */
+  box: IssueCoordinateBox | null;
   carouselContext: IssueLocatorCarouselContext | null;
 };
 
@@ -303,7 +310,7 @@ function isDocumentToken(value: unknown): value is string {
   );
 }
 
-export function toPageReplayIssue(row: RecentIssueRow): PageReplayIssue {
+export function toPageReplayIssue(row: RecentIssueRow, deviceScaleFactor?: number | null): PageReplayIssue {
   const code = toBoundedReplayText(
     normalizeIssueCode(row.issue.issueCode),
     REPLAY_TEXT_LIMITS.code,
@@ -315,6 +322,7 @@ export function toPageReplayIssue(row: RecentIssueRow): PageReplayIssue {
   const displayMessage = textAnalysis
     ? formatTextAnalysisMessage(textAnalysis)
     : formatIssueDescription(row.issue.message, row.analyzerType, row.issue.ruleId);
+  const box = getIssueCoordinateBox(row.issue, deviceScaleFactor);
 
   return {
     id: row.issue.id,
@@ -338,8 +346,10 @@ export function toPageReplayIssue(row: RecentIssueRow): PageReplayIssue {
       "상세 설명이 없습니다."
     ),
     textAnalysis,
-    path: toOptionalBoundedReplayText(row.issue.locationPath, REPLAY_TEXT_LIMITS.path),
+    // A coordinate label must not reach the viewer as a selector fallback.
+    path: box ? null : toOptionalBoundedReplayText(row.issue.locationPath, REPLAY_TEXT_LIMITS.path),
     pathSteps: getReplayIssuePathSteps(row.issue),
+    box,
     carouselContext: getReplayIssueCarouselContext(row.issue)
   };
 }

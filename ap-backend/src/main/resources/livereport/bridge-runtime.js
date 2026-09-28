@@ -241,6 +241,13 @@
     && numberIsSafeInteger(value.slideCount) && value.slideCount >= 2
     && value.slideCount <= 10000 && value.slideIndex < value.slideCount
   );
+  const isBoundedCoordinateBox = value => value === undefined || value === null || (
+    isObjectRecord(value)
+    && Object.keys(value).length <= 8
+    && [value.x, value.y, value.width, value.height]
+      .every(entry => numberIsFinite(entry) && Math.abs(entry) <= 1000000)
+    && value.width > 0 && value.height > 0
+  );
   const isBoundedLiveCommand = payload => {
     if (!isObjectRecord(payload) || payload.source !== parentSource || typeof payload.type !== 'string') return false;
     if (payload.type === 'REQUEST_DOCUMENT_STATE') return true;
@@ -267,6 +274,7 @@
           || (issue.analyzer !== undefined && issue.analyzer !== null
             && (typeof issue.analyzer !== 'string' || issue.analyzer.length > 16))
           || !arrayIsArray(issue.pathSteps) || issue.pathSteps.length > 128
+          || !isBoundedCoordinateBox(issue.box)
           || !isBoundedCarouselContext(issue.carouselContext)) return false;
     }
     return true;
@@ -2594,7 +2602,7 @@ const targetVisibleInViewport = (element, rect) => (
       position(scheduledMode);
     });
   };
-    const {isSimpleDocumentLocator, hasAnalyzedText, createLocatorQueryCache, resolveIssue} = createLiveLocatorResolver({document, layer, observeMarkerShadowRoot, isObjectRecord});
+    const {isSimpleDocumentLocator, hasAnalyzedText, createLocatorQueryCache, resolveIssue, releaseCoordinateTargets} = createLiveLocatorResolver({document, layer, observeMarkerShadowRoot, isObjectRecord});
 const resolveIssueSnapshot = (issueIds = null) => {
     const queries = createLocatorQueryCache();
     const snapshot = issueIds ? new Map(resolvedIssueTargets) : new Map();
@@ -2766,7 +2774,7 @@ const resolveIssueSnapshot = (issueIds = null) => {
       layer.append(marker);
   };
   const apply = (items, selectedIssueId = null) => {
-    mount(); clear();
+    mount(); clear(); releaseCoordinateTargets();
     focusRequestVersion += 1;
     locatorStatusSignatures.clear();
     currentIssues = (Array.isArray(items) ? items : []).slice(0, 5000);

@@ -66,6 +66,7 @@ body {
   }
 }
 #ap-live-marker-layer{position:absolute;left:0;top:0;width:0;height:0;overflow:visible;z-index:2147483647;pointer-events:none}
+#ap-live-marker-layer .ap-live-coordinate-target{all:initial;position:absolute;display:block;box-sizing:border-box;pointer-events:none}
 .ap-live-marker{all:initial;box-sizing:border-box;position:absolute;z-index:2;display:inline-flex;align-items:center;justify-content:center;gap:5px;
 min-width:56px;height:18px;padding:0 8px 0 7px;border:0;border-radius:999px;background:#1d1d1f;color:#fff;box-shadow:0 2px 6px rgba(16,24,40,.22);
 pointer-events:auto;cursor:pointer;white-space:nowrap;font:700 10px/1 system-ui,-apple-system,"Segoe UI",sans-serif;letter-spacing:0;

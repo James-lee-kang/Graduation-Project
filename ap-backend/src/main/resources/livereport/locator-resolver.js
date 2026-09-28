@@ -4,8 +4,35 @@ function createLiveLocatorResolver({document, layer, observeMarkerShadowRoot, is
     return storedSteps.length > 0 ? storedSteps
       : (typeof item?.path === 'string' && item.path ? [{context:'DOCUMENT', selector:item.path}] : []);
   };
+  // Visual-engine findings have only the box measured on the analysis
+  // screenshot (document CSS px). A transparent box in the marker layer stands
+  // in for the missing element, so markers, scrolling and details keep using
+  // the element path. The layer is excluded from mutation handling.
+  const coordinateTargets = new Map();
+  const coordinateTargetFor = item => {
+    const box = item?.box;
+    if (!isObjectRecord(box)) return null;
+    let target = coordinateTargets.get(item.id);
+    if (!target) {
+      target = document.createElement('div');
+      target.className = 'ap-live-coordinate-target';
+      coordinateTargets.set(item.id, target);
+    }
+    target.style.setProperty('left', `${box.x}px`);
+    target.style.setProperty('top', `${box.y}px`);
+    target.style.setProperty('width', `${box.width}px`);
+    target.style.setProperty('height', `${box.height}px`);
+    if (target.parentNode !== layer) layer.append(target);
+    return target;
+  };
+  const releaseCoordinateTargets = () => {
+    coordinateTargets.forEach(target => target.remove());
+    coordinateTargets.clear();
+  };
   const isSimpleDocumentLocator = issue => {
     const steps = issuePathSteps(issue);
+    // Coordinate targets never depend on page DOM changes.
+    if (steps.length === 0 && isObjectRecord(issue?.box)) return true;
     if (steps.length !== 1 || String(steps[0]?.context || 'DOCUMENT').toUpperCase() !== 'DOCUMENT'
         || typeof steps[0]?.selector !== 'string') return false;
     return steps[0].selector.trim().split(/\s*>\s*/).every(segment =>
@@ -78,7 +105,10 @@ function createLiveLocatorResolver({document, layer, observeMarkerShadowRoot, is
   };
   const resolveIssue = (item, queries = createLocatorQueryCache()) => {
     const steps = issuePathSteps(item);
-    if (steps.length === 0) return {element:null, reason:'EMPTY_PATH'};
+    if (steps.length === 0) {
+      const target = coordinateTargetFor(item);
+      return target ? {element:target, reason:null} : {element:null, reason:'EMPTY_PATH'};
+    }
     let root = document;
     let current = null;
     let reordered = false;
@@ -112,5 +142,5 @@ function createLiveLocatorResolver({document, layer, observeMarkerShadowRoot, is
     if (!matchesAnalyzedText(current, item)) return {element:null, reason:'ELEMENT_CONTENT_CHANGED'};
     return {element:current, reason:null, recovered:reordered};
   };
-  return {isSimpleDocumentLocator, hasAnalyzedText, createLocatorQueryCache, resolveIssue};
+  return {isSimpleDocumentLocator, hasAnalyzedText, createLocatorQueryCache, resolveIssue, releaseCoordinateTargets};
 }
