@@ -6,6 +6,7 @@ import type {
   AnalyzerType,
   EvaluationResultSummary,
   EvaluationTargetModel,
+  IssueExclusionReason,
   ScoreResult,
   SeverityLevel
 } from "@/types/accessibility-domain";
@@ -45,6 +46,8 @@ type FinalReportPanelProps = {
   scoreResults: ScoreResult[];
   resultSummaries: EvaluationResultSummary[];
   rows: RecentIssueRow[];
+  /** Findings in advertising or changing regions, reported outside the score. */
+  excludedRows?: RecentIssueRow[];
   loadState: EvaluationResultDetailsLoadState;
   errorMessage: string | null;
   onRetry: () => void;
@@ -77,6 +80,8 @@ function locationLabel(status: ReportLocationStatus, state?: LocatorIssueState):
   }
 }
 
+const exclusionLabels: Record<IssueExclusionReason, string> = { AD: "광고", DYNAMIC: "동적 영역" };
+
 function contextLabel(context: string): string {
   return context === "FRAME" ? "프레임 내부" : context === "SHADOW_ROOT" ? "Shadow DOM 내부" : "문서";
 }
@@ -89,6 +94,7 @@ export function FinalReportPanel({
   scoreResults,
   resultSummaries,
   rows,
+  excludedRows = [],
   loadState,
   errorMessage,
   onRetry,
@@ -101,6 +107,7 @@ export function FinalReportPanel({
   const [expandedCodes, setExpandedCodes] = useState<ReadonlySet<string>>(() => new Set());
   const [visibleCounts, setVisibleCounts] = useState<ReadonlyMap<string, number>>(() => new Map());
   const [isPrinting, setIsPrinting] = useState(false);
+  const [excludedExpanded, setExcludedExpanded] = useState(false);
   const [focusRequest, setFocusRequest] = useState<{ code: string } | null>(null);
   const reportRef = useRef<HTMLElement>(null);
   // A measured zero is a real score; only a missing result is unknown.
@@ -372,6 +379,10 @@ export function FinalReportPanel({
               </section>
             </>
           )}
+          {excludedRows.length > 0 && (
+            <ExcludedIssues rows={excludedRows} expanded={isPrinting || excludedExpanded}
+              onToggle={() => setExcludedExpanded((current) => !current)} />
+          )}
           <p className="site-final-report__footnote">
             자동 검사 결과이며 분석 당시 페이지를 기준으로 합니다. 표준 적합성은 전문가 점검과 함께 판단해 주세요.
           </p>
@@ -505,13 +516,51 @@ function CriterionGroup({
   );
 }
 
+function ExcludedIssues({ rows, expanded, onToggle }: {
+  rows: RecentIssueRow[];
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const counts = (Object.keys(exclusionLabels) as IssueExclusionReason[])
+    .map((reason) => [reason, rows.filter(({ issue }) => issue.exclusionReason === reason).length] as const)
+    .filter(([, count]) => count > 0);
+  return (
+    <section className="site-final-report__section" aria-labelledby="site-final-report-excluded">
+      <h3 id="site-final-report-excluded">
+        <button type="button" className="site-final-report__group-toggle" aria-expanded={expanded}
+          aria-controls="site-final-report-excluded-list" onClick={onToggle}>
+          <ChevronDown size={18} aria-hidden="true" className="site-final-report__chevron" />
+          <span className="site-final-report__group-title">점수에서 제외된 문제</span>
+          <span className="site-final-report__group-meta">
+            {counts.map(([reason, count]) => `${exclusionLabels[reason]} ${formatCount(count)}`).join(" · ")}
+          </span>
+        </button>
+      </h3>
+      <p className="site-final-report__lead">
+        광고와 다시 불러올 때마다 내용이 바뀌는 영역(뉴스·상품 추천 등)은 사이트의 고정 콘텐츠가 아니어서
+        점수와 문제 수에서 뺐습니다. 고정 배너와 슬라이드 배너는 그대로 검사합니다.
+      </p>
+      <div id="site-final-report-excluded-list" hidden={!expanded}>
+        {expanded && (
+          <ul className="site-final-report__issues">
+            {rows.map((row) => (
+              <ReportIssueItem key={row.issue.id} row={row} groupTitle="" />
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function ReportIssueItem({ row, groupTitle, location, state, onShowOnPage, onShowDetails }: {
   row: RecentIssueRow;
   groupTitle: string;
-  location: ReportLocationStatus;
+  /** Location and actions are absent for excluded findings, which have no marker on the page. */
+  location?: ReportLocationStatus;
   state?: LocatorIssueState;
-  onShowOnPage: (issueId: number) => void;
-  onShowDetails: (issueId: number) => void;
+  onShowOnPage?: (issueId: number) => void;
+  onShowDetails?: (issueId: number) => void;
 }) {
   const { issue } = row;
   const description = formatIssueDescription(issue.message, row.analyzerType, issue.ruleId);
@@ -526,7 +575,10 @@ function ReportIssueItem({ row, groupTitle, location, state, onShowOnPage, onSho
       <p className="site-final-report__tags">
         <span className="site-final-report__severity">{row.severity.label}</span>
         {row.analyzerType && <span>{analyzerLabels[row.analyzerType]} 검사</span>}
-        <span className="site-final-report__location" data-location-status={location}>{locationLabel(location, state)}</span>
+        {issue.exclusionReason && <span className="site-final-report__code">{exclusionLabels[issue.exclusionReason]}</span>}
+        {location && (
+          <span className="site-final-report__location" data-location-status={location}>{locationLabel(location, state)}</span>
+        )}
       </p>
       {title !== groupTitle && <p className="site-final-report__issue-title">{title}</p>}
       <p className="site-final-report__description" data-copyable>{description}</p>
@@ -562,7 +614,7 @@ function ReportIssueItem({ row, groupTitle, location, state, onShowOnPage, onSho
           </div>
         )}
       </dl>
-      <div className="site-final-report__issue-actions">
+      {location && onShowOnPage && onShowDetails && <div className="site-final-report__issue-actions">
         {canShowOnPage(location) && (
           <button type="button" className="site-final-report__button site-final-report__button--primary"
             onClick={() => onShowOnPage(issue.id)}>
@@ -576,7 +628,7 @@ function ReportIssueItem({ row, groupTitle, location, state, onShowOnPage, onSho
           문제 상세
           <span className="sr-only">: {title}</span>
         </button>
-      </div>
+      </div>}
     </li>
   );
 }

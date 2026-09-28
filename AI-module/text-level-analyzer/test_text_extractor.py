@@ -21,6 +21,20 @@ class TextLocatorTest(unittest.TestCase):
             self.assertEqual(block['text'], matches[0].get_text())
         self.assertFalse(any('숨긴' in block['text'] for block in blocks))
 
+    def test_ad_and_dynamic_regions_marked_by_the_rule_analyzer_are_not_analyzed(self):
+        html = """<main><p>고정된 서비스 안내 문장입니다. 이 문장은 분석합니다.</p>
+          <section data-ua-excluded-region="DYNAMIC"><ul><li><a>오늘의 뉴스 헤드라인 제목입니다</a></li></ul></section>
+          <div data-ua-excluded-region="AD"><p>지금 가입하면 사은품을 드리는 광고 문구입니다.</p></div>
+          <p>또 다른 고정 안내 문장입니다. 이 문장도 분석합니다.</p></main>"""
+        original = BeautifulSoup(html, 'html.parser')
+        blocks = extract_texts(html)['blocks']
+        texts = [block['text'] for block in blocks]
+        self.assertTrue(any('고정된 서비스 안내' in text for text in texts))
+        self.assertFalse(any('헤드라인' in text or '광고 문구' in text for text in texts))
+        # Removing the regions must not shift the selectors of the kept blocks.
+        for block in blocks:
+            self.assertEqual(1, len(original.select(block['selector'])))
+
     def test_attribute_guides_keep_original_positions(self):
         html = '''<main><div class="modal"><input placeholder="숨긴 안내"></div>
           <div><input style="display:none" placeholder="숨긴 입력">

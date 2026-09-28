@@ -8,6 +8,7 @@ import com.accessibility.platform.request.domain.EvaluationRequest;
 import com.accessibility.platform.request.domain.EvaluationRequestStatus;
 import com.accessibility.platform.request.repository.EvaluationRequestRepository;
 import com.accessibility.platform.result.dto.EvaluationIssueResponse;
+import com.accessibility.platform.result.dto.EvaluationResultSummaryResponse;
 import com.accessibility.platform.result.service.EvaluationResultQueryService;
 import com.accessibility.platform.score.repository.ScoreResultRepository;
 import com.accessibility.platform.target.domain.EvaluationTarget;
@@ -24,6 +25,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 
 @SpringBootTest
 @Transactional
@@ -213,6 +215,74 @@ class AiEvaluationIngestionLocatorIntegrationTest {
         assertThat(cvIssue.locator().coordinateSpace()).isEqualTo("SCREENSHOT_PX");
         assertThat(cvIssue.locator().width()).isEqualTo(80.0);
         assertThat(cvIssue.wcagCode()).isEqualTo("5.4.3");
+    }
+
+    @Test
+    void keepsAdAndDynamicRegionFindingsSeparateFromIssueCounts() {
+        EvaluationRequest request = createRequest();
+        String resultJson = """
+                {
+                  "url":"https://example.com/portal",
+                  "request_id":%d,
+                  "analyzed_at":"2026-09-28T12:00:00",
+                  "total_score":90,
+                  "score_breakdown":{"module_scores":{"rule_based":90,"difficulty":100,"cv":90}},
+                  "modules":{
+                    "rule_based":{
+                      "summary":{"total_violations":1,"total_passes":5},
+                      "violations":[{
+                        "kwcag_id":"5.1.1","kwcag_name":"적절한 대체 텍스트 제공","severity":"critical",
+                        "rules":[{"axe_rule_id":"image-alt","help":"Add alt",
+                          "nodes":[{"selector":"#logo","html":"<img id=logo>","failure_summary":"No alt"}]}]
+                      }],
+                      "excluded_violations":[
+                        {"reason":"AD","violations":[{
+                          "kwcag_id":"5.1.1","kwcag_name":"적절한 대체 텍스트 제공","severity":"critical",
+                          "rules":[{"axe_rule_id":"image-alt","help":"Add alt",
+                            "nodes":[{"selector":"#ad-image","html":"<img id=ad-image>","failure_summary":"No alt"}]}]
+                        }],"unmapped_violations":[]},
+                        {"reason":"DYNAMIC","violations":[],"unmapped_violations":[{
+                          "axe_rule_id":"region","help":"Content in landmarks","impact":"moderate",
+                          "nodes":[{"selector":"#news li","html":"<li>뉴스</li>","failure_summary":"Not in landmark"}]
+                        }]},
+                        {"reason":"UNKNOWN","violations":[{
+                          "kwcag_id":"5.1.1","kwcag_name":"적절한 대체 텍스트 제공","severity":"critical",
+                          "rules":[{"axe_rule_id":"image-alt","nodes":[{"selector":"#ignored"}]}]
+                        }]}
+                      ]
+                    },
+                    "cv_visual":{
+                      "summary":{"pass_rate":90,"fail_count":0},
+                      "kwcag_item":{"id":"5.4.3","name":"텍스트 콘텐츠의 명도 대비"},
+                      "violations":[],
+                      "excluded_violations":[
+                        {"text":"1,215,000","contrast_ratio":2.1,"required_ratio":4.5,"reason":"AD",
+                         "location":{"x":10,"y":20,"width":60,"height":18}},
+                        {"text":"no reason","contrast_ratio":2.1,"required_ratio":4.5,
+                         "location":{"x":10,"y":50,"width":60,"height":18}}
+                      ]
+                    }
+                  }
+                }
+                """.formatted(request.getId());
+
+        ingestionService.save(resultJson);
+        entityManager.flush();
+        entityManager.clear();
+
+        List<EvaluationIssueResponse> issues = resultQueryService.getIssues(request.getId());
+        assertThat(issues)
+                .extracting(EvaluationIssueResponse::selector, EvaluationIssueResponse::exclusionReason)
+                .containsExactlyInAnyOrder(
+                        tuple("#logo", null),
+                        tuple("#ad-image", "AD"),
+                        tuple("#news li", "DYNAMIC"),
+                        tuple("x=10, y=20, width=60, height=18", "AD")
+                );
+
+        EvaluationResultSummaryResponse summary = resultQueryService.getSummary(request.getId());
+        assertThat(summary.totalIssueCount()).isEqualTo(1);
+        assertThat(summary.criticalIssueCount()).isEqualTo(1);
     }
 
     @Test

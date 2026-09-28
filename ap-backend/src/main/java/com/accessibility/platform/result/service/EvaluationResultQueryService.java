@@ -63,7 +63,8 @@ public class EvaluationResultQueryService {
                         issue.getIssueCode(),
                         IssueLocatorResponse.from(issue.getLocator()),
                         issue.getCreatedAt(),
-                        issue.getRuleId()
+                        issue.getRuleId(),
+                        issue.getExclusionReason()
                 ))
                 .toList();
     }

@@ -69,6 +69,70 @@ def cv_contrast_kwcag_item() -> Dict[str, str]:
     }
 
 
+def format_violation(v: Dict[str, Any]) -> Dict[str, Any]:
+    """contrast_analyzer 위반 항목(수정 추천 포함)을 결과 JSON 형식으로 바꾼다."""
+    return {
+        "text": v["text"],                      # ← 위반 텍스트 내용
+        "location": v["bbox"],                  # ← 스크린샷 내 위치 (x, y, w, h)
+        "contrast_ratio": v["ratio"],           # ← 현재 명암비
+        "contrast_display": v["ratio_display"], # ← 표시용 문자열 ("3.21:1")
+        "required_ratio": v["threshold"],       # ← 적용된 기준 (4.5 또는 3.0)
+        "is_large_text": v["is_large_text"],    # ← 큰 텍스트 여부
+        "foreground_color": v["foreground"],    # ← 추출된 전경색 RGB
+        "background_color": v["background"],    # ← 추출된 배경색 RGB
+        "fix_suggestion": {
+            "darken_text": {                    # ← 방안 1: 글자를 더 어둡게
+                "suggested_color": v["fix_suggestion"].get("option_1", {}).get("suggested_fg", []),
+                "suggested_hex": v["fix_suggestion"].get("option_1", {}).get("suggested_fg_hex", ""),
+                "new_ratio": v["fix_suggestion"].get("option_1", {}).get("new_ratio", 0),
+            },
+            "lighten_background": {             # ← 방안 2: 배경을 더 밝게
+                "suggested_color": v["fix_suggestion"].get("option_2", {}).get("suggested_bg", []),
+                "suggested_hex": v["fix_suggestion"].get("option_2", {}).get("suggested_bg_hex", ""),
+                "new_ratio": v["fix_suggestion"].get("option_2", {}).get("new_ratio", 0),
+            },
+        } if v["fix_suggestion"].get("needed") else None,
+    }
+
+
+def excluded_region_reason(bbox: Dict[str, Any], regions: List[Dict[str, Any]]) -> Optional[str]:
+    """
+    텍스트 상자 중심이 규칙 분석기가 표시한 광고·동적 영역(스크린샷 px) 안에 있으면 그 사유.
+    광고와 두 번 불러왔을 때 바뀐 영역의 글자는 사이트의 고정 콘텐츠가 아니므로
+    점수에서 빼고 따로 보고한다.
+    """
+    try:
+        center_x = float(bbox.get("x", 0)) + float(bbox.get("width", 0)) / 2
+        center_y = float(bbox.get("y", 0)) + float(bbox.get("height", 0)) / 2
+    except (TypeError, ValueError):
+        return None
+    for region in regions:
+        if (region["x"] <= center_x <= region["x"] + region["width"]
+                and region["y"] <= center_y <= region["y"] + region["height"]):
+            return region["reason"]
+    return None
+
+
+def load_excluded_regions(path: Optional[str]) -> List[Dict[str, Any]]:
+    """run_all.py가 넘긴 제외 영역 파일을 읽는다. 없거나 잘못되면 빈 목록."""
+    if not path:
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            regions = json.load(f)
+    except (OSError, ValueError):
+        return []
+    valid = []
+    for region in regions if isinstance(regions, list) else []:
+        if not isinstance(region, dict) or region.get("reason") not in ("AD", "DYNAMIC"):
+            continue
+        values = [region.get(key) for key in ("x", "y", "width", "height")]
+        if all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in values) and values[2] > 0 and values[3] > 0:
+            valid.append({"reason": region["reason"], "x": values[0], "y": values[1],
+                          "width": values[2], "height": values[3]})
+    return valid
+
+
 class CVRunner:
     """
     CV 모듈 통합 실행기.
@@ -100,9 +164,10 @@ class CVRunner:
         self.credentials_path = credentials_path
         self.contrast_analyzer = ContrastAnalyzer()
     
-    def analyze(self, 
+    def analyze(self,
                 image_path: str,
-                output_path: Optional[str] = None) -> Dict[str, Any]:
+                output_path: Optional[str] = None,
+                excluded_regions: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         """
         스크린샷 이미지를 받아서 CV 분석 전체(OCR → 명암비 → 수정 추천)를 실행
         
@@ -149,10 +214,21 @@ class CVRunner:
         
         ocr_texts = ocr_result.get("texts", [])
         print(f"  추출된 텍스트: {len(ocr_texts)}개")
+
+        # 광고·동적 영역의 글자는 점수 표본에서 빼고 위반만 따로 보고함
+        regions = excluded_regions or []
+        excluded_texts = [text for text in ocr_texts
+                          if excluded_region_reason(text.get("bbox") or {}, regions)]
+        ocr_texts = [text for text in ocr_texts
+                     if not excluded_region_reason(text.get("bbox") or {}, regions)]
+        excluded_violations = self._excluded_violations(str(image_path), excluded_texts, regions)
+        if excluded_texts:
+            print(f"  제외 영역 텍스트: {len(excluded_texts)}개 (위반 {len(excluded_violations)}건은 점수 제외)")
         
         if not ocr_texts:
             print("  [경고] 텍스트가 추출되지 않았습니다. 빈 결과를 반환합니다.")
             result = self._build_empty_result(ocr_result)
+            result["excluded_violations"] = excluded_violations
             if output_path is None:
                 output_path = "result_cv.json"
             with open(output_path, 'w', encoding='utf-8') as f:
@@ -176,6 +252,7 @@ class CVRunner:
             # OCR 결과의 색을 모두 구분할 수 없으면 점수에 반영할 표본이 없다.
             print("  [경고] 명암비를 측정할 수 있는 텍스트가 없습니다. 빈 결과를 반환합니다.")
             result = self._build_empty_result(ocr_result, reason="NO_MEASURABLE_TEXT", skipped=summary)
+            result["excluded_violations"] = excluded_violations
             if output_path is None:
                 output_path = "result_cv.json"
             with open(output_path, 'w', encoding='utf-8') as f:
@@ -214,6 +291,7 @@ class CVRunner:
             violations_with_fix=violations_with_fix,
             elapsed=elapsed,
         )
+        result["excluded_violations"] = excluded_violations
         
         # 결과를 JSON 파일로 저장함
         if output_path is None:
@@ -230,6 +308,24 @@ class CVRunner:
         
         return result
     
+    def _excluded_violations(self, image_path: str, texts: List[Dict],
+                             regions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """제외 영역 글자의 명암비 위반. 사유(AD/DYNAMIC)를 붙이고 점수에는 쓰지 않는다."""
+        if not texts:
+            return []
+        violations = self.contrast_analyzer.analyze_screenshot(image_path, texts)["violations"]
+        return [
+            {
+                **format_violation({
+                    **v,
+                    "fix_suggestion": self.contrast_analyzer.suggest_fix(
+                        tuple(v["foreground"]), tuple(v["background"]), v["threshold"]),
+                }),
+                "reason": excluded_region_reason(v["bbox"], regions),
+            }
+            for v in violations
+        ]
+
     def _build_result(self,
                       ocr_result: Dict,
                       contrast_result: Dict,
@@ -286,31 +382,7 @@ class CVRunner:
             #   - 현재 명암비가 얼마인지 (contrast_ratio)
             #   - 기준이 얼마인지 (required_ratio)
             #   - 어떻게 고치면 되는지 (fix_suggestion: 글자 어둡게 / 배경 밝게)
-            "violations": [
-                {
-                    "text": v["text"],                      # ← 위반 텍스트 내용
-                    "location": v["bbox"],                  # ← 스크린샷 내 위치 (x, y, w, h)
-                    "contrast_ratio": v["ratio"],           # ← 현재 명암비
-                    "contrast_display": v["ratio_display"], # ← 표시용 문자열 ("3.21:1")
-                    "required_ratio": v["threshold"],       # ← 적용된 기준 (4.5 또는 3.0)
-                    "is_large_text": v["is_large_text"],    # ← 큰 텍스트 여부
-                    "foreground_color": v["foreground"],    # ← 추출된 전경색 RGB
-                    "background_color": v["background"],    # ← 추출된 배경색 RGB
-                    "fix_suggestion": {
-                        "darken_text": {                    # ← 방안 1: 글자를 더 어둡게
-                            "suggested_color": v["fix_suggestion"].get("option_1", {}).get("suggested_fg", []),
-                            "suggested_hex": v["fix_suggestion"].get("option_1", {}).get("suggested_fg_hex", ""),
-                            "new_ratio": v["fix_suggestion"].get("option_1", {}).get("new_ratio", 0),
-                        },
-                        "lighten_background": {             # ← 방안 2: 배경을 더 밝게
-                            "suggested_color": v["fix_suggestion"].get("option_2", {}).get("suggested_bg", []),
-                            "suggested_hex": v["fix_suggestion"].get("option_2", {}).get("suggested_bg_hex", ""),
-                            "new_ratio": v["fix_suggestion"].get("option_2", {}).get("new_ratio", 0),
-                        },
-                    } if v["fix_suggestion"].get("needed") else None,
-                }
-                for v in violations_with_fix
-            ],
+            "violations": [format_violation(v) for v in violations_with_fix],
             
             # ── 통과 항목 수 (상세는 생략, 필요시 확장 가능) ──
             "pass_count_detail": {
@@ -370,6 +442,7 @@ def main():
       python cv_runner.py <screenshot.png>
       python cv_runner.py <screenshot.png> --credentials <서비스계정키.json>
       python cv_runner.py <screenshot.png> --output <결과파일.json>
+      python cv_runner.py <screenshot.png> --excluded-regions <제외영역.json>
     
     예시:
       python cv_runner.py page.png
@@ -380,6 +453,7 @@ def main():
         print("사용법: python cv_runner.py <screenshot.png>")
         print("옵션:   --credentials <서비스계정키.json>")
         print("        --output <결과파일.json>")
+        print("        --excluded-regions <제외영역.json>")
         sys.exit(1)
     
     image_path = sys.argv[1]
@@ -387,15 +461,19 @@ def main():
     # 옵션 파싱
     credentials = None
     output = None
+    excluded_regions_path = None
     
     for i, arg in enumerate(sys.argv):
         if arg == "--credentials" and i + 1 < len(sys.argv):
             credentials = sys.argv[i + 1]
         elif arg == "--output" and i + 1 < len(sys.argv):
             output = sys.argv[i + 1]
+        elif arg == "--excluded-regions" and i + 1 < len(sys.argv):
+            excluded_regions_path = sys.argv[i + 1]
     
     runner = CVRunner(credentials_path=credentials)
-    runner.analyze(image_path, output_path=output)
+    runner.analyze(image_path, output_path=output,
+                   excluded_regions=load_excluded_regions(excluded_regions_path))
 
 
 if __name__ == "__main__":

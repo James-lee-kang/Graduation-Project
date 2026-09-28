@@ -422,11 +422,23 @@ describe("createEvaluationIssuesResponseParser", () => {
     );
   });
 
+  it("keeps the reason an issue is reported outside the score", () => {
+    const [scored, advertising, dynamic] = parseIssues([
+      createEvaluationIssue(),
+      { ...createEvaluationIssue(), id: 2, exclusionReason: "AD" },
+      { ...createEvaluationIssue(), id: 3, exclusionReason: "DYNAMIC" }
+    ], "$.data");
+    expect(scored?.exclusionReason).toBeUndefined();
+    expect(advertising?.exclusionReason).toBe("AD");
+    expect(dynamic?.exclusionReason).toBe("DYNAMIC");
+  });
+
   it.each([
     [{ requestId: 999 }, "$.data[0].requestId"],
     [{ module: "legacy_engine" }, "$.data[0].module"],
     [{ severity: "HIGH" }, "$.data[0].severity"],
-    [{ id: 0 }, "$.data[0].id"]
+    [{ id: 0 }, "$.data[0].id"],
+    [{ exclusionReason: "SPONSORED" }, "$.data[0].exclusionReason"]
   ])("rejects invalid issue identity and enums", (override, fieldPath) => {
     expectContractError(
       () => parseIssues([{ ...createEvaluationIssue(), ...override }], "$.data"),

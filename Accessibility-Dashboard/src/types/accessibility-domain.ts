@@ -95,8 +95,12 @@ export type LiveReportSession = {
   expiresAt: string;
 };
 
+/** Findings in advertising or changing regions: reported, never scored or counted. */
+export type IssueExclusionReason = "AD" | "DYNAMIC";
+
 export type EvaluationIssue = {
   ruleId?: string | null;
+  exclusionReason?: IssueExclusionReason | null;
   id: number;
   requestId: number;
   module: EvaluationModule;
@@ -124,6 +128,7 @@ export type AnalysisResult = {
 
 export type IssueResult = {
   ruleId?: string | null;
+  exclusionReason?: IssueExclusionReason | null;
   id: number;
   analysisResultId: number;
   issueCode: string;

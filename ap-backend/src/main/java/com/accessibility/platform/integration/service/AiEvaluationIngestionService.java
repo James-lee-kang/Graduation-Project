@@ -321,7 +321,19 @@ public class AiEvaluationIngestionService {
         ));
 
         List<IssueResult> issues = new ArrayList<>();
-        for (JsonNode violation : module.path("violations")) {
+        addRuleIssues(issues, analysis, module.path("violations"), module.path("unmapped_violations"), null);
+        for (JsonNode group : module.path("excluded_violations")) {
+            String reason = text(group, "reason", null);
+            if ("AD".equals(reason) || "DYNAMIC".equals(reason)) {
+                addRuleIssues(issues, analysis, group.path("violations"), group.path("unmapped_violations"), reason);
+            }
+        }
+        issueResultRepository.saveAll(issues);
+    }
+
+    private void addRuleIssues(List<IssueResult> issues, AnalysisResult analysis, JsonNode violations,
+                               JsonNode unmappedViolations, String exclusionReason) {
+        for (JsonNode violation : violations) {
             String code = text(violation, "kwcag_id", "RULE_BASED");
             String title = text(violation, "kwcag_name", "Rule-based accessibility issue");
             Severity severity = ruleSeverity(text(violation, "severity", "minor"));
@@ -337,11 +349,12 @@ public class AiEvaluationIngestionService {
                     );
                     issue.applyRuleId(text(rule, "axe_rule_id", null));
                     issue.applyLocator(issueLocatorParser.fromRuleNode(node));
+                    issue.applyExclusion(exclusionReason);
                     issues.add(issue);
                 }
             }
         }
-        for (JsonNode rule : module.path("unmapped_violations")) {
+        for (JsonNode rule : unmappedViolations) {
             String code = text(rule, "axe_rule_id", "RULE_BASED");
             String title = text(rule, "help", text(rule, "description", "Unclassified rule-based issue"));
             if (rule.path("nodes").isArray()) {
@@ -354,19 +367,21 @@ public class AiEvaluationIngestionService {
                     );
                     issue.applyRuleId(text(rule, "axe_rule_id", null));
                     issue.applyLocator(issueLocatorParser.fromRuleNode(node));
+                    issue.applyExclusion(exclusionReason);
                     issues.add(issue);
                 }
             } else {
                 // Older serializers kept only the rule and node count. Keep
                 // that known finding without inventing missing element paths.
-                issues.add(new IssueResult(
+                IssueResult issue = new IssueResult(
                         analysis, code, title, axeSeverity(text(rule, "impact", "minor")), null,
                         text(rule, "description", "") + "\n원본 요소 위치 정보가 없습니다."
                                 + " reported_nodes=" + rule.path("node_count").asText("unknown")
-                ));
+                );
+                issue.applyExclusion(exclusionReason);
+                issues.add(issue);
             }
         }
-        issueResultRepository.saveAll(issues);
     }
 
     private Severity axeSeverity(String impact) {
@@ -446,7 +461,18 @@ public class AiEvaluationIngestionService {
         ));
 
         List<IssueResult> issues = new ArrayList<>();
-        for (JsonNode violation : module.path("violations")) {
+        addCvIssues(issues, analysis, module, module.path("violations"), false);
+        addCvIssues(issues, analysis, module, module.path("excluded_violations"), true);
+        issueResultRepository.saveAll(issues);
+    }
+
+    private void addCvIssues(List<IssueResult> issues, AnalysisResult analysis, JsonNode module,
+                             JsonNode violations, boolean excluded) {
+        for (JsonNode violation : violations) {
+            String exclusionReason = excluded ? text(violation, "reason", null) : null;
+            if (excluded && !"AD".equals(exclusionReason) && !"DYNAMIC".equals(exclusionReason)) {
+                continue;
+            }
             IssueResult issue = new IssueResult(
                     analysis,
                     module.path("kwcag_item").path("id").asText("5.4.3"),
@@ -458,9 +484,9 @@ public class AiEvaluationIngestionService {
                             + ", required=" + violation.path("required_ratio").asText("")
             );
             issue.applyLocator(issueLocatorParser.fromCvViolation(violation));
+            issue.applyExclusion(exclusionReason);
             issues.add(issue);
         }
-        issueResultRepository.saveAll(issues);
     }
 
     private String buildTextIssueMessage(JsonNode block) {

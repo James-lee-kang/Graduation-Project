@@ -42,6 +42,21 @@ const issues = [
     id: 9105, requestId: 501, module: "text_difficulty", severity: "MODERATE", ruleId: null, wcagCode: "WCAG 3.1.5",
     title: "읽기 수준", description: "문장이 어렵습니다.", recommendation: "쉬운 단어로 바꾸세요.", selector: "#notice",
     locator: domLocator([{ context: "DOCUMENT", selector: "#notice", frameUrl: null }], '<p id="notice">공지</p>'), createdAt
+  },
+  // Findings in an ad and in content that changed between two loads: reported
+  // separately, never scored, counted or sent to the live viewer.
+  {
+    id: 9106, requestId: 501, module: "rule_based", severity: "CRITICAL", ruleId: "image-alt", wcagCode: "5.1.1",
+    exclusionReason: "AD", title: "적절한 대체 텍스트 제공", description: "Images must have alternative text", recommendation: null,
+    selector: "#ad-slot img", locator: domLocator([{ context: "DOCUMENT", selector: "#ad-slot img", frameUrl: null }], '<img src="ad.png">'),
+    createdAt
+  },
+  {
+    id: 9107, requestId: 501, module: "cv_visual", severity: "SERIOUS", ruleId: null, wcagCode: "5.4.3", exclusionReason: "DYNAMIC",
+    title: "텍스트 콘텐츠의 명도 대비", description: "text=오늘의 뉴스, contrast=2.40:1, required=4.5", recommendation: null,
+    selector: "x=40, y=900, width=120, height=16",
+    locator: { kind: "BOUNDING_BOX", pathSteps: [], x: 40, y: 900, width: 120, height: 16, coordinateSpace: "SCREENSHOT_PX", visible: true, htmlSnippet: null },
+    createdAt
   }
 ];
 
@@ -181,6 +196,18 @@ try {
   await report.getByLabel("검색").fill("");
   console.log("PASS filters by location and text");
 
+  const excludedToggle = report.getByRole("button", { name: /점수에서 제외된 문제/ });
+  assert.equal(await excludedToggle.getAttribute("aria-expanded"), "false", "excluded findings start collapsed");
+  assert.match(await excludedToggle.innerText(), /광고 1건 · 동적 영역 1건/);
+  await excludedToggle.click();
+  const adIssue = report.locator('.site-final-report__issue[data-issue-id="9106"]');
+  assert.match(await adIssue.innerText(), /광고/);
+  assert.match(await report.locator('.site-final-report__issue[data-issue-id="9107"]').innerText(), /동적 영역[\s\S]*오늘의 뉴스/);
+  assert.equal(await adIssue.getByRole("button").count(), 0, "excluded findings have no page marker");
+  assert.equal(await page.locator("#site-dashboard-panel-results .site-page-evidence-preview").getAttribute("data-unavailable-locator-count"), "2");
+  await excludedToggle.click();
+  console.log("PASS ads and dynamic regions are listed outside the score");
+
   await report.getByRole("button", { name: "모두 펼치기" }).click();
   await report.locator('.site-final-report__issue[data-issue-id="9101"]').getByRole("button", { name: /문제 상세/ }).click();
   const dialog = page.getByRole("dialog", { name: "문제 상세" });
@@ -191,8 +218,8 @@ try {
   console.log("PASS issue details open from the report and restore focus");
 
   await report.getByRole("button", { name: "인쇄 · PDF 저장" }).click();
-  assert.deepEqual(await page.evaluate(() => window.__printSnapshots), [{ collapsed: 0, issues: 5 }],
-    "printing renders every group and issue");
+  assert.deepEqual(await page.evaluate(() => window.__printSnapshots), [{ collapsed: 0, issues: 7 }],
+    "printing renders every group, issue and excluded finding");
   await page.emulateMedia({ media: "print" });
   assert.equal(await page.locator(".dashboard-sidebar").first().isVisible(), false, "print hides the dashboard chrome");
   assert.equal(await page.getByRole("tablist").isVisible(), false, "print hides the tabs");

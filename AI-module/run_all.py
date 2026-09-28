@@ -47,6 +47,7 @@
     result_text_difficulty.json ← 블록별 난이도 점수
     result_text_suggestions.json ← 블록별 수정 제안
     result_cv.json              ← 임시 PNG를 분석한 CV 결과(입력 경로 미포함)
+    cv_excluded_regions.json    ← CV에 넘기는 광고·동적 영역(스크린샷 px), 있을 때만
     ★result_final.json          ← 최종 통합 결과 (백엔드가 받는 파일)
 """
 
@@ -88,6 +89,7 @@ RUN_OUTPUT_FILES = [
     "result_text_difficulty.json",
     "result_text_suggestions.json",
     "result_cv.json",
+    "cv_excluded_regions.json",
     "result_ocr.json",
     "result_final.json",
     "result_artifact.json",
@@ -1000,7 +1002,30 @@ def send_to_backend(final_result: Dict) -> bool:
         return False
 
 
-def run_cv_from_ephemeral_capture(capture_path: Path) -> bool:
+def cv_excluded_regions(rule_result: Any, capture_metadata: Any) -> List[Dict[str, Any]]:
+    """
+    규칙 분석기가 찾은 광고·동적 영역(문서 CSS px)을 CV 스크린샷 픽셀로 바꾼다.
+    이 영역의 글자는 CV 점수 표본에서 빠지고 위반만 따로 보고된다.
+    """
+    metadata = rule_result.get("metadata") if isinstance(rule_result, dict) else None
+    regions = metadata.get("excluded_regions") if isinstance(metadata, dict) else None
+    scale = finite_numeric_score(capture_metadata.get("deviceScaleFactor")) if isinstance(capture_metadata, dict) else None
+    if scale is None or scale <= 0:
+        scale = 1.0
+    converted = []
+    for region in regions if isinstance(regions, list) else []:
+        if not isinstance(region, dict) or region.get("reason") not in ("AD", "DYNAMIC"):
+            continue
+        values = [finite_numeric_score(region.get(key)) for key in ("x", "y", "width", "height")]
+        if None in values or values[2] <= 0 or values[3] <= 0:
+            continue
+        converted.append({"reason": region["reason"], "x": values[0] * scale, "y": values[1] * scale,
+                          "width": values[2] * scale, "height": values[3] * scale})
+    return converted
+
+
+def run_cv_from_ephemeral_capture(capture_path: Path,
+                                  excluded_regions: Optional[List[Dict[str, Any]]] = None) -> bool:
     """Run the existing CV analyzer, then always delete its private PNG input."""
     try:
         if not capture_path.exists() or capture_path.stat().st_size == 0:
@@ -1018,6 +1043,10 @@ def run_cv_from_ephemeral_capture(capture_path: Path) -> bool:
         elif VISION_CREDENTIALS.is_file():
             command.extend(["--credentials", str(VISION_CREDENTIALS)])
         command.extend(["--output", str(OUTPUT_DIR / "result_cv.json")])
+        if excluded_regions:
+            regions_path = OUTPUT_DIR / "cv_excluded_regions.json"
+            regions_path.write_text(json.dumps(excluded_regions), encoding="utf-8")
+            command.extend(["--excluded-regions", str(regions_path)])
 
         return run_command(
             command,
@@ -1242,7 +1271,9 @@ def main():
     run_step(5, total_steps, "CV 시각 접근성 분석")
     if step1_ok:
         step5_started_ns = time.time_ns()
-        step5_process_ok = run_cv_from_ephemeral_capture(cv_capture_path)
+        step5_process_ok = run_cv_from_ephemeral_capture(
+            cv_capture_path, cv_excluded_regions(rule_result, capture_metadata)
+        )
         step5_ok = step5_process_ok and is_fresh_nonempty_file(
             OUTPUT_DIR / "result_cv.json",
             step5_started_ns,

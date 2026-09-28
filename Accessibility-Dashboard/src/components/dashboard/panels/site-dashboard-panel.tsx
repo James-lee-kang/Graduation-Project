@@ -195,15 +195,19 @@ function SiteDashboardResults(props: SiteDashboardPanelProps) {
     () => new Map(analysisResults.map((analysisResult) => [analysisResult.id, analysisResult])),
     [analysisResults]
   );
-  const latestIssues = useMemo(
-    () =>
-      latestResultRequestId === null
-        ? []
-        : issueResults.filter(
-            (issue) => requestIdByAnalysisResultId.get(issue.analysisResultId) === latestResultRequestId
-          ),
-    [issueResults, latestResultRequestId, requestIdByAnalysisResultId]
-  );
+  // Findings in advertising or changing regions are not scored: they stay out
+  // of the page view and the counts and are listed separately in the report.
+  const [latestIssues, excludedIssues] = useMemo(() => {
+    const scored: IssueResultModel[] = [];
+    const excluded: IssueResultModel[] = [];
+    if (latestResultRequestId !== null) {
+      for (const issue of issueResults) {
+        if (requestIdByAnalysisResultId.get(issue.analysisResultId) !== latestResultRequestId) continue;
+        (issue.exclusionReason ? excluded : scored).push(issue);
+      }
+    }
+    return [scored, excluded];
+  }, [issueResults, latestResultRequestId, requestIdByAnalysisResultId]);
   const {
     captureMetadata,
     errorMessage: captureMetadataErrorMessage,
@@ -297,19 +301,14 @@ function SiteDashboardResults(props: SiteDashboardPanelProps) {
     });
   }, [latestIssueSignature, latestResultRequestId]);
 
-  const replayIssueRows = useMemo<RecentIssueRow[]>(
-    () =>
-      latestIssues.map((issue) => {
-        const severity = severityChartItems.find((item) => item.key === issue.severity) ?? severityChartItems[0]!;
-        const analyzerType = analysisResultById.get(issue.analysisResultId)?.analyzerType;
-        return {
-          issue,
-          severity,
-          analyzerType
-        };
-      }),
-    [analysisResultById, latestIssues]
-  );
+  const [replayIssueRows, excludedIssueRows] = useMemo(() => {
+    const toRow = (issue: IssueResultModel): RecentIssueRow => ({
+      issue,
+      severity: severityChartItems.find((item) => item.key === issue.severity) ?? severityChartItems[0]!,
+      analyzerType: analysisResultById.get(issue.analysisResultId)?.analyzerType
+    });
+    return [latestIssues.map(toRow), excludedIssues.map(toRow)];
+  }, [analysisResultById, latestIssues, excludedIssues]);
   const unavailableLocatorIssueRows = useMemo(() => {
     const unavailableIssueIds = new Set(currentLocatorReport?.unavailableIssueIds);
     return replayIssueRows.filter(({ issue }) => unavailableIssueIds.has(issue.id));
@@ -462,6 +461,7 @@ function SiteDashboardResults(props: SiteDashboardPanelProps) {
                 scoreResults={scoreResults}
                 resultSummaries={resultSummaries}
                 rows={replayIssueRows}
+                excludedRows={excludedIssueRows}
                 loadState={resultDetailsLoadState}
                 errorMessage={resultDetailsErrorMessage}
                 onRetry={retryResultDetails}

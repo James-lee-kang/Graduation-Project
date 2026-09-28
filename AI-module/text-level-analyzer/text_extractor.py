@@ -535,6 +535,9 @@ def extract_texts(html: str) -> dict:
     #   - role="dialog" → 모달/팝업 레이어
     #   - class에 modal, popup, loading 등 포함 → 숨김 UI 컴포넌트
     #   - id에 modal, popup, tracer, loading, wait 포함 → 숨김 UI 컴포넌트
+    #   - data-ua-excluded-region → 규칙 분석기가 표시한 광고·동적 영역.
+    #     두 번 불러왔을 때 바뀐 뉴스·상품 목록이나 광고 문구는 사이트가 관리하는
+    #     고정 문장이 아니므로 점수와 검사에서 제외함
     HIDDEN_CLASSES = {'modal', 'popup', 'loading', 'layer-loading', 'skip-nav',
                       'sr-only', 'screen-reader', 'visually-hidden'}
 
@@ -542,6 +545,11 @@ def extract_texts(html: str) -> dict:
     for el in soup.find_all(True):
         if el.parent is None:
             continue  # 이미 제거된 요소 (부모가 없으면 DOM에서 분리된 상태)
+
+        # 광고·동적 영역 (규칙 분석기의 두 번 불러오기 비교 결과)
+        if el.has_attr('data-ua-excluded-region'):
+            to_remove.append(el)
+            continue
 
         # display:none 체크 (인라인 스타일 기준)
         style = el.get('style', '') or ''

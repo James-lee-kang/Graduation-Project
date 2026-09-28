@@ -59,6 +59,13 @@ const {
   serializeDomReplayHtml,
 } = require('./artifact');
 const { analyzeWithCarouselStates } = require('./carousel-audit');
+const {
+  changedContentKeys,
+  collectContentSignatures,
+  loadComparisonSignatures,
+  markExcludedRegions,
+  partitionAxeResultsByRegion,
+} = require('./excluded-regions');
 const fs = require('fs');
 const path = require('path');
 
@@ -716,6 +723,18 @@ async function assessTargetPage(page, {
   };
 }
 
+// Violations inside excluded regions keep the regular API shape, grouped by
+// the reason the region was excluded; they never enter the score.
+function toExcludedApiFormat(excluded) {
+  return Object.entries(excluded)
+    .filter(([, results]) => results.violations.length > 0)
+    .map(([reason, results]) => {
+      const kwcag = convert(results);
+      const api = toApiFormat(kwcag, score(kwcag));
+      return { reason, violations: api.violations, unmapped_violations: api.unmapped_violations };
+    });
+}
+
 async function run(url, outputPath, options = {}) {
   console.log(`\n검사 대상: ${url}`);
   console.log('─'.repeat(50));
@@ -806,6 +825,13 @@ async function run(url, outputPath, options = {}) {
       reportUnavailablePage(documentHealth);
     }
 
+    // A second load reveals content that differs between visits (news,
+    // products, rotating ads). The static fallback reproduces one saved
+    // response, so it has nothing to compare against.
+    const comparisonSignatures = replaySourceMode === 'RENDERED_DOM' && options.compareLoad !== false
+      ? await loadComparisonSignatures(context, analysisFinalUrl, { settleMs })
+      : null;
+
     // Freeze CSS/Web Animations before both axe and snapshot serialization so
     // the reported element rectangles describe the analyzed DOM state.
     await pauseDocumentAnimations(page);
@@ -827,6 +853,12 @@ async function run(url, outputPath, options = {}) {
     // fallback mode. Keep the analyzed resource identity honest and stable.
     axeResults.url = analysisFinalUrl;
     const scanDuration = Date.now() - scanStart;  // 성능 측정용 (API metadata에 기록)
+    // Marked after the carousel scan so its slide attributes keep site
+    // carousels out of the dynamic regions, and before the snapshot so the
+    // text analyzer sees the same marks.
+    const excludedRegions = await markExcludedRegions(page, changedContentKeys(
+      await collectContentSignatures(page), comparisonSignatures,
+    ));
     const releaseVirtualTime = await pausePageVirtualTime(page);
     let htmlOutput;
     let artifactOutput;
@@ -880,7 +912,8 @@ async function run(url, outputPath, options = {}) {
     //   항목 번호 체계(예: 5.1.1 "대체 텍스트 제공")로 재분류해야 발표·대시보드
     //   에서 의미가 전달된다. adapter.js의 mapping.js가 이 매핑을 담당.
     console.log('6. KWCAG 매핑 변환 중...');
-    const kwcagResult = convert(axeResults);
+    const { included, excluded } = await partitionAxeResultsByRegion(page, axeResults);
+    const kwcagResult = convert(included);
     kwcagResult.meta.replaySource = replaySourceMode;
     kwcagResult.meta.carouselAudit = axeResults.carouselAudit;
 
@@ -897,6 +930,8 @@ async function run(url, outputPath, options = {}) {
     const apiData = toApiFormat(kwcagResult, scoreResult);
     apiData.metadata.scan_duration_ms = scanDuration;  // placeholder를 실측값으로 덮어쓰기
     apiData.metadata.document_health = documentHealth;
+    apiData.metadata.excluded_regions = excludedRegions;
+    apiData.excluded_violations = toExcludedApiFormat(excluded);
 
     // ── 8) 로컬 JSON 저장 ──
     //   두 종류를 모두 저장:

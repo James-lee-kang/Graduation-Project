@@ -29,6 +29,10 @@ ALTER TABLE IF EXISTS issue_result
 ALTER TABLE IF EXISTS issue_result
     ADD COLUMN IF NOT EXISTS rule_id VARCHAR(100);
 
+-- Findings in advertising or changing regions: kept, but not scored or counted.
+ALTER TABLE IF EXISTS issue_result
+    ADD COLUMN IF NOT EXISTS exclusion_reason VARCHAR(20);
+
 ALTER TABLE IF EXISTS evaluation_request
     ADD COLUMN IF NOT EXISTS failure_code VARCHAR(40);
 

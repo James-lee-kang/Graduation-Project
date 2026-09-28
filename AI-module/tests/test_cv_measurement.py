@@ -177,6 +177,40 @@ class CvMeasurementTests(unittest.TestCase):
         self.assertNotIn("cv", final["score_breakdown"]["module_scores"])
 
 
+class CvExcludedRegionTests(unittest.TestCase):
+    def test_text_in_ad_or_dynamic_regions_is_reported_separately_and_not_scored(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "page.png"
+            page = Image.new("RGB", (300, 60), (255, 255, 255))
+            page.paste(text_image((255, 255, 255), (0, 0, 0), size=(60, 20), box=(0, 0, 60, 20)), (20, 20))
+            page.paste(text_image((255, 255, 255), (170, 170, 170), size=(60, 20), box=(0, 0, 60, 20)), (200, 20))
+            page.save(image)
+            texts = [
+                {"text": "고정 안내", "bbox": {"x": 20, "y": 20, "width": 60, "height": 20}},
+                {"text": "광고 가격", "bbox": {"x": 200, "y": 20, "width": 60, "height": 20}},
+            ]
+            regions = [{"reason": "AD", "x": 180, "y": 0, "width": 120, "height": 60}]
+            output = Path(directory) / "cv.json"
+            with patch.object(cv_runner, "run_ocr", return_value={"backend": "fixture", "texts": texts}), redirect_stdout(io.StringIO()):
+                result = cv_runner.CVRunner().analyze(str(image), str(output), excluded_regions=regions)
+        self.assertEqual(result["summary"]["total_texts_analyzed"], 1)
+        self.assertEqual(result["summary"]["pass_rate"], 100)
+        self.assertEqual(result["violations"], [])
+        self.assertEqual([(v["text"], v["reason"]) for v in result["excluded_violations"]], [("광고 가격", "AD")])
+
+    def test_regions_are_scaled_to_screenshot_pixels_and_malformed_ones_dropped(self):
+        rule = {"metadata": {"excluded_regions": [
+            {"reason": "DYNAMIC", "x": 10, "y": 20, "width": 30, "height": 40},
+            {"reason": "OTHER", "x": 0, "y": 0, "width": 9, "height": 9},
+            {"reason": "AD", "x": 0, "y": 0, "width": 0, "height": 9},
+            {"reason": "AD", "x": "1", "y": 0, "width": 9, "height": 9},
+        ]}}
+        self.assertEqual(run_all.cv_excluded_regions(rule, {"deviceScaleFactor": 2}),
+                         [{"reason": "DYNAMIC", "x": 20.0, "y": 40.0, "width": 60.0, "height": 80.0}])
+        self.assertEqual(run_all.cv_excluded_regions(None, None), [])
+        self.assertEqual(cv_runner.load_excluded_regions(None), [])
+
+
 class CvRuleDeduplicationTests(unittest.TestCase):
     @staticmethod
     def rule_result(*boxes):

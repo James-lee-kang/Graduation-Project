@@ -80,6 +80,9 @@ public class IssueResult extends BaseTimeEntity {
     @Column(name = "locator_carousel_slide_count")
     private Integer locatorCarouselSlideCount;
 
+    @Column(length = 20)
+    private String exclusionReason;
+
     public IssueResult(AnalysisResult analysisResult, String issueCode, String issueTitle, Severity severity, String locationPath, String message) {
         this.analysisResult = analysisResult;
         this.issueCode = issueCode;
@@ -89,6 +92,15 @@ public class IssueResult extends BaseTimeEntity {
         this.message = message;
         this.resolved = false;
         this.locatorPathSteps = new ArrayList<>();
+    }
+
+    /**
+     * AD or DYNAMIC when the finding was inside an advertising region or a region
+     * whose content changed between two loads. Such findings are kept for the
+     * report but excluded from scores and issue counts.
+     */
+    public void applyExclusion(String reason) {
+        this.exclusionReason = "AD".equals(reason) || "DYNAMIC".equals(reason) ? reason : null;
     }
 
     public void applyRuleId(String ruleId) {
