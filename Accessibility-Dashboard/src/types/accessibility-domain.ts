@@ -145,6 +145,8 @@ export type ScoreResult = {
   // Optional for older APIs. Null means no measured score; zero is a real score.
   cvScore?: number | null;
   cvStatus?: "SUCCESS" | "NOT_MEASURED" | "FAILED" | null;
+  // Null in older rows, whose text analysis outcome was not recorded.
+  textStatus?: "SUCCESS" | "FAILED" | null;
 };
 
 export type EvaluationTargetModel = {

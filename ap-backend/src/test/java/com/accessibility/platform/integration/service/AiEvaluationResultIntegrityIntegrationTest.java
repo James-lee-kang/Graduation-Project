@@ -9,6 +9,7 @@ import com.accessibility.platform.request.domain.EvaluationRequest;
 import com.accessibility.platform.request.repository.EvaluationRequestRepository;
 import com.accessibility.platform.result.service.EvaluationResultQueryService;
 import com.accessibility.platform.score.domain.CvScoreStatus;
+import com.accessibility.platform.score.domain.TextScoreStatus;
 import com.accessibility.platform.score.repository.ScoreDetailRepository;
 import com.accessibility.platform.score.repository.ScoreResultRepository;
 import com.accessibility.platform.target.domain.EvaluationTarget;
@@ -176,6 +177,45 @@ class AiEvaluationResultIntegrityIntegrationTest {
         assertThat(score.getCvScore()).isNull();
         assertThat(score.getCvStatus()).isEqualTo(CvScoreStatus.NOT_MEASURED);
         assertThat(details.findByScoreResultId(score.getId())).noneMatch(detail -> detail.getCategory().equals("cv"));
+    }
+
+    @ParameterizedTest
+    @CsvSource({"SUCCESS", "FAILED"})
+    void keepsAFailedTextAnalysisDistinctFromAMeasuredScore(String state) throws Exception {
+        var request = createRequest();
+        var payload = basePayload(request, 90);
+        ObjectNode module = payload.withObject("modules").putObject("text_difficulty");
+        if (state.equals("FAILED")) {
+            // run_all.py excludes a failed module from the weighted total.
+            module.put("status", "failed").put("message", "난이도 분석 실패");
+            payload.withObject("score_breakdown").withObject("module_scores").remove("difficulty");
+        } else {
+            module.putObject("meta").put("page_score", 100).put("total_analyzed", 3);
+            module.putArray("results");
+        }
+        ingestion.save(payload.toString());
+        entityManager.flush();
+        entityManager.clear();
+
+        var savedScore = scores.findByEvaluationRequestId(request.getId()).orElseThrow();
+        assertThat(savedScore.getTextStatus()).isEqualTo(TextScoreStatus.valueOf(state));
+        var textDetails = details.findByScoreResultId(savedScore.getId()).stream()
+                .filter(detail -> detail.getCategory().equals("difficulty")).toList();
+        if (state.equals("FAILED")) {
+            assertThat(savedScore.getAiScore()).isNull();
+            assertThat(textDetails).isEmpty();
+        } else {
+            assertThat(savedScore.getAiScore()).isEqualByComparingTo("100");
+            assertThat(textDetails).hasSize(1);
+        }
+        JsonNode overview = json.readTree(mvc.perform(get("/api/dashboard/overview"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        JsonNode score = null;
+        for (JsonNode candidate : overview.path("data").path("scoreResults")) {
+            if (candidate.path("evaluationRequestId").asLong() == request.getId()) score = candidate;
+        }
+        assertThat(score).isNotNull();
+        assertThat(score.path("textStatus").asText()).isEqualTo(state);
     }
 
     private ObjectNode basePayload(EvaluationRequest request, int total) {

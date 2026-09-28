@@ -29,7 +29,8 @@ public class ScoreResult extends BaseTimeEntity {
     @Column(nullable = false, precision = 5, scale = 2)
     private BigDecimal ruleScore;
 
-    @Column(nullable = false, precision = 5, scale = 2)
+    // Null when the text analysis failed; a failed run is not a 0 score.
+    @Column(precision = 5, scale = 2)
     private BigDecimal aiScore;
 
     @Column(precision = 5, scale = 2)
@@ -41,16 +42,26 @@ public class ScoreResult extends BaseTimeEntity {
     @Column(length = 20)
     private CvScoreStatus cvStatus;
 
+    // Null in historical rows, whose text analysis outcome was not recorded.
+    @Enumerated(EnumType.STRING)
+    @Column(length = 20)
+    private TextScoreStatus textStatus;
+
     public ScoreResult(EvaluationRequest evaluationRequest, BigDecimal totalScore, BigDecimal ruleScore, BigDecimal aiScore, BigDecimal cvScore) {
         this(evaluationRequest, totalScore, ruleScore, aiScore, cvScore, null);
     }
 
     public ScoreResult(EvaluationRequest evaluationRequest, BigDecimal totalScore, BigDecimal ruleScore, BigDecimal aiScore, BigDecimal cvScore, CvScoreStatus cvStatus) {
+        this(evaluationRequest, totalScore, ruleScore, aiScore, cvScore, cvStatus, null);
+    }
+
+    public ScoreResult(EvaluationRequest evaluationRequest, BigDecimal totalScore, BigDecimal ruleScore, BigDecimal aiScore, BigDecimal cvScore, CvScoreStatus cvStatus, TextScoreStatus textStatus) {
         this.evaluationRequest = evaluationRequest;
         this.totalScore = totalScore;
         this.ruleScore = ruleScore;
         this.aiScore = aiScore;
         this.cvScore = cvScore;
         this.cvStatus = cvStatus;
+        this.textStatus = textStatus;
     }
 }

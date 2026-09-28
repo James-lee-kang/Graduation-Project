@@ -26,8 +26,6 @@ import { AnalysisTrendPanel } from "./site-dashboard/analysis-trend-panel";
 import { severityChartItems } from "./site-dashboard/constants";
 import {
   DashboardViewTabs,
-  getDashboardViewPanelId,
-  getDashboardViewTabId,
   parseDashboardView,
   type DashboardView
 } from "./site-dashboard/dashboard-view-tabs";
@@ -352,9 +350,9 @@ function SiteDashboardResults(props: SiteDashboardPanelProps) {
     <div className="site-dashboard-view" data-active-view={view}>
       <DashboardViewTabs value={view} onChange={changeView} />
       <div
-        id={getDashboardViewPanelId("results")}
+        id="site-dashboard-panel-results"
         role="tabpanel"
-        aria-labelledby={getDashboardViewTabId("results")}
+        aria-labelledby="site-dashboard-tab-results"
         className="site-dashboard-layout grid min-h-[31rem] grid-cols-1 items-stretch"
       >
         <div ref={evidenceGridItemRef} className="site-page-evidence-grid-item">
@@ -447,14 +445,14 @@ function SiteDashboardResults(props: SiteDashboardPanelProps) {
         </div>
       </div>
       <div
-        id={getDashboardViewPanelId("report")}
+        id="site-dashboard-panel-report"
         role="tabpanel"
-        aria-labelledby={getDashboardViewTabId("report")}
+        aria-labelledby="site-dashboard-tab-report"
         className="site-dashboard-report-panel"
         hidden={view !== "report"}
       >
         {hasOpenedReport && (
-          <ErrorBoundary resetKey={`final-report:${latestResultRequestId ?? "none"}`} fallback={RoutePanelErrorFallback}>
+          <ErrorBoundary resetKey={String(latestResultRequestId)} fallback={RoutePanelErrorFallback}>
             <Suspense fallback={<RoutePanelFallback />}>
               <FinalReportPanel
                 active={view === "report"}

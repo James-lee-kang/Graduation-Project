@@ -108,6 +108,13 @@ export function FinalReportPanel({
   const score = scoreResult?.totalScore ??
     resultSummaries.find((summary) => summary.requestId === requestId)?.totalScore ?? null;
   const cvStatus = scoreResult?.cvStatus ?? null;
+  const textFailed = scoreResult?.textStatus === "FAILED";
+  const cvIncomplete = cvStatus === "NOT_MEASURED" || cvStatus === "FAILED";
+  // An engine that did not run reports no issues; show that instead of "0건".
+  const engineOutcome = (analyzer: AnalyzerType): string | null =>
+    analyzer === "CV_VISION" && cvIncomplete ? (cvStatus === "FAILED" ? "검사 실패" : "측정 안 됨")
+      : analyzer === "AI_TEXT" && textFailed ? "검사 실패"
+        : null;
 
   const locationOf = useMemo(() => {
     return (row: RecentIssueRow) => getReportLocationStatus(issueStates?.[row.issue.id], locatorCheckState);
@@ -266,15 +273,18 @@ export function FinalReportPanel({
                   {summary.analyzers.map((item) => (
                     <li key={item.analyzer}>
                       <span>{item.label}</span>
-                      <strong>{item.analyzer === "CV_VISION" && (cvStatus === "NOT_MEASURED" || cvStatus === "FAILED")
-                        ? cvStatus === "FAILED" ? "검사 실패" : "측정 안 됨"
-                        : formatCount(item.count)}</strong>
+                      <strong>{engineOutcome(item.analyzer) ?? formatCount(item.count)}</strong>
                     </li>
                   ))}
                 </ul>
               </div>
             </div>
-            {(cvStatus === "NOT_MEASURED" || cvStatus === "FAILED") && (
+            {textFailed && (
+              <p className="site-final-report__notice" role="note">
+                텍스트 검사가 실패해 읽기 수준·링크 텍스트 등 문장 기반 문제는 이 리포트에 포함되지 않았고 점수에도 반영되지 않았습니다.
+              </p>
+            )}
+            {cvIncomplete && (
               <p className="site-final-report__notice" role="note">
                 시각 검사가 {cvStatus === "FAILED" ? "실패해" : "측정되지 않아"} 명도 대비 등 화면 기반 문제는 이 리포트에 포함되지 않았을 수 있습니다.
               </p>
@@ -285,7 +295,9 @@ export function FinalReportPanel({
             <section className="site-final-report__section" aria-labelledby="site-final-report-empty">
               <h3 id="site-final-report-empty">전체 문제</h3>
               <p className="site-final-report__state" role="status">
-                이번 분석에서 발견된 문제가 없습니다. 자동 검사로 확인할 수 없는 항목은 직접 점검해 주세요.
+                {textFailed || cvIncomplete
+                  ? "완료된 검사에서 발견된 문제가 없습니다. 일부 검사를 하지 못했으니 위 안내를 확인해 주세요."
+                  : "이번 분석에서 발견된 문제가 없습니다. 자동 검사로 확인할 수 없는 항목은 직접 점검해 주세요."}
               </p>
             </section>
           ) : (

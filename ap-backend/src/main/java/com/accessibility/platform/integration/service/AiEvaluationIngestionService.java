@@ -19,6 +19,7 @@ import com.accessibility.platform.request.repository.EvaluationRequestRepository
 import com.accessibility.platform.score.domain.ScoreDetail;
 import com.accessibility.platform.score.domain.ScoreResult;
 import com.accessibility.platform.score.domain.CvScoreStatus;
+import com.accessibility.platform.score.domain.TextScoreStatus;
 import com.accessibility.platform.score.repository.ScoreDetailRepository;
 import com.accessibility.platform.score.repository.ScoreResultRepository;
 import com.accessibility.platform.target.domain.EvaluationTarget;
@@ -247,19 +248,25 @@ public class AiEvaluationIngestionService {
         CvScoreStatus cvStatus = cvScoreStatus(result);
         BigDecimal cvScore = cvStatus == CvScoreStatus.SUCCESS
                 ? decimal(moduleScores, "cv") : null;
+        TextScoreStatus textStatus = textScoreStatus(result);
+        BigDecimal textScore = textStatus == TextScoreStatus.SUCCESS
+                ? decimal(moduleScores, "difficulty") : null;
 
         ScoreResult scoreResult = scoreResultRepository.save(new ScoreResult(
                 request,
                 decimal(result, "total_score"),
                 decimal(moduleScores, "rule_based"),
-                decimal(moduleScores, "difficulty"),
+                textScore,
                 cvScore,
-                cvStatus
+                cvStatus,
+                textStatus
         ));
 
         List<ScoreDetail> details = new ArrayList<>();
         details.add(new ScoreDetail(scoreResult, "rule_based", decimal(moduleScores, "rule_based"), BigDecimal.valueOf(100), "KWCAG rule-based analyzer score"));
-        details.add(new ScoreDetail(scoreResult, "difficulty", decimal(moduleScores, "difficulty"), BigDecimal.valueOf(100), "Text difficulty accessibility score"));
+        if (textScore != null) {
+            details.add(new ScoreDetail(scoreResult, "difficulty", textScore, BigDecimal.valueOf(100), "Text difficulty accessibility score"));
+        }
         if (cvScore != null) {
             details.add(new ScoreDetail(scoreResult, "cv", cvScore, BigDecimal.valueOf(100), "Visual contrast pass-rate score"));
         }
@@ -281,6 +288,16 @@ public class AiEvaluationIngestionService {
         JsonNode score = result.path("score_breakdown").path("module_scores").path("cv");
         return score.isNumber() && Double.isFinite(score.asDouble())
                 ? CvScoreStatus.SUCCESS : CvScoreStatus.FAILED;
+    }
+
+    // A failed text analysis is excluded from the total and must not look like a
+    // measured 0 score or a clean result in the dashboard.
+    private TextScoreStatus textScoreStatus(JsonNode result) {
+        JsonNode module = result.path("modules").path("text_difficulty");
+        JsonNode score = result.path("score_breakdown").path("module_scores").path("difficulty");
+        return !"failed".equals(module.path("status").asText())
+                && score.isNumber() && Double.isFinite(score.asDouble())
+                ? TextScoreStatus.SUCCESS : TextScoreStatus.FAILED;
     }
 
     private void saveAnalysisResults(JsonNode result, EvaluationRequest request) {
