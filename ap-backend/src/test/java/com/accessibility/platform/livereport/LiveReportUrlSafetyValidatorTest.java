@@ -145,6 +145,29 @@ class LiveReportUrlSafetyValidatorTest {
     }
 
     @Test
+    void acceptsWellKnownNat64AddressesOnlyForPublicIpv4Destinations() throws Exception {
+        // An IPv6-only hotspot answers www.naver.com with both A records and
+        // NAT64-synthesized AAAA records.
+        LiveReportUrlSafetyValidator validator = validatorWith(
+                "223.130.192.247", "64:ff9b::df82:c0f7", "64:ff9b::df82:c8ec");
+
+        assertThat(validator.validate("https://www.naver.com/").resolvedAddresses()).hasSize(3);
+        assertAddressesAreBlocked(validator,
+                "64:ff9b::a00:1",      // 10.0.0.1
+                "64:ff9b::c0a8:101",   // 192.168.1.1
+                "64:ff9b::a9fe:a9fe",  // 169.254.169.254 (cloud metadata)
+                "64:ff9b::6440:1",     // 100.64.0.1 (shared address space)
+                "64:ff9b::e000:1",     // 224.0.0.1 (multicast)
+                "64:ff9b:1::df82:c0f7", // local-use NAT64 prefix (RFC 8215)
+                "64:ff9b:0:0:1::df82:c0f7" // bits outside the /96 prefix are set
+        );
+        assertThatThrownBy(() -> validatorWith("223.130.192.247", "64:ff9b::a00:1")
+                .validate("https://www.naver.com/"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("URL host resolves to a non-public address");
+    }
+
+    @Test
     void returnedDnsAnswersAreImmutable() throws Exception {
         List<InetAddress> mutableAnswers = new ArrayList<>(addresses("93.184.216.34"));
         LiveReportUrlSafetyValidator validator = new LiveReportUrlSafetyValidator(host -> mutableAnswers);
