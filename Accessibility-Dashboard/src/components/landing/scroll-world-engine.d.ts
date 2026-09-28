@@ -29,7 +29,7 @@ export type ScrollWorldSection = {
 };
 
 export type ScrollWorldConfig = {
-  brand?: { name: string; href: string; wordmark?: { strong: string; light: string } };
+  brand?: { name: string; href: string; wordmark?: { text: string } };
   cta?: ScrollWorldAction;
   skipLabel?: string;
   mainId?: string;

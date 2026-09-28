@@ -191,7 +191,7 @@ export function DashboardSurface(props: DashboardSurfaceProps) {
         isProjectDetailView ? "dashboard-project-detail" : ""
       } ${
         isSiteDetailView ? "dashboard-site-detail" : ""
-      } min-h-[100dvh] w-full overflow-x-hidden p-0 ${
+      } min-h-[100dvh] w-full overflow-x-clip p-0 ${
         dashboard.isDarkMode ? "" : "bg-white"
       } ${dashboard.isDarkMode ? "theme-dark" : "theme-light"} ${
         isPreview ? "dashboard-embedded-preview" : ""
