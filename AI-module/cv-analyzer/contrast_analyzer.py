@@ -40,7 +40,6 @@ import json
 import sys
 from pathlib import Path
 from typing import Tuple, List, Dict, Any, Optional
-from collections import Counter
 
 from PIL import Image
 
@@ -152,101 +151,92 @@ def check_wcag_compliance(ratio: float) -> Dict[str, bool]:
 # ── 이미지에서 색상 추출 ────────────────────────────────────────────────────
 
 
-def extract_dominant_color(image: Image.Image, 
-                           bbox: Tuple[int, int, int, int],
-                           sample_type: str = "foreground") -> Tuple[int, int, int]:
+# 색상 양자화 단위. 안티앨리어싱으로 미세하게 다른 색을 한 묶음으로 센다.
+QUANTIZE_STEP = 8
+# 글자색 후보가 되려면 텍스트 상자 픽셀의 최소 이 비율을 차지해야 한다.
+# 테두리 한 줄이나 점 하나가 글자색으로 뽑히는 것을 막는다.
+MIN_FOREGROUND_SHARE = 0.02
+# 배경과 이 대비보다 가까운 색은 배경의 음영으로 보고 글자색 후보에서 뺀다.
+MIN_FOREGROUND_SEPARATION = 1.15
+# 큰 상자를 픽셀 단위로 모두 세지 않도록 줄인다. NEAREST라 색이 섞이지 않는다.
+MAX_SAMPLE_SIZE = (160, 80)
+
+
+def _sample_pixels(image: Image.Image, box: Tuple[int, int, int, int]) -> List[Tuple[int, int, int]]:
+    if box[2] <= box[0] or box[3] <= box[1]:
+        return []
+    region = image.crop(box)
+    if region.width > MAX_SAMPLE_SIZE[0] or region.height > MAX_SAMPLE_SIZE[1]:
+        region = region.resize(
+            (min(region.width, MAX_SAMPLE_SIZE[0]), min(region.height, MAX_SAMPLE_SIZE[1])),
+            Image.NEAREST,
+        )
+    data = region.tobytes()
+    return [(data[index], data[index + 1], data[index + 2]) for index in range(0, len(data), 3)]
+
+
+def _color_clusters(pixels: List[Tuple[int, int, int]]) -> Dict[Tuple[int, int, int], List[int]]:
+    """양자화한 색상별로 [개수, R합, G합, B합]을 모은다. 대표색은 원래 픽셀의 평균이다."""
+    clusters: Dict[Tuple[int, int, int], List[int]] = {}
+    for r, g, b in pixels:
+        key = (r // QUANTIZE_STEP, g // QUANTIZE_STEP, b // QUANTIZE_STEP)
+        cluster = clusters.setdefault(key, [0, 0, 0, 0])
+        cluster[0] += 1
+        cluster[1] += r
+        cluster[2] += g
+        cluster[3] += b
+    return clusters
+
+
+def _cluster_color(cluster: List[int]) -> Tuple[int, int, int]:
+    count = cluster[0]
+    return (round(cluster[1] / count), round(cluster[2] / count), round(cluster[3] / count))
+
+
+def measure_text_colors(image: Image.Image,
+                        bbox: Tuple[int, int, int, int]) -> Optional[Tuple[Tuple[int, int, int], Tuple[int, int, int]]]:
     """
-    스크린샷 이미지의 특정 영역에서 대표 색상을 추출
-    
-    [왜 단순 평균색이 아닌가]
-    텍스트 영역의 모든 픽셀 평균을 구하면
-    글자색과 배경색이 섞여서 실제 어느 쪽도 아닌 중간값이 나옴.
-    예: 흰 배경에 검은 글씨 → 평균은 회색 → 실제 명암비와 전혀 다른 결과
-    그래서 전경색과 배경색을 분리 추출하는 전략을 사용
-    
-    [전경색(글자색) 추출 전략]
-    바운딩박스 내부 픽셀에서 가장 어두운 색상 클러스터를 추출
-    텍스트는 보통 배경보다 어두우므로, 어두운 쪽이 글자색일 가능성이 높음.
-    
-    [배경색 추출 전략]
-    바운딩박스를 상하좌우 20% 확장한 영역에서 가장 빈번한(최빈) 색상을 추출
-    배경은 넓은 영역에 균일하게 퍼져 있으므로, 가장 많이 나타나는 색 = 배경색
-    
-    [색상 양자화]
-    비슷한 색상을 묶기 위해 RGB 각 채널을 8 단위로 반올림
-    예: (123, 45, 67) → (120, 40, 64)
-    이렇게 하면 안티앨리어싱 등으로 미세하게 다른 색들이 하나로 합쳐져서
-    대표 색상을 더 정확하게 추출 가능
-    
-    [매개변수]
-    - image: PIL Image 객체 (스크린샷 전체 이미지)
-    - bbox: (x, y, width, height) — vision_ocr.py가 찾은 텍스트의 바운딩박스
-    - sample_type: "foreground"(글자색) 또는 "background"(배경색)
+    텍스트 바운딩박스의 (글자색, 배경색)을 추정한다. 측정할 수 없으면 None을 반환한다.
+
+    [배경색]
+    바운딩박스 안의 최빈색. OCR 상자는 글자에 맞춰 잡히므로 글자 획보다 바탕 픽셀이
+    많다. 상자 바깥은 버튼·배너의 테두리 밖 페이지 배경일 수 있어 사용하지 않는다.
+
+    [글자색]
+    상자 안의 색상 묶음 중 일정 비율 이상을 차지하면서 배경과 구분되는 색 가운데
+    배경과 대비가 가장 큰 색. 안티앨리어싱 중간색은 실제 글자색보다 대비가 낮으므로
+    선택되지 않는다. 글자가 배경보다 어둡다고 가정하지 않으므로 어두운 배경의
+    밝은 글자도 측정한다.
+
+    [None을 반환하는 경우]
+    상자가 이미지 밖이거나, 상자 안에 배경과 구분되는 색이 충분하지 않은 경우.
+    이런 텍스트는 명암비를 알 수 없으므로 위반으로 판정하지 않는다.
     """
+    if image.mode != "RGB":
+        image = image.convert("RGB")
     x, y, w, h = bbox
     img_w, img_h = image.size
-    
-    if sample_type == "background":
-        # 배경: 바운딩박스를 상하좌우 20% 확장한 영역에서 최빈 색상을 추출
-        pad_x = max(int(w * 0.2), 5)
-        pad_y = max(int(h * 0.2), 5)
-        crop_box = (
-            max(0, x - pad_x),
-            max(0, y - pad_y),
-            min(img_w, x + w + pad_x),
-            min(img_h, y + h + pad_y)
-        )
-    else:
-        # 전경: 바운딩박스 내부 영역 그대로 사용함
-        crop_box = (
-            max(0, x),
-            max(0, y),
-            min(img_w, x + w),
-            min(img_h, y + h)
-        )
-    
-    # 영역이 너무 작으면 기본값 반환 (전경=검정, 배경=흰색)
-    if crop_box[2] <= crop_box[0] or crop_box[3] <= crop_box[1]:
-        return (0, 0, 0) if sample_type == "foreground" else (255, 255, 255)
-    
-    cropped = image.crop(crop_box)
-    
-    try:
-        # RGBA 이미지인 경우 알파 채널을 제거하고 RGB로 변환
-        if cropped.mode != 'RGB':
-            cropped = cropped.convert('RGB')
-        
-        # 성능 최적화: 이미지를 작은 크기로 축소한 뒤 픽셀을 분석
-        small = cropped.resize((min(cropped.width, 50), min(cropped.height, 50)))
-        pixels = list(small.getdata())
-        
-        if not pixels:
-            return (0, 0, 0) if sample_type == "foreground" else (255, 255, 255)
-        
-        # 색상 양자화: RGB 각 채널을 8 단위로 반올림하여 비슷한 색을 하나로 묶음
-        quantized = []
-        for r, g, b in pixels:
-            quantized.append((r // 8 * 8, g // 8 * 8, b // 8 * 8))
-        
-        color_counts = Counter(quantized)
-        
-        if sample_type == "background":
-            # 배경: 가장 많이 나타나는 색상 = 배경색
-            dominant = color_counts.most_common(1)[0][0]
-        else:
-            # 전경(글자색): 어두운 색상들 중에서 가장 빈번한 것을 선택
-            # 밝기순으로 정렬한 뒤, 하위 30%(어두운 쪽)에서 최빈 색상을 추출
-            sorted_colors = sorted(color_counts.items(), 
-                                   key=lambda x: sum(x[0]))  # R+G+B 합 = 밝기 근사
-            dark_cutoff = max(1, len(sorted_colors) // 3)
-            dark_colors = sorted_colors[:dark_cutoff]
-            dominant = max(dark_colors, key=lambda x: x[1])[0]
-        
-        return dominant
-        
-    except Exception as e:
-        print(f"  [경고] 색상 추출 실패: {e}")
-        return (0, 0, 0) if sample_type == "foreground" else (255, 255, 255)
+    inside = _sample_pixels(image, (max(0, x), max(0, y), min(img_w, x + w), min(img_h, y + h)))
+    if not inside:
+        return None
+
+    clusters = _color_clusters(inside)
+    background = _cluster_color(max(clusters.values(), key=lambda cluster: cluster[0]))
+    minimum_count = max(2, len(inside) * MIN_FOREGROUND_SHARE)
+    candidates = [
+        color
+        for color in (_cluster_color(cluster) for cluster in clusters.values() if cluster[0] >= minimum_count)
+        if contrast_ratio(color, background) >= MIN_FOREGROUND_SEPARATION
+    ]
+    if not candidates:
+        return None
+    foreground = max(candidates, key=lambda color: contrast_ratio(color, background))
+    return foreground, background
+
+
+def has_readable_characters(text: str) -> bool:
+    """문자나 숫자가 하나도 없는 OCR 결과(|, /, ▼ 등 구분선·아이콘)는 텍스트 콘텐츠가 아니다."""
+    return any(character.isalnum() for character in text)
 
 
 # ── 메인 분석 클래스 ─────────────────────────────────────────────────────────
@@ -350,25 +340,33 @@ class ContrastAnalyzer:
               "pass_rate": 80.0,          ← 통과율 (%)
               "avg_ratio": 8.45,          ← 전체 평균 명암비
               "min_ratio": 2.31,          ← 가장 낮은 명암비
-              "worst_text": "자세히 보기"  ← 명암비가 가장 낮은 텍스트
+              "worst_text": "자세히 보기", ← 명암비가 가장 낮은 텍스트
+              "skipped_non_text": 4,      ← 문자·숫자가 없어 제외한 인식 결과
+              "skipped_unmeasured": 1     ← 글자색과 배경색을 구분하지 못해 제외한 텍스트
             }
           }
         """
-        image = Image.open(image_path)
-        if image.mode != 'RGB':
-            image = image.convert('RGB')
+        with Image.open(image_path) as source:
+            image = source.convert('RGB')
         
         violations = []
         passes = []
         all_ratios = []
+        skipped_non_text = 0
+        skipped_unmeasured = 0
         
         for i, ocr_item in enumerate(ocr_results):
             text = ocr_item.get("text", "").strip()
             bbox_raw = ocr_item.get("bbox", {})
             confidence = ocr_item.get("confidence", 0)
             
-            # 텍스트가 없거나 너무 짧으면 건너뜀
-            if not text or len(text) < 1:
+            # 텍스트가 없으면 건너뜀
+            if not text:
+                continue
+
+            # 구분선·화살표처럼 문자나 숫자가 없는 인식 결과는 텍스트 콘텐츠가 아님
+            if not has_readable_characters(text):
+                skipped_non_text += 1
                 continue
             
             # bbox 딕셔너리를 (x, y, width, height) 튜플로 변환
@@ -383,9 +381,13 @@ class ContrastAnalyzer:
             if bbox[2] <= 0 or bbox[3] <= 0:
                 continue
             
-            # 해당 바운딩박스 위치에서 전경색/배경색을 픽셀 분석으로 추출함
-            fg_color = extract_dominant_color(image, bbox, "foreground")
-            bg_color = extract_dominant_color(image, bbox, "background")
+            # 해당 바운딩박스 위치에서 전경색/배경색을 픽셀 분석으로 추출함.
+            # 두 색을 구분할 수 없으면 명암비를 알 수 없으므로 판정하지 않음
+            colors = measure_text_colors(image, bbox)
+            if colors is None:
+                skipped_unmeasured += 1
+                continue
+            fg_color, bg_color = colors
             
             # 추출된 두 색상의 명암비를 WCAG 공식으로 계산함
             result = self.calculate_ratio(fg_color, bg_color)
@@ -430,6 +432,8 @@ class ContrastAnalyzer:
             "avg_ratio": round(sum(all_ratios) / total, 2) if total > 0 else 0,
             "min_ratio": round(min(all_ratios), 2) if all_ratios else 0,
             "worst_text": violations[0]["text"] if violations else None,
+            "skipped_non_text": skipped_non_text,
+            "skipped_unmeasured": skipped_unmeasured,
         }
         
         return {

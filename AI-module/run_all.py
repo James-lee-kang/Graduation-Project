@@ -63,7 +63,7 @@ import tempfile
 import time
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 from urllib.parse import urlparse
 
 
@@ -688,6 +688,79 @@ def cv_result_payload(result: Any) -> Dict:
     return {**result, "status": "success"}
 
 
+# CV 위반 상자의 이 비율 이상이 규칙 엔진의 명도 대비 요소와 겹치면 같은 문제로 본다.
+CV_RULE_OVERLAP_THRESHOLD = 0.5
+
+
+def rule_contrast_boxes(rule_result: Any) -> List[Tuple[float, float, float, float]]:
+    """규칙 엔진 color-contrast 위반 요소의 문서 좌표(CSS px) 상자 목록."""
+    boxes = []
+    violations = rule_result.get("violations") if isinstance(rule_result, dict) else None
+    for violation in violations if isinstance(violations, list) else []:
+        rules = violation.get("rules") if isinstance(violation, dict) else None
+        for rule in rules if isinstance(rules, list) else []:
+            if not isinstance(rule, dict) or rule.get("axe_rule_id") != "color-contrast":
+                continue
+            nodes = rule.get("nodes")
+            for node in nodes if isinstance(nodes, list) else []:
+                locator = node.get("locator") if isinstance(node, dict) else None
+                if not isinstance(locator, dict) or locator.get("coordinateSpace") != "DOCUMENT_CSS_PX":
+                    continue
+                values = [finite_numeric_score(locator.get(key)) for key in ("x", "y", "width", "height")]
+                if None not in values and values[2] > 0 and values[3] > 0:
+                    boxes.append(tuple(values))
+    return boxes
+
+
+def drop_cv_violations_covered_by_rules(cv_result: Any,
+                                        rule_result: Any,
+                                        capture_metadata: Any) -> Any:
+    """
+    규칙 엔진이 이미 DOM 요소로 찾은 명도 대비 문제를 CV 위반 목록에서 뺀다.
+
+    같은 글자를 두 엔진이 모두 찾으면 문제 목록에 두 번 나타난다. DOM 요소가 있는
+    규칙 엔진 결과가 위치 표시와 수정 대상 파악에 더 정확하므로 그 결과를 남긴다.
+    CV 통과율(총점)은 실제 측정 결과이므로 바꾸지 않고, 뺀 건수만 요약에 기록한다.
+    """
+    if not valid_cv_result(cv_result) or cv_result_is_not_measured(cv_result):
+        return cv_result
+    boxes = rule_contrast_boxes(rule_result)
+    if not boxes:
+        return cv_result
+
+    # CV 좌표는 스크린샷 픽셀이다. 규칙 엔진의 CSS px로 맞추려면 배율로 나눈다.
+    scale = finite_numeric_score(capture_metadata.get("deviceScaleFactor")) if isinstance(capture_metadata, dict) else None
+    if scale is None or scale <= 0:
+        scale = 1.0
+
+    kept = []
+    for violation in cv_result["violations"]:
+        location = violation.get("location") if isinstance(violation, dict) else None
+        values = [finite_numeric_score(location.get(key)) for key in ("x", "y", "width", "height")]             if isinstance(location, dict) else [None]
+        if None in values or values[2] <= 0 or values[3] <= 0:
+            kept.append(violation)
+            continue
+        left, top, width, height = (value / scale for value in values)
+        area = width * height
+        covered = any(
+            max(0.0, min(left + width, bx + bw) - max(left, bx))
+            * max(0.0, min(top + height, by + bh) - max(top, by))
+            >= area * CV_RULE_OVERLAP_THRESHOLD
+            for bx, by, bw, bh in boxes
+        )
+        if not covered:
+            kept.append(violation)
+
+    duplicates = len(cv_result["violations"]) - len(kept)
+    if duplicates == 0:
+        return cv_result
+    return {
+        **cv_result,
+        "violations": kept,
+        "summary": {**cv_result["summary"], "duplicate_rule_violations": duplicates},
+    }
+
+
 def calculate_total_score(rule_score: Optional[Dict],
                           difficulty_score: Optional[Dict],
                           cv_score: Optional[Dict]) -> Dict[str, Any]:
@@ -1165,6 +1238,8 @@ def main():
     difficulty_result = load_json(OUTPUT_DIR / "result_text_difficulty.json") if step3_ok else None
     suggestion_result = load_json(OUTPUT_DIR / "result_text_suggestions.json") if step4_ok else None
     cv_result = load_json(OUTPUT_DIR / "result_cv.json") if step5_ok else None
+    if step1_ok:
+        cv_result = drop_cv_violations_covered_by_rules(cv_result, rule_result, capture_metadata)
 
     total_score = calculate_total_score(rule_result, difficulty_result, cv_result)
 

@@ -14,6 +14,18 @@ sys.path.insert(0, str(AI_MODULE_DIR / "cv-analyzer"))
 
 import cv_runner
 import run_all
+from contrast_analyzer import ContrastAnalyzer, measure_text_colors
+from PIL import Image, ImageDraw
+
+
+def text_image(background, foreground, size=(120, 60), box=(30, 20, 60, 20)):
+    """배경 위 상자 안에 글자 획처럼 가는 세로줄을 그린 이미지."""
+    image = Image.new("RGB", size, background)
+    draw = ImageDraw.Draw(image)
+    x, y, width, height = box
+    for stroke in range(x + 2, x + width - 2, 6):
+        draw.rectangle((stroke, y + 3, stroke + 2, y + height - 4), fill=foreground)
+    return image
 
 
 class CvMeasurementTests(unittest.TestCase):
@@ -84,6 +96,112 @@ class CvMeasurementTests(unittest.TestCase):
                 self.assertEqual(final["total_score"], 100)
                 self.assertEqual(final["modules"]["cv_visual"]["status"], "failed")
                 self.assertNotIn("cv", final["score_breakdown"]["module_scores"])
+
+
+    def test_colors_are_measured_for_light_text_on_dark_backgrounds(self):
+        image = text_image((0, 0, 0), (255, 255, 255))
+        foreground, background = measure_text_colors(image, (30, 20, 60, 20))
+        self.assertEqual((foreground, background), ((255, 255, 255), (0, 0, 0)))
+        self.assertEqual(ContrastAnalyzer().calculate_ratio(foreground, background)["ratio"], 21.0)
+
+    def test_colors_keep_the_actual_text_color_instead_of_the_quantized_bin(self):
+        image = text_image((255, 255, 255), (119, 119, 119))
+        foreground, background = measure_text_colors(image, (30, 20, 60, 20))
+        self.assertEqual((foreground, background), ((119, 119, 119), (255, 255, 255)))
+        # #777 on white is the classic 4.48:1 failure; quantizing to #707070 would pass.
+        self.assertFalse(ContrastAnalyzer().calculate_ratio(foreground, background)["kwcag_pass"])
+
+    def test_text_on_a_colored_button_is_measured_against_the_button(self):
+        # A green button on a white page: the page outside the text box is not the text's background.
+        image = Image.new("RGB", (160, 60), (255, 255, 255))
+        ImageDraw.Draw(image).rectangle((20, 15, 139, 44), fill=(3, 199, 90))
+        image.paste(text_image((3, 199, 90), (255, 255, 255), size=(60, 20), box=(0, 0, 60, 20)), (50, 20))
+        foreground, background = measure_text_colors(image, (50, 20, 60, 20))
+        self.assertEqual((foreground, background), ((255, 255, 255), (3, 199, 90)))
+
+    def test_boxes_without_a_distinct_text_color_are_not_measured(self):
+        uniform = Image.new("RGB", (120, 60), (0, 128, 0))
+        self.assertIsNone(measure_text_colors(uniform, (30, 20, 60, 20)))
+        self.assertIsNone(measure_text_colors(uniform, (200, 200, 10, 10)), "a box outside the image")
+
+    def test_symbols_and_unmeasurable_text_are_excluded_from_the_pass_rate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "page.png"
+            image = text_image((0, 0, 0), (255, 255, 255), size=(240, 60))
+            ImageDraw.Draw(image).rectangle((150, 0, 239, 59), fill=(255, 255, 255))
+            image.save(path)
+            box = lambda x: {"x": x, "y": 20, "width": 60, "height": 20}
+            result = ContrastAnalyzer().analyze_screenshot(str(path), [
+                {"text": "다운로드", "bbox": box(30)},
+                {"text": "|", "bbox": box(30)},
+                {"text": " ▼ ", "bbox": box(30)},
+                {"text": "빈칸", "bbox": box(165)},
+            ])
+        self.assertEqual(result["summary"]["total"], 1)
+        self.assertEqual(result["summary"]["pass_count"], 1)
+        self.assertEqual(result["summary"]["skipped_non_text"], 2)
+        self.assertEqual(result["summary"]["skipped_unmeasured"], 1)
+        self.assertEqual(result["violations"], [])
+
+    def test_ocr_without_measurable_text_is_a_distinct_unmeasured_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            image = Path(directory) / "page.png"
+            Image.new("RGB", (120, 60), (255, 255, 255)).save(image)
+            output = Path(directory) / "cv.json"
+            texts = [{"text": "/", "bbox": {"x": 10, "y": 10, "width": 20, "height": 20}}]
+            with patch.object(cv_runner, "run_ocr", return_value={"backend": "fixture", "texts": texts}), redirect_stdout(io.StringIO()):
+                result = cv_runner.CVRunner().analyze(str(image), str(output))
+        self.assertEqual(result["reason"], "NO_MEASURABLE_TEXT")
+        self.assertEqual(result["summary"]["skipped_non_text"], 1)
+        final = self.final_result(result)
+        self.assertEqual(final["modules"]["cv_visual"]["status"], "not_measured")
+        self.assertEqual(final["modules"]["cv_visual"]["reason"], "NO_MEASURABLE_TEXT")
+        self.assertNotIn("cv", final["score_breakdown"]["module_scores"])
+
+
+class CvRuleDeduplicationTests(unittest.TestCase):
+    @staticmethod
+    def rule_result(*boxes):
+        nodes = [{"locator": {"coordinateSpace": "DOCUMENT_CSS_PX", "x": x, "y": y, "width": w, "height": h}}
+                 for x, y, w, h in boxes]
+        return {"violations": [{"kwcag_id": "5.4.3", "rules": [
+            {"axe_rule_id": "color-contrast", "nodes": nodes},
+            {"axe_rule_id": "link-name", "nodes": [{"locator": {"coordinateSpace": "DOCUMENT_CSS_PX",
+                                                                 "x": 0, "y": 0, "width": 999, "height": 999}}]}
+        ]}]}
+
+    @staticmethod
+    def cv_result(*locations):
+        return {
+            "summary": {"total_texts_analyzed": 5, "pass_rate": 40, "fail_count": len(locations)},
+            "violations": [{"text": str(index), "location": location} for index, location in enumerate(locations)],
+        }
+
+    def test_cv_findings_on_rule_contrast_elements_are_dropped_without_changing_the_score(self):
+        cv = self.cv_result(
+            {"x": 100, "y": 50, "width": 40, "height": 10},   # inside the rule element
+            {"x": 190, "y": 50, "width": 40, "height": 10},   # 25% overlap only
+            {"x": 400, "y": 400, "width": 20, "height": 10},  # elsewhere
+        )
+        deduplicated = run_all.drop_cv_violations_covered_by_rules(cv, self.rule_result((90, 45, 110, 20)), None)
+        self.assertEqual([violation["text"] for violation in deduplicated["violations"]], ["1", "2"])
+        self.assertEqual(deduplicated["summary"]["duplicate_rule_violations"], 1)
+        self.assertEqual(deduplicated["summary"]["pass_rate"], 40)
+        self.assertEqual(len(cv["violations"]), 3, "the loaded CV result is not mutated")
+
+    def test_screenshot_pixels_are_scaled_to_css_pixels(self):
+        cv = self.cv_result({"x": 200, "y": 100, "width": 80, "height": 20})
+        rule = self.rule_result((100, 50, 40, 10))
+        self.assertEqual(run_all.drop_cv_violations_covered_by_rules(cv, rule, {"deviceScaleFactor": 2})["violations"], [])
+        self.assertIs(run_all.drop_cv_violations_covered_by_rules(cv, rule, {"deviceScaleFactor": 1}), cv)
+
+    def test_results_without_comparable_rule_boxes_are_unchanged(self):
+        cv = self.cv_result({"x": 100, "y": 50, "width": 40, "height": 10})
+        for rule in (None, {"violations": []}, self.rule_result((0, 0, 0, 10))):
+            with self.subTest(rule=rule):
+                self.assertIs(run_all.drop_cv_violations_covered_by_rules(cv, rule, None), cv)
+        empty = {"summary": {"total_texts_analyzed": 0, "pass_rate": 0}, "violations": []}
+        self.assertIs(run_all.drop_cv_violations_covered_by_rules(empty, self.rule_result((0, 0, 9, 9)), None), empty)
 
 
 if __name__ == "__main__":
