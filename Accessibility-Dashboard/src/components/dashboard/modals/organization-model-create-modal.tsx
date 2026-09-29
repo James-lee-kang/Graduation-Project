@@ -1,119 +1,164 @@
+import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+
 import { PanelMessage } from "../shared/display";
+import { preventAccidentalSubmit } from "../shared/form-keyboard";
 import { useDialogAccessibility } from "../shared/use-dialog-accessibility";
 
 export function OrganizationModelCreateModal({
   isOpen,
-  isDarkMode,
   name,
-  description,
   isSubmitting,
+  hasPendingOrganizationCreate,
+  canDiscardRecovery,
+  isRecoveryBlocked,
   errorMessage,
   onNameChange,
-  onDescriptionChange,
   onClose,
-  onSubmit
+  onSubmit,
+  onDiscardRecovery
 }: {
   isOpen: boolean;
-  isDarkMode: boolean;
   name: string;
-  description: string;
   isSubmitting: boolean;
+  hasPendingOrganizationCreate: boolean;
+  canDiscardRecovery: boolean;
+  isRecoveryBlocked: boolean;
   errorMessage: string;
   onNameChange: (value: string) => void;
-  onDescriptionChange: (value: string) => void;
   onClose: () => void;
   onSubmit: () => Promise<void>;
+  onDiscardRecovery: () => void;
 }) {
-  const dialogRef = useDialogAccessibility({
+  const hasRecovery = hasPendingOrganizationCreate || isRecoveryBlocked;
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const previousHasRecoveryRef = useRef(hasRecovery);
+  const dialogRef = useDialogAccessibility<HTMLFormElement>({
     isOpen,
     onClose,
     closeDisabled: isSubmitting
   });
+
+  useEffect(() => {
+    const didFinishRecovery = previousHasRecoveryRef.current && !hasRecovery;
+    previousHasRecoveryRef.current = hasRecovery;
+    if (!isOpen || !didFinishRecovery) {
+      return;
+    }
+
+    const focusFrame = window.requestAnimationFrame(() => {
+      nameInputRef.current?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(focusFrame);
+  }, [hasRecovery, isOpen]);
 
   if (!isOpen) {
     return null;
   }
 
   return createPortal(
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/55 px-4 py-6 backdrop-blur-sm">
-      <div className="absolute inset-0" onClick={onClose} />
-      <article
+    <div className="dashboard-modal-layer">
+      <div
+        className="absolute inset-0"
+        onClick={() => {
+          if (!isSubmitting) {
+            onClose();
+          }
+        }}
+      />
+      <form
         ref={dialogRef}
+        noValidate
+        onKeyDown={preventAccidentalSubmit}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!isSubmitting && !isRecoveryBlocked) void onSubmit();
+        }}
         role="dialog"
         aria-modal="true"
         aria-labelledby="organization-create-title"
-        aria-describedby="organization-create-description"
         tabIndex={-1}
-        className={`relative z-10 w-full max-w-xl rounded-2xl border p-5 ${
-          isDarkMode ? "border-[#23272f] bg-[#0C0E11]" : "border-slate-200 bg-white"
-        }`}
+        className="dashboard-modal-surface dashboard-modal-content w-full max-w-md"
       >
-        <h3 id="organization-create-title" className={`text-lg font-semibold ${isDarkMode ? "text-white" : "text-slate-900"}`}>프로젝트 추가</h3>
-        <p id="organization-create-description" className={`mt-1 text-sm ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>이름과 설명을 입력해 새 프로젝트를 만듭니다.</p>
+        <h3
+          id="organization-create-title"
+          className="dashboard-modal-title"
+        >
+          프로젝트 추가
+        </h3>
 
-        {errorMessage.length > 0 && <PanelMessage label={`프로젝트 생성 실패: ${errorMessage}`} isError />}
+        {errorMessage.length > 0 && (
+          <PanelMessage
+            className="dashboard-modal-message"
+            label={hasRecovery ? errorMessage : `프로젝트 생성 실패: ${errorMessage}`}
+            isError
+          />
+        )}
 
-        <div className="mt-4 space-y-4">
-          <label className="block">
-            <span className={`mb-1 block text-sm font-semibold ${isDarkMode ? "text-slate-300" : "text-slate-700"}`}>프로젝트 이름</span>
-            <input
-              value={name}
-              onChange={(event) => onNameChange(event.target.value)}
-              className={`h-10 w-full rounded-lg border px-3 text-sm outline-none ${
-                isDarkMode
-                  ? "border-[#23272f] bg-[#11141a] text-white placeholder:text-slate-500 focus:border-slate-500"
-                  : "border-slate-200 text-slate-900 placeholder:text-slate-400 focus:border-slate-400"
-              }`}
-              placeholder="예: 고령자 접근성 포털"
-            />
-          </label>
-
-          <label className="block">
-            <span className={`mb-1 block text-sm font-semibold ${isDarkMode ? "text-slate-300" : "text-slate-700"}`}>설명</span>
-            <textarea
-              value={description}
-              onChange={(event) => onDescriptionChange(event.target.value)}
-              className={`min-h-28 w-full rounded-lg border px-3 py-2 text-sm outline-none ${
-                isDarkMode
-                  ? "border-[#23272f] bg-[#11141a] text-white placeholder:text-slate-500 focus:border-slate-500"
-                  : "border-slate-200 text-slate-900 placeholder:text-slate-400 focus:border-slate-400"
-              }`}
-              placeholder="프로젝트 목적과 범위를 입력하세요"
-            />
-          </label>
+        <div className="mt-5">
+          <Input
+            ref={nameInputRef}
+            aria-label="프로젝트 이름"
+            value={name}
+            maxLength={100}
+            disabled={isSubmitting || hasRecovery}
+            onChange={(event) => onNameChange(event.target.value)}
+            className="dashboard-modal-input"
+            placeholder="프로젝트 이름"
+          />
         </div>
 
-        <div className="mt-5 flex items-center justify-end gap-2">
-          <button
+        <div className="dashboard-modal-actions">
+          {canDiscardRecovery && (
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              disabled={isSubmitting}
+              onClick={() => {
+                const shouldDiscard = window.confirm(
+                  "프로젝트가 이미 생성되지 않았는지 목록에서 확인하셨나요? 이전 작업 정보를 삭제하면 같은 프로젝트가 다시 생성될 수 있습니다. 그래도 삭제할까요?"
+                );
+                if (shouldDiscard) {
+                  onDiscardRecovery();
+                }
+              }}
+              className="dashboard-modal-button dashboard-modal-button--danger"
+            >
+              이전 작업 정보 삭제
+            </Button>
+          )}
+          <Button
             type="button"
+            variant="secondary"
+            size="sm"
             disabled={isSubmitting}
             onClick={onClose}
-            className={`inline-flex h-9 items-center rounded-lg px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60 ${
-              isDarkMode
-                ? "bg-slate-900 font-semibold text-white hover:bg-slate-800"
-                : "border border-slate-200 bg-white font-medium text-slate-700 hover:bg-slate-50"
-            }`}
+            className="dashboard-modal-button"
           >
-            취소
-          </button>
-          <button
-            type="button"
-            disabled={isSubmitting}
-            onClick={() => {
-              void onSubmit();
-            }}
-            className={`inline-flex h-9 items-center rounded-lg px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60 ${
-              isDarkMode
-                ? "border border-transparent bg-[#ef6a50] font-semibold text-white hover:bg-[#e85d43]"
-                : "bg-[#ef6a50] font-semibold text-white hover:bg-[#e85d43]"
-            }`}
-          >
-            {isSubmitting ? "생성 중..." : "생성"}
-          </button>
+            {hasRecovery ? "닫기" : "취소"}
+          </Button>
+          {!isRecoveryBlocked && (
+            <Button
+              type="submit"
+              size="sm"
+              disabled={isSubmitting}
+              className="dashboard-modal-button dashboard-modal-button--primary"
+            >
+              {hasPendingOrganizationCreate
+                ? isSubmitting
+                  ? "처리 중..."
+                  : "프로젝트 다시 시도"
+                : isSubmitting
+                  ? "생성 중..."
+                  : "생성"}
+            </Button>
+          )}
         </div>
-      </article>
+      </form>
     </div>,
     document.body
   );

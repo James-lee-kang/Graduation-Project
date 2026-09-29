@@ -1,51 +1,98 @@
-﻿import { ArrowDown, ArrowUp, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
-import { useState } from "react";
+import type { ProjectPageActions } from "../dashboard-surface.types";
+﻿import { ArrowDown, ArrowUp, ExternalLink, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { getApiErrorMessage } from "@/services/backend-api";
+import { getVerifiedFaviconUrl } from "@/services/favicon-url";
 import type {
-  AnalysisResult,
   EvaluationTargetModel,
   EvaluationRequestModel,
-  IssueResultModel,
   OrganizationModel,
   ScoreResult
 } from "@/types/accessibility-domain";
 
 import { PanelMessage, renderTargetTypeIcon } from "../shared/display";
+import { buildLatestEvaluationRequestByTargetId } from "@/services/evaluation-request-selection";
 import { useDialogAccessibility } from "../shared/use-dialog-accessibility";
 import { formatDateTime, mapScanStatus } from "../shared/utils";
 
 type ProjectDetailSiteSortKey = "targetType" | "siteName" | "score" | "updatedAt";
 
+function ProjectFavicon({
+  faviconUrl,
+  isDarkMode,
+  targetType
+}: {
+  faviconUrl: string | null;
+  isDarkMode: boolean;
+  targetType: EvaluationTargetModel["targetType"];
+}) {
+  const [loadedFaviconUrl, setLoadedFaviconUrl] = useState<string | null>(null);
+  const [failedFaviconUrl, setFailedFaviconUrl] = useState<string | null>(null);
+  const hasLoadedFavicon = faviconUrl !== null && loadedFaviconUrl === faviconUrl;
+
+  return (
+    <span
+      className={cn(
+        "dashboard-project-favicon relative inline-flex shrink-0 items-center justify-center overflow-hidden",
+        hasLoadedFavicon
+          ? "bg-transparent"
+          : isDarkMode
+            ? "border border-white/10 bg-white text-[#6e6e73]"
+            : "border border-[#e5e5ea] bg-white text-[#86868b]"
+      )}
+      data-favicon-loaded={hasLoadedFavicon ? "true" : "false"}
+      aria-hidden="true"
+    >
+      {!hasLoadedFavicon ? (
+        <span className="absolute inset-0 flex items-center justify-center">
+          {renderTargetTypeIcon(targetType)}
+        </span>
+      ) : null}
+      {faviconUrl !== null && failedFaviconUrl !== faviconUrl ? (
+        <img
+          src={faviconUrl}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          referrerPolicy="no-referrer"
+          className={cn(
+            "absolute inset-0 h-full w-full object-cover",
+            hasLoadedFavicon ? "opacity-100" : "opacity-0"
+          )}
+          onLoad={() => {
+            setLoadedFaviconUrl(faviconUrl);
+            setFailedFaviconUrl(null);
+          }}
+          onError={() => {
+            setLoadedFaviconUrl(null);
+            setFailedFaviconUrl(faviconUrl);
+          }}
+        />
+      ) : null}
+    </span>
+  );
+}
 
 export function OrganizationModelDetailPanel({
   organization,
   evaluationRequests,
   scoreResults,
   isDarkMode,
-  onOpenCreateSiteModal,
   onSiteClick,
-  onUpdateEvaluationTargetModel,
-  onDeleteEvaluationTargetModel
+  actions
 }: {
   organization: OrganizationModel;
   evaluationRequests: EvaluationRequestModel[];
-  analysisResults: AnalysisResult[];
   scoreResults: ScoreResult[];
-  issueResults: IssueResultModel[];
   isDarkMode: boolean;
-  onOpenCreateSiteModal: () => void;
   onSiteClick: (siteId: number) => void;
-  onUpdateEvaluationTargetModel: (input: {
-    projectId: number;
-    siteId: number;
-    name: string;
-    accessUrl: string;
-  }) => Promise<void>;
-  onDeleteEvaluationTargetModel: (input: { projectId: number; siteId: number }) => Promise<void>;
+  actions: ProjectPageActions | null;
 }) {
+  const readOnly = actions === null;
   const [siteSortConfig, setSiteSortConfig] = useState<{
     key: ProjectDetailSiteSortKey;
     direction: "asc" | "desc";
@@ -53,50 +100,54 @@ export function OrganizationModelDetailPanel({
     key: "updatedAt",
     direction: "desc"
   });
-  const [editingEvaluationTargetModel, setEditingEvaluationTargetModel] = useState<EvaluationTargetModel | null>(null);
-  const [editSiteName, setEditSiteName] = useState("");
-  const [editSiteBaseUrl, setEditSiteBaseUrl] = useState("");
-  const [editEvaluationTargetError, setEditEvaluationTargetError] = useState("");
-  const [isSavingEvaluationTarget, setIsSavingEvaluationTarget] = useState(false);
   const [deletingEvaluationTargetModel, setDeletingEvaluationTargetModel] = useState<EvaluationTargetModel | null>(null);
   const [deleteEvaluationTargetError, setDeleteEvaluationTargetError] = useState("");
   const [isDeletingEvaluationTarget, setIsDeletingEvaluationTarget] = useState(false);
+  const deleteEvaluationTargetLockRef = useRef(false);
+  const activeDeleteEvaluationTargetOperationIdRef = useRef<symbol | null>(null);
 
-  const evaluationTargetIds = new Set(organization.evaluationTargets.map((target) => target.id));
+  useEffect(
+    () => () => {
+      activeDeleteEvaluationTargetOperationIdRef.current = null;
+      deleteEvaluationTargetLockRef.current = false;
+    },
+    []
+  );
+
+  const activeEvaluationTargets = organization.evaluationTargets.filter((target) => target.status !== "DELETED");
+  const evaluationTargetIds = new Set(activeEvaluationTargets.map((target) => target.id));
   const organizationEvaluationRequests = evaluationRequests.filter((request) =>
     evaluationTargetIds.has(request.evaluationTargetId)
   );
-  const latestScanBySiteId = new Map<number, EvaluationRequestModel>();
-  for (const evaluationRequest of organizationEvaluationRequests) {
-    const existing = latestScanBySiteId.get(evaluationRequest.evaluationTargetId);
-    if (!existing) {
-      latestScanBySiteId.set(evaluationRequest.evaluationTargetId, evaluationRequest);
-      continue;
-    }
-
-    const currentTime = Date.parse(evaluationRequest.updatedAt);
-    const existingTime = Date.parse(existing.updatedAt);
-    if (currentTime > existingTime) {
-      latestScanBySiteId.set(evaluationRequest.evaluationTargetId, evaluationRequest);
-    }
-  }
+  const latestActivityRequestBySiteId = buildLatestEvaluationRequestByTargetId(
+    organizationEvaluationRequests
+  );
   const scoreByEvaluationRequestId = new Map(scoreResults.map((scoreResult) => [scoreResult.evaluationRequestId, scoreResult]));
+  const scoredRequestIds = new Set(scoreByEvaluationRequestId.keys());
+  const latestScoredRequestBySiteId = buildLatestEvaluationRequestByTargetId(
+    organizationEvaluationRequests,
+    scoredRequestIds
+  );
 
-  const evaluationTargetById = new Map(organization.evaluationTargets.map((site) => [site.id, site]));
+  const evaluationTargetById = new Map(activeEvaluationTargets.map((site) => [site.id, site]));
 
-  const siteRows = organization.evaluationTargets.map((site) => {
-    const latestScan = latestScanBySiteId.get(site.id);
-    const latestScoreResult = latestScan ? scoreByEvaluationRequestId.get(latestScan.id) : undefined;
+  const siteRows = activeEvaluationTargets.map((site) => {
+    const latestActivityRequest = latestActivityRequestBySiteId.get(site.id);
+    const latestScoredRequest = latestScoredRequestBySiteId.get(site.id);
+    const latestScoreResult = latestScoredRequest
+      ? scoreByEvaluationRequestId.get(latestScoredRequest.id)
+      : undefined;
 
     return {
       id: site.id,
       targetType: site.targetType,
       name: site.name,
       accessUrl: site.accessUrl,
-      status: latestScan ? mapScanStatus(latestScan.status) : "미진행",
+      faviconUrl: getVerifiedFaviconUrl(site.faviconUrl),
+      status: latestActivityRequest ? mapScanStatus(latestActivityRequest.status) : "미진행",
       totalScore: latestScoreResult?.totalScore ?? null,
-      finishedAt: latestScan?.updatedAt ?? null,
-      lastUpdatedAt: latestScan?.updatedAt ?? site.createdAt
+      finishedAt: latestScoredRequest?.updatedAt ?? null,
+      lastUpdatedAt: latestScoredRequest?.updatedAt ?? site.createdAt
     };
   });
 
@@ -212,90 +263,60 @@ export function OrganizationModelDetailPanel({
     return "PC 웹";
   };
 
-  const openEditEvaluationTargetModel = (site: EvaluationTargetModel) => {
-    setEditingEvaluationTargetModel(site);
-    setEditSiteName(site.name);
-    setEditSiteBaseUrl(site.accessUrl);
-    setEditEvaluationTargetError("");
-  };
-
   const openDeleteEvaluationTargetModel = (site: EvaluationTargetModel) => {
     setDeletingEvaluationTargetModel(site);
     setDeleteEvaluationTargetError("");
   };
 
-  const closeEditEvaluationTargetModel = () => {
-    setEditingEvaluationTargetModel(null);
-    setEditEvaluationTargetError("");
-  };
-
   const closeDeleteEvaluationTargetModel = () => {
+    if (deleteEvaluationTargetLockRef.current) {
+      return;
+    }
     setDeletingEvaluationTargetModel(null);
     setDeleteEvaluationTargetError("");
   };
 
-  const editDialogRef = useDialogAccessibility({
-    isOpen: editingEvaluationTargetModel !== null,
-    onClose: closeEditEvaluationTargetModel,
-    closeDisabled: isSavingEvaluationTarget
-  });
   const deleteDialogRef = useDialogAccessibility({
     isOpen: deletingEvaluationTargetModel !== null,
     onClose: closeDeleteEvaluationTargetModel,
     closeDisabled: isDeletingEvaluationTarget
   });
 
-  const handleSaveEvaluationTargetModel = async () => {
-    if (!editingEvaluationTargetModel) {
-      return;
-    }
-
-    const name = editSiteName.trim();
-    const accessUrl = editSiteBaseUrl.trim();
-
-    if (name.length === 0 || accessUrl.length === 0) {
-      setEditEvaluationTargetError("페이지 이름과 주소는 필수입니다.");
-      return;
-    }
-
-    setIsSavingEvaluationTarget(true);
-    setEditEvaluationTargetError("");
-
-    try {
-      await onUpdateEvaluationTargetModel({
-        projectId: organization.id,
-        siteId: editingEvaluationTargetModel.id,
-        name,
-        accessUrl
-      });
-
-      closeEditEvaluationTargetModel();
-    } catch (error) {
-      setEditEvaluationTargetError(getApiErrorMessage(error, "페이지 수정 중 오류가 발생했습니다."));
-    } finally {
-      setIsSavingEvaluationTarget(false);
-    }
-  };
-
   const handleConfirmDeleteEvaluationTargetModel = async () => {
-    if (!deletingEvaluationTargetModel) {
+    if (!actions || deleteEvaluationTargetLockRef.current || !deletingEvaluationTargetModel) {
       return;
     }
 
+    const target = deletingEvaluationTargetModel;
+    const projectId = organization.id;
+    deleteEvaluationTargetLockRef.current = true;
+    const operationId = Symbol("project-page-delete");
+    activeDeleteEvaluationTargetOperationIdRef.current = operationId;
     setIsDeletingEvaluationTarget(true);
     setDeleteEvaluationTargetError("");
 
     try {
-      await onDeleteEvaluationTargetModel({
-        projectId: organization.id,
-        siteId: deletingEvaluationTargetModel.id
+      await actions.onDeleteEvaluationTargetModel({
+        projectId,
+        siteId: target.id
       });
 
-      closeDeleteEvaluationTargetModel();
+      if (activeDeleteEvaluationTargetOperationIdRef.current === operationId) {
+        setDeletingEvaluationTargetModel(null);
+        setDeleteEvaluationTargetError("");
+      }
     } catch (error) {
-      setDeleteEvaluationTargetError(getApiErrorMessage(error, "페이지 제거 중 오류가 발생했습니다."));
+      if (activeDeleteEvaluationTargetOperationIdRef.current === operationId) {
+        setDeleteEvaluationTargetError(
+          getApiErrorMessage(error, "페이지를 제거하지 못했습니다. 잠시 후 다시 시도해 주세요.")
+        );
+      }
     } finally {
-      setIsDeletingEvaluationTarget(false);
+      if (activeDeleteEvaluationTargetOperationIdRef.current === operationId) {
+        activeDeleteEvaluationTargetOperationIdRef.current = null;
+        deleteEvaluationTargetLockRef.current = false;
+        setIsDeletingEvaluationTarget(false);
+      }
     }
   };
 
@@ -304,62 +325,213 @@ export function OrganizationModelDetailPanel({
   const runningStatusLabel = mapScanStatus("queued");
 
   return (
-    <div className="space-y-3 overflow-visible">
-      <div className="absolute right-[var(--dashboard-side-gutter)] top-[calc(var(--dashboard-fixed-top)+var(--dashboard-control-size)+5.75rem)] z-50">
+    <div className="dashboard-project-panel overflow-visible">
+      <div className="dashboard-project-add-action absolute top-[calc(var(--dashboard-fixed-top)+var(--dashboard-control-size)+1rem)] z-50">
         <button
           type="button"
-          onClick={onOpenCreateSiteModal}
-          className="inline-flex h-11 shrink-0 items-center gap-2 rounded-2xl border border-transparent bg-[#ef6a50] px-5 text-sm font-bold text-white transition hover:bg-[#e85d43] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ef6a50]/30"
+          onClick={actions?.onOpenCreateSiteModal}
+          disabled={readOnly}
+          title={readOnly ? "읽기 전용 미리보기에서는 페이지를 추가할 수 없습니다" : undefined}
+          className="dashboard-project-add-button inline-flex shrink-0 items-center bg-[#0071e3] font-semibold text-white transition-colors hover:bg-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0071e3]/40 disabled:cursor-not-allowed"
         >
-          <Plus size={18} strokeWidth={2.4} className="-ml-2" />
           페이지 추가
         </button>
       </div>
 
-      <div className="space-y-0">
-          <div className="project-list-table overflow-visible bg-transparent">
-            <div className="overflow-visible">
-              <table className="w-full table-fixed text-left">
+      {sortedSiteRows.length === 0 ? (
+        <div
+          className={`dashboard-project-content rounded-[14px] border px-5 py-10 text-center text-sm backdrop-blur-xl ${
+            isDarkMode
+              ? "border-white/[0.12] bg-white/[0.05] text-[#8e8e93] shadow-[inset_0_1px_0_rgba(255,255,255,0.07),0_10px_28px_rgba(0,0,0,0.18)]"
+              : "border-white/85 bg-white/65 text-[#6e6e73] shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_10px_28px_rgba(29,29,31,0.07)]"
+          }`}
+        >
+          등록된 페이지가 없습니다.
+        </div>
+      ) : (
+        <div className="dashboard-project-content dashboard-project-grid grid">
+          {sortedSiteRows.map((row) => (
+            <article
+              key={row.id}
+              className={`dashboard-project-card group relative flex flex-col overflow-hidden border backdrop-blur-xl transition-[background-color,border-color,box-shadow] ${
+                isDarkMode
+                  ? "border-white/[0.12] bg-white/[0.05] shadow-[inset_0_1px_0_rgba(255,255,255,0.07),0_10px_28px_rgba(0,0,0,0.18)] hover:border-white/[0.2] hover:bg-white/[0.075]"
+                  : "border-white/85 bg-white/65 shadow-[inset_0_1px_0_rgba(255,255,255,0.95),0_10px_28px_rgba(29,29,31,0.07)] hover:border-white hover:bg-white/80"
+              }`}
+            >
+              <button
+                type="button"
+                aria-label={`${row.name} 상세 보기`}
+                onClick={() => onSiteClick(row.id)}
+                className="absolute inset-0 z-0 cursor-pointer rounded-[inherit] focus-visible:outline-2 focus-visible:outline-solid focus-visible:outline-offset-[-3px] focus-visible:outline-[var(--dashboard-accent)]"
+              />
+
+              {!readOnly ? <div className="dashboard-project-card-delete absolute z-10">
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    const site = evaluationTargetById.get(row.id);
+                    if (site) {
+                      openDeleteEvaluationTargetModel(site);
+                    }
+                  }}
+                  aria-label={`${row.name} 제거`}
+                  className={`dashboard-project-card-delete-button inline-flex items-center justify-center rounded-full opacity-0 transition group-hover:opacity-100 focus:opacity-100 ${
+                    isDarkMode
+                      ? "text-rose-400 hover:bg-rose-500/10 hover:text-rose-300"
+                      : "text-red-600 hover:bg-red-50 hover:text-red-700"
+                  }`}
+                >
+                  <Trash2 size={13} aria-hidden="true" />
+                </button>
+              </div> : null}
+
+              <div className="dashboard-project-card-header pointer-events-none relative z-[1] flex min-w-0 items-start">
+                <ProjectFavicon
+                  key={row.faviconUrl ?? "fallback"}
+                  faviconUrl={row.faviconUrl}
+                  isDarkMode={isDarkMode}
+                  targetType={row.targetType}
+                />
+
+                <div className="min-w-0">
+                  <h3
+                    className={`dashboard-project-card-title truncate font-semibold ${
+                      isDarkMode ? "text-[#f5f5f7]" : "text-[#1d1d1f]"
+                    }`}
+                    title={row.name}
+                  >
+                    {row.name}
+                  </h3>
+                  <p className={`dashboard-project-card-meta mt-0.5 truncate ${isDarkMode ? "text-[#8e8e93]" : "text-[#86868b]"}`}>
+                    {getTargetTypeInfo(row.targetType)}
+                  </p>
+                </div>
+              </div>
+
+              <div className="dashboard-project-card-main pointer-events-none relative z-[1] flex items-center justify-between">
+                {row.accessUrl && !readOnly ? (
+                  <a
+                    href={row.accessUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={row.accessUrl}
+                    onClick={(event) => event.stopPropagation()}
+                    className={`dashboard-project-card-url pointer-events-auto relative z-[2] flex min-w-0 items-center gap-1 truncate hover:underline ${
+                      isDarkMode ? "text-[#a1a1a6]" : "text-[#6e6e73]"
+                    }`}
+                  >
+                    <span className="truncate">{row.accessUrl}</span>
+                    <ExternalLink size={10} className="shrink-0" aria-hidden="true" />
+                  </a>
+                ) : row.accessUrl ? (
+                  <p
+                    data-copyable
+                    className={`dashboard-project-card-url min-w-0 truncate ${
+                      isDarkMode ? "text-[#a1a1a6]" : "text-[#6e6e73]"
+                    }`}
+                    title={row.accessUrl}
+                  >
+                    {row.accessUrl}
+                  </p>
+                ) : (
+                  <p className={`dashboard-project-card-url min-w-0 truncate ${isDarkMode ? "text-[#6e6e73]" : "text-[#a1a1a6]"}`}>
+                    등록된 주소 없음
+                  </p>
+                )}
+
+                <span
+                  className={`dashboard-project-card-score pointer-events-none shrink-0 font-semibold tabular-nums ${
+                    isDarkMode ? "text-[#f5f5f7]" : "text-[#1d1d1f]"
+                  }`}
+                  aria-label={`점수 ${row.totalScore !== null ? `${row.totalScore}점` : "없음"}`}
+                >
+                  {row.totalScore !== null ? `${row.totalScore}점` : "-"}
+                </span>
+              </div>
+
+              <div
+                className={`dashboard-project-card-footer pointer-events-none relative z-[1] mt-auto flex items-center justify-between border-t ${
+                  isDarkMode ? "border-[#38383a]" : "border-[#e5e5ea]"
+                }`}
+              >
+                <span className={`dashboard-project-card-status inline-flex min-w-0 items-center gap-1.5 ${isDarkMode ? "text-[#c7c7cc]" : "text-[#515154]"}`}>
+                  <span
+                    className={cn(
+                      "dashboard-project-status-dot shrink-0 rounded-full",
+                      row.status === finishedStatusLabel && "bg-emerald-400",
+                      row.status === runningStatusLabel && "bg-sky-400",
+                      row.status === failedStatusLabel && "bg-rose-400",
+                      row.status !== finishedStatusLabel &&
+                        row.status !== runningStatusLabel &&
+                        row.status !== failedStatusLabel &&
+                        (isDarkMode ? "bg-[#6e6e73]" : "bg-[#a1a1a6]")
+                    )}
+                    aria-hidden="true"
+                  />
+                  <span className="truncate">{row.status}</span>
+                </span>
+                <time
+                  className={`dashboard-project-card-time shrink-0 tabular-nums ${isDarkMode ? "text-[#8e8e93]" : "text-[#86868b]"}`}
+                  title={formatDateTime(row.finishedAt)}
+                >
+                  {formatDateTime(row.finishedAt)}
+                </time>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+
+      <div className="hidden">
+          <div
+            className={`project-list-table overflow-hidden rounded-[18px] border ${
+              isDarkMode ? "border-[#3a3a3c] bg-[#1c1c1e]" : "border-[#d2d2d7] bg-white"
+            }`}
+          >
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[800px] table-fixed text-left">
               <colgroup>
                 <col className="w-[52px]" />
-                <col className="w-[23%]" />
-                <col className="w-[34%]" />
-                <col className="w-[120px]" />
-                <col className="w-[110px]" />
-                <col className="w-[160px]" />
-                <col className="w-[6%]" />
+                <col className="w-[21%]" />
+                <col className="w-[30%]" />
+                <col className="w-[72px]" />
+                <col className="w-[72px]" />
+                <col className="w-[136px]" />
+                <col className="w-11" />
               </colgroup>
               <thead className="project-list-head border-b border-slate-200/80 text-xs text-slate-500">
                 <tr>
-                  <th className="h-8 py-0 font-medium text-center align-middle">
+                  <th className="h-10 py-0 text-center font-medium align-middle">
                     <button
                       type="button"
                       onClick={() => handleSiteSort("targetType")}
-                      className="flex h-8 w-full items-center justify-center px-0 text-center cursor-pointer select-none"
+                      className="flex h-10 w-full cursor-pointer select-none items-center justify-center px-0 text-center"
                     >
-                      <span className="relative inline-flex -translate-x-3 items-center justify-center">
+                      <span className="relative inline-flex items-center justify-center">
                         종류
                         {getCenteredSiteSortIndicator("targetType")}
                       </span>
                     </button>
                   </th>
-                  <th className="h-8 py-0 font-medium align-middle">
+                  <th className="h-10 py-0 font-medium align-middle">
                     <button
                       type="button"
                       onClick={() => handleSiteSort("siteName")}
-                      className="-ml-5 flex h-8 w-full items-center gap-0.5 px-0 text-left cursor-pointer select-none"
+                      className="flex h-10 w-full cursor-pointer select-none items-center gap-0.5 px-3 text-left"
                     >
                       페이지 이름
                       {getSiteSortIndicator("siteName")}
                     </button>
                   </th>
-                  <th className="h-8 px-4 py-0 font-medium align-middle">주소</th>
-                  <th className="h-8 px-4 py-0 font-medium text-center align-middle">상태</th>
-                  <th className="h-8 py-0 font-medium text-center align-middle">
+                  <th className="h-10 px-3 py-0 font-medium align-middle">주소</th>
+                  <th className="h-10 px-3 py-0 text-center font-medium align-middle">상태</th>
+                  <th className="h-10 py-0 text-center font-medium align-middle">
                     <button
                       type="button"
                       onClick={() => handleSiteSort("score")}
-                      className="flex h-8 w-full items-center justify-center px-4 text-center cursor-pointer select-none"
+                      className="flex h-10 w-full cursor-pointer select-none items-center justify-center px-3 text-center"
                     >
                       <span className="relative inline-flex items-center justify-center">
                         최근 점수
@@ -367,17 +539,17 @@ export function OrganizationModelDetailPanel({
                       </span>
                     </button>
                   </th>
-                  <th className="h-8 py-0 font-medium align-middle">
+                  <th className="h-10 py-0 font-medium align-middle">
                     <button
                       type="button"
                       onClick={() => handleSiteSort("updatedAt")}
-                      className="flex h-8 w-full items-center gap-0.5 px-4 text-left cursor-pointer select-none"
+                      className="flex h-10 w-full cursor-pointer select-none items-center gap-0.5 px-3 text-left"
                     >
                       최근 완료 시각
                       {getSiteSortIndicator("updatedAt")}
                     </button>
                   </th>
-                  <th className="h-8 px-4 py-0 align-middle" aria-label="페이지 액션" />
+                  <th className="h-10 px-3 py-0 align-middle" aria-label="페이지 액션" />
                 </tr>
               </thead>
               <tbody>
@@ -392,12 +564,16 @@ export function OrganizationModelDetailPanel({
                     <tr
                       key={row.id}
                       onClick={() => onSiteClick(row.id)}
-                      className={`project-list-row group cursor-pointer ${
-                        index !== sortedSiteRows.length - 1 ? "border-b border-slate-200/80" : ""
+                      className={`project-list-row group h-11 cursor-pointer ${
+                        index !== sortedSiteRows.length - 1
+                          ? isDarkMode
+                            ? "border-b border-[#3a3a3c]"
+                            : "border-b border-[#e5e5ea]"
+                          : ""
                       }`}
                     >
-                      <td className="relative px-0 py-1.5 align-middle text-slate-600">
-                        <div className="group/target-type relative flex -translate-x-3 items-center justify-center">
+                      <td className="relative px-0 py-2 align-middle text-slate-600">
+                        <div className="group/target-type relative flex items-center justify-center">
                           <span
                             className={`inline-flex h-7 w-7 items-center justify-center rounded-full transition ${
                               isDarkMode ? "group-hover/target-type:bg-white/[0.06]" : "group-hover/target-type:bg-slate-100"
@@ -406,36 +582,30 @@ export function OrganizationModelDetailPanel({
                           >
                             {renderTargetTypeIcon(row.targetType)}
                           </span>
-                          <span
-                            data-tooltip-tone={isDarkMode ? "dark" : "light"}
-                            className="project-table-tooltip invisible pointer-events-none absolute left-1/2 top-full z-[9999] mt-1.5 -translate-x-1/2 whitespace-nowrap rounded-md px-2 py-1 text-[11px] font-medium group-hover/target-type:visible"
-                          >
-                            {getTargetTypeInfo(row.targetType)}
-                          </span>
                         </div>
                       </td>
-                      <td className="px-0 py-1.5 align-middle">
-                        <div className="-ml-5 min-w-0">
-                          <p className="truncate text-xs font-semibold text-slate-900">{row.name}</p>
+                      <td className="px-3 py-2 align-middle">
+                        <div className="min-w-0">
+                          <p className="truncate text-[0.8125rem] font-semibold text-slate-900">{row.name}</p>
                         </div>
                       </td>
-                      <td className="px-4 py-1.5 align-middle">
+                      <td className="px-3 py-2 align-middle">
                         <a
                           href={row.accessUrl}
                           target="_blank"
                           rel="noreferrer"
                           title={row.accessUrl}
                           onClick={(event) => event.stopPropagation()}
-                          className="inline-block max-w-full truncate text-xs leading-4 text-slate-600 hover:underline"
+                          className="inline-block max-w-full truncate text-[0.8125rem] leading-4 text-slate-600 hover:underline"
                         >
                           {row.accessUrl}
                         </a>
                       </td>
-                      <td className="px-4 py-1.5 align-middle">
+                      <td className="px-3 py-2 align-middle">
                         <div className="flex items-center justify-center">
                           <span
                             className={cn(
-                              "inline-flex items-center rounded-md px-2.5 py-1 text-[11px] font-semibold",
+                              "inline-flex items-center rounded-md px-2 py-0.5 text-[11px] font-semibold",
                               getSiteStatusBadgeClassName(row.status)
                             )}
                           >
@@ -443,45 +613,17 @@ export function OrganizationModelDetailPanel({
                           </span>
                         </div>
                       </td>
-                      <td className="px-4 py-1.5 align-middle text-center">
-                        <span className="text-xs font-medium text-slate-700">
+                      <td className="px-3 py-2 text-center align-middle">
+                        <span className="text-[0.8125rem] font-medium text-slate-700">
                           {row.totalScore !== null ? `${row.totalScore}점` : "-"}
                         </span>
                       </td>
-                      <td className="project-list-updated px-4 py-1.5 align-middle text-xs tabular-nums text-slate-500">
+                      <td className="project-list-updated px-3 py-2 align-middle text-xs tabular-nums text-slate-500">
                         {formatDateTime(row.finishedAt)}
                       </td>
-                      <td className="relative px-4 py-1.5 text-right align-middle">
-                        <div className="group/project-actions absolute right-4 top-1/2 flex h-9 w-[106px] -translate-y-1/2 items-center justify-end">
-                          <div className="pointer-events-none absolute right-9 top-1/2 inline-flex h-9 w-[68px] -translate-y-1/2 items-center justify-end gap-1 opacity-0 transition-all duration-200 ease-out group-hover/project-actions:pointer-events-auto group-hover/project-actions:translate-x-0 group-hover/project-actions:opacity-100 translate-x-1">
-                            <div className="group/action relative flex items-center">
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  const site = evaluationTargetById.get(row.id);
-                                  if (site) {
-                                    openEditEvaluationTargetModel(site);
-                                  }
-                                }}
-                                aria-label="수정"
-                                className={`project-list-icon-action inline-flex h-7 w-7 items-center justify-center rounded-full bg-transparent transition ${
-                                  isDarkMode
-                                    ? "text-white hover:bg-white/[0.075] hover:text-white"
-                                    : "text-slate-700 hover:text-slate-900"
-                                }`}
-                              >
-                                <Pencil size={14} />
-                              </button>
-                              <span
-                                data-tooltip-tone={isDarkMode ? "dark" : "light"}
-                                className={`project-table-tooltip invisible pointer-events-none absolute left-1/2 z-[9999] -translate-x-1/2 whitespace-nowrap rounded-md px-2 py-1 text-[11px] font-medium group-hover/action:visible ${
-                                  index === 0 ? "top-full mt-2" : "bottom-full mb-2"
-                                }`}
-                              >
-                                수정
-                              </span>
-                            </div>
+                      <td className="relative px-3 py-2 text-right align-middle">
+                        <div className="group/project-actions absolute right-3 top-1/2 flex h-9 w-[68px] -translate-y-1/2 items-center justify-end">
+                          <div className="pointer-events-none absolute right-9 top-1/2 inline-flex h-9 w-7 -translate-y-1/2 items-center justify-end opacity-0 transition-all duration-200 ease-out group-hover/project-actions:pointer-events-auto group-hover/project-actions:translate-x-0 group-hover/project-actions:opacity-100 translate-x-1">
                             <div className="group/action relative flex items-center">
                               <button
                                 type="button"
@@ -501,27 +643,7 @@ export function OrganizationModelDetailPanel({
                               >
                                 <Trash2 size={14} className={isDarkMode ? "text-rose-400" : "text-red-600"} />
                               </button>
-                              <span
-                                data-tooltip-tone={isDarkMode ? "dark" : "light"}
-                                className={`project-table-tooltip invisible pointer-events-none absolute left-1/2 z-[9999] -translate-x-1/2 whitespace-nowrap rounded-md px-2 py-1 text-[11px] font-medium group-hover/action:visible ${
-                                  index === 0 ? "top-full mt-2" : "bottom-full mb-2"
-                                }`}
-                              >
-                                제거
-                              </span>
                             </div>
-                          </div>
-                          <div className="group/action relative flex h-7 w-7 items-center justify-center">
-                            <button
-                              type="button"
-                              onClick={(event) => event.stopPropagation()}
-                              className={`project-list-action inline-flex h-7 w-7 items-center justify-center rounded-full bg-transparent transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 ${
-                                isDarkMode ? "text-white" : "text-slate-700"
-                              }`}
-                              aria-label={`${row.name} 관리 메뉴`}
-                            >
-                              <MoreHorizontal size={14} />
-                            </button>
                           </div>
                         </div>
                       </td>
@@ -533,104 +655,9 @@ export function OrganizationModelDetailPanel({
             </div>
           </div>
       </div>
-      {editingEvaluationTargetModel
+      {!readOnly && deletingEvaluationTargetModel
         ? createPortal(
-            <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/55 px-4 py-6 backdrop-blur-sm">
-              <div
-                className="absolute inset-0"
-                onClick={() => {
-                  if (!isSavingEvaluationTarget) {
-                    closeEditEvaluationTargetModel();
-                  }
-                }}
-              />
-              <article
-                ref={editDialogRef}
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="site-edit-title"
-                aria-describedby="site-edit-description"
-                tabIndex={-1}
-                className={`relative z-10 w-full max-w-2xl rounded-2xl border p-5 ${
-                  isDarkMode ? "border-[#23272f] bg-[#0C0E11]" : "border-slate-200 bg-white"
-                }`}
-              >
-                <h3 id="site-edit-title" className={`text-lg font-semibold ${isDarkMode ? "text-white" : "text-slate-900"}`}>페이지 수정</h3>
-                <p id="site-edit-description" className={`mt-1 text-sm ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>
-                  페이지 이름과 주소를 수정할 수 있습니다.
-                </p>
-
-                {editEvaluationTargetError.length > 0 && (
-                  <PanelMessage label={`페이지 수정 실패: ${editEvaluationTargetError}`} isError />
-                )}
-
-                <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                  <label className="block sm:col-span-2">
-                    <span className={`mb-1 block text-sm font-medium ${isDarkMode ? "text-slate-300" : "text-slate-700"}`}>페이지 이름</span>
-                    <input
-                      value={editSiteName}
-                      onChange={(event) => setEditSiteName(event.target.value)}
-                      className={`h-10 w-full rounded-lg border px-3 text-sm outline-none ${
-                        isDarkMode
-                          ? "border-[#23272f] bg-[#11141a] text-white placeholder:text-slate-500 focus:border-slate-500"
-                          : "border-slate-200 text-slate-900 placeholder:text-slate-400 focus:border-slate-400"
-                      }`}
-                      placeholder="예: 방문 안내"
-                    />
-                  </label>
-
-                  <label className="block sm:col-span-2">
-                    <span className={`mb-1 block text-sm font-medium ${isDarkMode ? "text-slate-300" : "text-slate-700"}`}>기본 주소</span>
-                    <input
-                      value={editSiteBaseUrl}
-                      onChange={(event) => setEditSiteBaseUrl(event.target.value)}
-                      className={`h-10 w-full rounded-lg border px-3 text-sm outline-none ${
-                        isDarkMode
-                          ? "border-[#23272f] bg-[#11141a] text-white placeholder:text-slate-500 focus:border-slate-500"
-                          : "border-slate-200 text-slate-900 placeholder:text-slate-400 focus:border-slate-400"
-                      }`}
-                      placeholder="https://example.com"
-                    />
-                  </label>
-
-                </div>
-
-                <div className="mt-5 flex items-center justify-end gap-2">
-                  <button
-                    type="button"
-                    disabled={isSavingEvaluationTarget}
-                    onClick={closeEditEvaluationTargetModel}
-                    className={`inline-flex h-9 items-center rounded-lg px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60 ${
-                      isDarkMode
-                        ? "bg-slate-900 font-semibold text-white hover:bg-slate-800"
-                        : "border border-slate-200 bg-white font-medium text-slate-700 hover:bg-slate-50"
-                    }`}
-                  >
-                    취소
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isSavingEvaluationTarget}
-                    onClick={() => {
-                      void handleSaveEvaluationTargetModel();
-                    }}
-                    className={`inline-flex h-9 items-center rounded-lg px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60 ${
-                      isDarkMode
-                        ? "border border-slate-200 bg-white font-medium text-slate-700 hover:bg-slate-50"
-                        : "bg-slate-900 font-semibold text-white hover:bg-slate-800"
-                    }`}
-                  >
-                    {isSavingEvaluationTarget ? "저장 중..." : "저장"}
-                  </button>
-                </div>
-              </article>
-            </div>,
-            document.body
-          )
-        : null}
-      {deletingEvaluationTargetModel
-        ? createPortal(
-            <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/55 px-4 py-6 backdrop-blur-sm">
+            <div className="dashboard-modal-layer">
               <div
                 className="absolute inset-0"
                 onClick={() => {
@@ -646,45 +673,49 @@ export function OrganizationModelDetailPanel({
                 aria-labelledby="site-delete-title"
                 aria-describedby="site-delete-description"
                 tabIndex={-1}
-                className={`relative z-10 w-full max-w-md rounded-2xl border p-5 ${
-                  isDarkMode ? "border-[#23272f] bg-[#0C0E11]" : "border-slate-200 bg-white"
-                }`}
+                className="dashboard-modal-surface dashboard-modal-content w-full max-w-md"
               >
-                <h3 id="site-delete-title" className={`text-lg font-semibold ${isDarkMode ? "text-white" : "text-slate-900"}`}>페이지 제거</h3>
-                <p id="site-delete-description" className={`mt-2 text-sm ${isDarkMode ? "text-slate-400" : "text-slate-500"}`}>
-                  <span className={isDarkMode ? "font-medium text-white" : "font-medium text-slate-700"}>
+                <h3
+                  id="site-delete-title"
+                  className="dashboard-modal-title"
+                >
+                  페이지 제거
+                </h3>
+                <p
+                  id="site-delete-description"
+                  className="dashboard-modal-description mt-3"
+                >
+                  <span className="font-semibold text-foreground">
                     {deletingEvaluationTargetModel.name}
                   </span>
                   {" "}페이지를 제거하시겠습니까?
                 </p>
 
                 {deleteEvaluationTargetError.length > 0 && (
-                  <PanelMessage label={`페이지 제거 실패: ${deleteEvaluationTargetError}`} isError />
+                  <PanelMessage className="dashboard-modal-message" label={`페이지 제거 실패: ${deleteEvaluationTargetError}`} isError />
                 )}
 
-                <div className="mt-5 flex items-center justify-end gap-2">
+                <div className="dashboard-modal-actions">
                   <button
                     type="button"
                     disabled={isDeletingEvaluationTarget}
                     onClick={closeDeleteEvaluationTargetModel}
-                    className={`inline-flex h-9 items-center rounded-lg px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60 ${
-                      isDarkMode
-                        ? "bg-slate-900 font-semibold text-white hover:bg-slate-800"
-                        : "border border-slate-200 bg-white font-medium text-slate-700 hover:bg-slate-50"
-                    }`}
+                    className="dashboard-modal-button"
                   >
-                    아니요
+                    취소
                   </button>
-                  <button
+                  <Button
                     type="button"
+                    variant="destructive"
+                    size="sm"
                     disabled={isDeletingEvaluationTarget}
                     onClick={() => {
                       void handleConfirmDeleteEvaluationTargetModel();
                     }}
-                    className="inline-flex h-9 items-center rounded-lg bg-rose-600 px-3 text-sm font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="dashboard-modal-button dashboard-modal-button--danger"
                   >
-                    {isDeletingEvaluationTarget ? "제거 중..." : "네"}
-                  </button>
+                    {isDeletingEvaluationTarget ? "제거 중..." : "제거"}
+                  </Button>
                 </div>
               </article>
             </div>,

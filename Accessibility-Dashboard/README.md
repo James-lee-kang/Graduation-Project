@@ -1,134 +1,72 @@
 # Accessibility Dashboard
 
-Vite, React, TypeScript, Tailwind CSS 기반의 접근성 진단 대시보드입니다. 프로젝트와 대상 페이지의 접근성 평가 상태, 점수 추이, 이슈 분포, 최근 스캔 작업을 한 화면에서 확인하고 관리할 수 있습니다.
+React·TypeScript·Vite 기반 접근성 분석 화면이다. 프로젝트와 페이지를 관리하고 분석 진행 상태, 점수, 문제 목록과 라이브 리포트를 확인한다. 점수 추이는 최근 분석 기록을 사용한다.
 
-## 주요 기능
+## 설치와 실행
 
-- 프로젝트와 대상 페이지 목록 관리
-- 대시보드 요약 지표와 최근 스캔 작업 확인
-- 월별 접근성 점수 추이 시각화
-- 현재 미해결 이슈의 심각도별 집계
-- 이슈 분야별 비율과 분석 유형별 평균 점수 차트
-- 페이지 상세 접근성 리포트와 반복 이슈 확인
-- 대상 페이지 재스캔 요청
-- 라이트/다크 테마 전환
+이 디렉터리에서 Node.js와 npm을 사용한다. 의존성은 [package.json](package.json)과 잠금 파일을 기준으로 설치한다.
 
-## 기술 스택
-
-- React 18
-- TypeScript
-- Vite
-- Tailwind CSS
-- React Router
-- Recharts
-- Framer Motion
-- Lucide React
-
-## 시작하기
-
-### 요구 사항
-
-- Node.js LTS 권장
-- npm
-
-### 설치
-
-```bash
-npm install
-```
-
-### 환경 변수
-
-`.env.example`을 참고해 로컬에서만 `.env`를 구성합니다. `.env`는 커밋하지 않습니다.
-
-```bash
-VITE_API_BASE_URL=http://localhost:8080/api
-VITE_DEV_PROXY_TARGET=
-```
-
-`VITE_API_BASE_URL`이 설정되어 있으면 모든 API 요청은 해당 주소를 기준으로 호출됩니다.
-
-`VITE_API_BASE_URL`을 비우면 기본 API 경로는 `/api`입니다. 이 경우 개발 서버에서 백엔드로 프록시하려면 `VITE_DEV_PROXY_TARGET`을 설정합니다.
-
-```bash
-VITE_API_BASE_URL=
-VITE_DEV_PROXY_TARGET=http://localhost:8080
-```
-
-### 개발 서버 실행
-
-```bash
+```powershell
+npm ci
 npm run dev
 ```
 
-기본 주소는 Vite가 출력하는 로컬 URL입니다. 일반적으로 `http://localhost:5173` 또는 `http://127.0.0.1:5173`에서 확인할 수 있습니다.
+브라우저 검증을 실행할 때는 Chromium도 설치한다.
 
-### 프로덕션 빌드
-
-```bash
-npm run build
+```powershell
+npx playwright install chromium
 ```
 
-### 빌드 결과 미리보기
-
-```bash
-npm run preview
-```
+Linux CI에서 시스템 의존성까지 필요하면 `npx playwright install --with-deps chromium`을 사용한다.
 
 ## API 연결
 
-프론트엔드 API 진입점은 [src/config/api.ts](src/config/api.ts)와 [src/services/backend-api.ts](src/services/backend-api.ts)입니다.
+[.env.example](.env.example)을 참고해 로컬 `.env`를 만든다. 개발 프록시를 쓰는 설정은 다음과 같다.
 
-- `src/config/api.ts`: API base URL과 경로 조합 담당
-- `src/services/backend-api.ts`: HTTP 요청, 응답 envelope 처리, 에러 변환, 대시보드 ViewModel 조립 담당
-
-목 서버는 제거되어 있습니다. 로컬 실행 시 실제 백엔드 API를 실행하거나 Vite 프록시를 사용해야 합니다.
-
-현재 대시보드는 실제 백엔드 API 응답을 기준으로 아래 요청을 사용합니다.
-
-- `GET http://localhost:8080/api/requests`
-- `GET http://localhost:8080/api/results/requests/{requestId}/summary`
-
-백엔드 응답 envelope의 `success`가 `false`이면 API 에러로 처리하고, `success`가 `true`이면 `data`만 화면용 모델로 변환합니다. 재스캔 API는 아직 연결된 백엔드 엔드포인트가 없으므로 버튼 클릭 시 미지원 안내를 표시합니다.
-
-## 주요 디렉터리
-
-```text
-src/
-  components/
-    dashboard/
-      modals/                 # 프로젝트/페이지 생성 모달
-      panels/                 # 대시보드, 프로젝트, 리포트, 페이지 상세 패널
-      panels/dashboard/       # 대시보드 위젯과 집계 모델
-      panels/site-dashboard/  # 페이지 상세 화면 위젯
-      shared/                 # 공통 훅, 상수, 유틸리티
-    ui/                       # 공용 UI 컴포넌트
-  config/                     # API 설정
-  services/                   # 백엔드 API 어댑터
-  types/                      # 접근성 도메인 타입
+```dotenv
+VITE_API_BASE_URL=
+VITE_DEV_PROXY_TARGET=http://localhost:9090
+VITE_LIVE_REPORT_VIEWER_BASE_URL=http://localhost:9090
 ```
 
-## 아키텍처 메모
+API 서버에 직접 연결하려면 `VITE_API_BASE_URL=http://localhost:9090/api`를 지정한다. 값이 비어 있으면 앱은 같은 origin의 `/api`로 요청한다.
 
-- 대시보드 데이터 로딩과 5초 폴링은 `use-dashboard-data`로 분리되어 있습니다.
-- 재스캔 요청과 결과 대기는 `use-evaluation-target-rescan`에서 관리합니다.
-- 프로젝트 생성 폼 상태는 `use-organization-model-create-form`에 격리되어 있습니다.
-- 대시보드 차트는 Recharts 기반 위젯으로 분리되어 수동 SVG 계산 부담을 줄였습니다.
-- API 에러는 `ApiRequestError`로 표준화되어 HTTP 상태, 요청 경로, 응답 payload를 추적할 수 있습니다.
+라이브 리포트는 허용된 별도 viewer origin을 사용한다. `VITE_LIVE_REPORT_VIEWER_BASE_URL`과 백엔드의 `LIVE_REPORT_VIEWER_BASE_URL`을 맞춘다. 자세한 연결 계약은 [아키텍처](docs/architecture.md)를 따른다.
 
-## 스크립트
+로컬 백엔드를 다른 포트(예: 19090)로 실행할 때는 프록시 주소와 viewer 주소를 함께 변경한다. 백엔드의 `LIVE_REPORT_VIEWER_BASE_URL`, `LIVE_REPORT_GATEWAY_BASE_URL`도 실제 포트와 맞춰야 한다. API만 연결되더라도 viewer 포트가 다르면 결과 점수는 보이고 페이지 렌더링은 거부될 수 있다.
 
-```bash
-npm run dev      # 개발 서버 실행
-npm run build    # 타입 체크 후 프로덕션 빌드
-npm run preview  # 빌드 결과 미리보기
+## 빌드와 검증
+
+```powershell
+npm run build
+npm run preview
 ```
 
-## 배포 참고
+빌드 결과는 `dist/`에 생성된다. `npm run preview`는 빌드 결과를 로컬에서 확인하는 명령이다. 배포 호스트는 `/analyze`, `/projects/...`, `/recent-pages/...` 같은 SPA 경로를 `index.html`로 연결하고 `/api`는 백엔드로 보내거나 빌드 시 API base를 지정해야 한다.
 
-배포 환경에서는 다음 중 하나를 선택합니다.
+기본 통합 검증은 `npm test`다. 변경 범위에 따른 단위·브라우저·리포트 검증은 [테스트 가이드](docs/testing.md), 번들 분석은 `npm run analyze:bundle`, 번들 경계 검사는 `npm run test:bundle`을 사용한다.
 
-- `VITE_API_BASE_URL`을 실제 API 서버 주소로 설정
-- 같은 origin에서 `/api` 경로를 백엔드로 라우팅
+`npm run test:list`로 테스트를 확인하고 `npm run test:run -- --test <파일>`로 필요한 회귀만 실행할 수 있다. 실행별 결과와 로그는 `artifacts/frontend-tests/`에 저장한다.
 
-빌드 산출물은 `dist/`에 생성됩니다.
+## 로컬 녹화·감사 산출물 보관
+
+`npm run record:landing`은 모든 장면의 캡처·인코딩·검증과 요청한 배포용 복사가 성공한 뒤 연속 PNG 프레임만 자동 정리한다. 최종 MP4·WebP, 대표 PNG, 녹화 manifest는 보존한다. `--stills-only`, 실패한 녹화, `--keep-frames`를 지정한 녹화는 프레임을 남긴다. 다시 인코딩할 원본이 필요하면 다음처럼 실행한다.
+
+```powershell
+npm run record:landing -- --report-only --keep-frames
+```
+
+기존 녹화의 재개는 인코딩된 미디어를 재사용하므로 정리 이후에도 가능하다. 작업 도중 실패하면 프레임을 정리하지 않으며, 해당 녹화 폴더의 `.keep` 파일로도 정리를 막을 수 있다. 실제 서비스 연결과 페이지 ID 등 녹화 입력은 [녹화 스크립트](scripts/record-landing-demo.mjs)의 안내를 따른다.
+
+테스트 runner는 오래된 성공 로그에 보관 정책을 자동 적용한다. `npm run artifacts:clean`으로 대상만 확인하고 `-- --apply`를 붙여 수동 적용할 수 있다. 실패 기록·보고서·DB 백업·임시 스크립트의 보존 범위는 [테스트 가이드](docs/testing.md)를 참고한다. 별도로 만든 감사용 ZIP·빌드 복사본은 이 명령의 대상이 아니므로 작업 종료 후 필요한 자료를 선별해 정리한다.
+
+## 개발 문서
+
+- [문서 색인](docs/README.md)
+- [아키텍처](docs/architecture.md)
+- [테스트 가이드](docs/testing.md)
+- [디자인 시스템](docs/design-system.md)
+- [GPT-6 Astra 프런트 개발 기준](docs/engineering.md)
+- 현재 확인된 프런트 오류는 [아키텍처](docs/architecture.md)의 해당 절에 기록한다.
+
+`/product-preview`는 fixture를 사용하는 읽기 전용 화면이다. 일반 대시보드의 데이터는 백엔드에서 받는다.

@@ -12,6 +12,10 @@ public record EvaluationIssueResponse(
         String recommendation,
         String selector,
         String wcagCode,
-        LocalDateTime createdAt
+        IssueLocatorResponse locator,
+        LocalDateTime createdAt,
+        String ruleId,
+        // AD or DYNAMIC for findings in regions that are reported but not scored.
+        String exclusionReason
 ) {
 }

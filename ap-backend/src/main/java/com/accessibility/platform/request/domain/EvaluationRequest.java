@@ -11,9 +11,21 @@ import java.time.LocalDateTime;
 
 @Getter
 @Entity
-@Table(name = "evaluation_request")
+@Table(
+        name = "evaluation_request",
+        indexes = @Index(
+                name = "idx_evaluation_request_target_status_updated",
+                columnList = "evaluation_target_id,status,updated_at"
+        )
+)
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class EvaluationRequest extends BaseTimeEntity {
+
+    public static final String QUICK_ANALYSIS_NOTE = "Web UI initiated request";
+
+    public boolean isQuickAnalysis() {
+        return QUICK_ANALYSIS_NOTE.equals(requestNote);
+    }
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -26,6 +38,10 @@ public class EvaluationRequest extends BaseTimeEntity {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private EvaluationRequestStatus status;
+
+    @Enumerated(EnumType.STRING)
+    @Column(length = 40)
+    private EvaluationFailureCode failureCode;
 
     @Column(length = 500)
     private String requestNote;
@@ -42,5 +58,11 @@ public class EvaluationRequest extends BaseTimeEntity {
 
     public void changeStatus(EvaluationRequestStatus status) {
         this.status = status;
+        this.failureCode = null;
+    }
+
+    public void markFailed(EvaluationFailureCode failureCode) {
+        this.status = EvaluationRequestStatus.FAILED;
+        this.failureCode = failureCode;
     }
 }

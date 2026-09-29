@@ -13,6 +13,7 @@ __MACOSX/
 # Logs
 *.log
 logs/
+.firecrawl/
 
 # Env / secrets
 .env
@@ -73,3 +74,10 @@ AI-module/output/*
 
 # OCR Cache
 **/.ocr_cache/
+
+# Generated reports, recordings, and build command output
+artifacts/
+**/artifacts/
+**/.artifacts/
+**/*build_out.txt
+**/*tsc_out.txt

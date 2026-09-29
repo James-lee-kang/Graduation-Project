@@ -1,160 +1,500 @@
+import { clearSiteCreateRecovery, readSiteCreateRecovery } from "@/services/site-create-recovery-storage";
+import { UserFacingError } from "@/services/user-facing-error";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+
+import { ErrorBoundary, isLazyChunkLoadError } from "@/components/shared/error-boundary";
+import { ModalErrorFallback, ModalLoadFallback } from "../shared/modal-load-fallback";
+import { RoutePanelErrorFallback, RoutePanelFallback } from "../shared/route-panel-fallbacks";
+
+import { getApiErrorMessage, isAbortError } from "@/services/backend-api";
 import type {
   AnalysisResult,
+  EvaluationCaptureMetadata,
+  EvaluationResultSummary,
   EvaluationRequestModel,
   EvaluationTargetModel,
-  ImprovementGuide,
   IssueResultModel,
-  OrganizationModel,
   ScoreResult
 } from "@/types/accessibility-domain";
 
-import { getScoreGrade } from "../shared/score-utils";
-import { fallbackWcagCriterion, severityChartItems, wcagCriterionByIssueCode } from "./site-dashboard/constants";
-import { RecentIssuesCard } from "./site-dashboard/recent-issues-card";
-import { ScoreTrendCard } from "./site-dashboard/score-trend-card";
-import type { RecentIssueRow, ScoreChartItem, SiteSummaryItem } from "./site-dashboard/types";
-import { formatDateLabel, formatShortDate, getAnalyzerTypeLabel } from "./site-dashboard/utils";
+import { selectLatestAnalysisAttempt, selectLatestEvaluationRequest } from "@/services/evaluation-request-selection";
+import { formatDateTime } from "../shared/utils";
+import { useMutationOperation } from "../shared/use-mutation-operation";
+import { QuickAnalysisProgress } from "./quick-analysis-progress";
+import { AnalysisTrendPanel } from "./site-dashboard/analysis-trend-panel";
+import { severityChartItems } from "./site-dashboard/constants";
+import {
+  DashboardViewTabs,
+  parseDashboardView,
+  type DashboardView
+} from "./site-dashboard/dashboard-view-tabs";
+import { PageAnalysisActions } from "./site-dashboard/page-analysis-actions";
+import { RenderedPageEvidenceCard } from "./site-dashboard/rendered-page-evidence-card";
+import { SeverityDistributionPanel } from "./site-dashboard/severity-distribution-panel";
+import type { LocatorReport, RecentIssueRow } from "./site-dashboard/types";
+import { UnavailableLocatorPanel } from "./site-dashboard/unavailable-locator-panel";
+import { useEvaluationCaptureMetadata } from "./site-dashboard/use-evaluation-capture-metadata";
+import { useEvaluationResultDetails } from "./site-dashboard/use-evaluation-result-details";
+import { useLiveReportSession } from "./site-dashboard/use-live-report-session";
+import { sameLocatorReport } from "./site-dashboard/locator-report";
 
-const SCORE_CHART_POINT_COUNT = 10;
+import "@/styles/page-evidence-layout.css";
+
+const IssueLocationDialog = lazy(() => import("./site-dashboard/issue-location-dialog")
+  .then(module => ({ default: module.IssueLocationDialog })));
+const FinalReportPanel = lazy(() => import("./site-dashboard/final-report-panel")
+  .then(module => ({ default: module.FinalReportPanel })));
 
 type SiteDashboardPanelProps = {
-  organization: OrganizationModel;
   evaluationTarget: EvaluationTargetModel;
   evaluationRequests: EvaluationRequestModel[];
-  analysisResults: AnalysisResult[];
+  resultSummaries: EvaluationResultSummary[];
   scoreResults: ScoreResult[];
+  previewEvidence?: SiteDashboardPreviewEvidence;
+  onRequestEvaluationTargetAnalysis?: (targetId: number, signal?: AbortSignal) => Promise<number>;
+  onAnalysisAccepted?: (request: EvaluationRequestModel) => void;
+};
+
+export type SiteDashboardPreviewEvidence = {
+  analysisResults: AnalysisResult[];
+  captureMetadata: EvaluationCaptureMetadata | null;
   issueResults: IssueResultModel[];
-  improvementGuides: ImprovementGuide[];
+  previewRuntimeUrl: string;
 };
 
 export function SiteDashboardPanel(props: SiteDashboardPanelProps) {
-  const { evaluationTarget, evaluationRequests, analysisResults, improvementGuides, issueResults, scoreResults } = props;
-  const targetEvaluationRequests = evaluationRequests.filter((request) => request.evaluationTargetId === evaluationTarget.id);
-  const scoreByRequestId = new Map(scoreResults.map((scoreResult) => [scoreResult.evaluationRequestId, scoreResult]));
-  const requestIdByAnalysisResultId = new Map(
-    analysisResults.map((analysisResult) => [analysisResult.id, analysisResult.evaluationRequestId])
+  const requests = props.evaluationRequests.filter(
+    (request) => request.evaluationTargetId === props.evaluationTarget.id
   );
-  const analysisResultById = new Map(analysisResults.map((analysisResult) => [analysisResult.id, analysisResult]));
-  const issueCountByRequestId = new Map<number, number>();
-  const guidesByIssueId = buildGuidesByIssueId(improvementGuides);
+  const running = requests.find((request) => request.status === "IN_PROGRESS");
+  const queued = requests.find((request) => request.status === "PENDING");
+  const latest = selectLatestAnalysisAttempt(requests);
+  const failedWithoutResult = latest?.status === "FAILED" &&
+    !requests.some((request) => request.status === "COMPLETED");
 
-  for (const issue of issueResults) {
-    const requestId = requestIdByAnalysisResultId.get(issue.analysisResultId);
-    if (requestId === undefined) {
-      continue;
-    }
-
-    issueCountByRequestId.set(requestId, (issueCountByRequestId.get(requestId) ?? 0) + 1);
+  if (!props.previewEvidence && (running || queued || failedWithoutResult)) {
+    return (
+      <div className="site-analysis-progress">
+        <QuickAnalysisProgress
+          phase={running ? "running" : queued ? "queued" : "failed"}
+          url={props.evaluationTarget.accessUrl}
+          isBusy={Boolean(running || queued)}
+        >
+          {failedWithoutResult && !running && !queued ? (
+            <p className="text-sm text-[var(--dashboard-text-muted)]">
+              새 페이지 분석에서 주소를 입력해 다시 시도해 주세요.
+            </p>
+          ) : null}
+        </QuickAnalysisProgress>
+      </div>
+    );
   }
 
-  const completedScoreItems = targetEvaluationRequests
-    .map((request) => ({
-      request,
-      scoreResult: scoreByRequestId.get(request.id)
-    }))
-    .filter((item): item is { request: EvaluationRequestModel; scoreResult: ScoreResult } =>
-      typeof item.scoreResult?.totalScore === "number"
-    )
-    .sort((a, b) => Date.parse(a.request.updatedAt) - Date.parse(b.request.updatedAt));
+  return <SiteDashboardResults key={props.evaluationTarget.id} {...props} />;
+}
 
-  const chartData = buildScoreChartData(completedScoreItems, issueCountByRequestId);
-  const latestCompletedScoreItem = completedScoreItems[completedScoreItems.length - 1] ?? null;
-  const latestRequestId = latestCompletedScoreItem?.request.id ?? null;
-  const latestIssues =
-    latestRequestId === null
-      ? []
-      : issueResults.filter((issue) => requestIdByAnalysisResultId.get(issue.analysisResultId) === latestRequestId);
-  const summaryItems = buildSummaryItems({
-    latestCompletedScoreItem,
-    totalEvaluationRequestCount: targetEvaluationRequests.length
-  });
-  const recentIssueRows: RecentIssueRow[] = latestIssues.map((issue) => {
-    const severity = severityChartItems.find((item) => item.key === issue.severity) ?? severityChartItems[0]!;
-    return {
+// Mount result hooks only after active jobs finish, including when rescanning
+// a page with an older result. This also releases its live viewer while busy.
+function SiteDashboardResults(props: SiteDashboardPanelProps) {
+  const {
+    evaluationTarget,
+    evaluationRequests,
+    previewEvidence,
+    resultSummaries,
+    scoreResults,
+    onRequestEvaluationTargetAnalysis,
+    onAnalysisAccepted
+  } = props;
+  const [isRequestingAnalysis, setIsRequestingAnalysis] = useState(false);
+  const [analysisRequestError, setAnalysisRequestError] = useState<string | null>(null);
+  const {
+    beginMutationOperation,
+    finishMutationOperation,
+    isMutationOperationCurrent
+  } = useMutationOperation();
+
+  async function handleRequestAnalysis() {
+    if (previewEvidence || !onRequestEvaluationTargetAnalysis || !onAnalysisAccepted) return;
+    const operation = beginMutationOperation("page-rescan");
+    if (!operation) return;
+    setIsRequestingAnalysis(true);
+    setAnalysisRequestError(null);
+
+    try {
+      const requestId = await onRequestEvaluationTargetAnalysis(evaluationTarget.id, operation.signal);
+      if (!isMutationOperationCurrent(operation) || operation.signal.aborted) return;
+
+      // Retire only this accepted request's recovery record before the progress
+      // screen unmounts this component. Uncertain requests remain recoverable.
+      const recovery = readSiteCreateRecovery();
+      if (
+        recovery.kind === "blocked" ||
+        (recovery.kind === "valid" &&
+          (recovery.attempt.phase !== "poll" ||
+            recovery.attempt.targetId !== evaluationTarget.id ||
+            recovery.attempt.requestId !== requestId ||
+            !clearSiteCreateRecovery(recovery.rawValue)))
+      ) {
+        throw new UserFacingError(
+          "분석 요청은 접수되었지만 브라우저에 작업 완료 상태를 저장하지 못했습니다. 브라우저 저장 공간과 설정을 확인한 뒤 다시 시도해 주세요."
+        );
+      }
+
+      onAnalysisAccepted({
+        id: requestId,
+        evaluationTargetId: evaluationTarget.id,
+        status: "PENDING",
+        requestedAt: new Date().toISOString(),
+        updatedAt: ""
+      });
+    } catch (error) {
+      if (isAbortError(error) || !isMutationOperationCurrent(operation)) return;
+      setAnalysisRequestError(getApiErrorMessage(error, "분석을 요청하지 못했습니다. 다시 시도해 주세요."));
+    } finally {
+      if (finishMutationOperation(operation)) setIsRequestingAnalysis(false);
+    }
+  }
+  const targetEvaluationRequests = evaluationRequests.filter(
+    (request) => request.evaluationTargetId === evaluationTarget.id
+  );
+  const latestResultRequest = selectLatestEvaluationRequest(
+    // A status receipt can arrive before the refreshed overview's score rows.
+    // Fetch the newly completed request instead of briefly replaying an old one.
+    targetEvaluationRequests.filter((request) => request.status === "COMPLETED")
+  );
+  const latestResultRequestId = latestResultRequest?.id ?? null;
+  const latestAttempt = selectLatestAnalysisAttempt(targetEvaluationRequests);
+  const showsPreviousResult = !previewEvidence && latestAttempt?.status === "FAILED" && latestResultRequest !== null;
+  const {
+    analysisResults,
+    errorMessage: resultDetailsErrorMessage,
+    issueResults,
+    loadState: resultDetailsLoadState,
+    retry: retryResultDetails
+  } = useEvaluationResultDetails(
+    latestResultRequest,
+    previewEvidence
+      ? {
+          analysisResults: previewEvidence.analysisResults,
+          issueResults: previewEvidence.issueResults
+        }
+      : undefined
+  );
+  const requestIdByAnalysisResultId = useMemo(
+    () =>
+      new Map(
+        analysisResults.map((analysisResult) => [
+          analysisResult.id,
+          analysisResult.evaluationRequestId
+        ])
+      ),
+    [analysisResults]
+  );
+  const analysisResultById = useMemo(
+    () => new Map(analysisResults.map((analysisResult) => [analysisResult.id, analysisResult])),
+    [analysisResults]
+  );
+  // Findings in advertising or changing regions are not scored: they stay out
+  // of the page view and the counts and are listed separately in the report.
+  const [latestIssues, excludedIssues] = useMemo(() => {
+    const scored: IssueResultModel[] = [];
+    const excluded: IssueResultModel[] = [];
+    if (latestResultRequestId !== null) {
+      for (const issue of issueResults) {
+        if (requestIdByAnalysisResultId.get(issue.analysisResultId) !== latestResultRequestId) continue;
+        (issue.exclusionReason ? excluded : scored).push(issue);
+      }
+    }
+    return [scored, excluded];
+  }, [issueResults, latestResultRequestId, requestIdByAnalysisResultId]);
+  const {
+    captureMetadata,
+    errorMessage: captureMetadataErrorMessage,
+    loadState: captureMetadataLoadState,
+    retry: retryCaptureMetadata
+  } = useEvaluationCaptureMetadata(
+    latestResultRequest,
+    previewEvidence
+      ? { captureMetadata: previewEvidence.captureMetadata }
+      : undefined
+  );
+  const {
+    errorMessage: liveSessionErrorMessage,
+    loadState: liveSessionLoadState,
+    retry: retryLiveSession,
+    session: liveSession
+  } = useLiveReportSession(
+    latestResultRequest,
+    previewEvidence === undefined
+  );
+  const [selectedIssueId, setSelectedIssueId] = useState<number | null>(null);
+  const [locationIssueId, setLocationIssueId] = useState<number | null>(null);
+  useEffect(() => { setLocationIssueId(null); }, [latestResultRequestId, evaluationTarget.id]);
+  const [selectedIssueFocusRequestId, setSelectedIssueFocusRequestId] = useState(0);
+  const [locatorReport, setLocatorReport] = useState<LocatorReport | null>(null);
+  const handleLocatorReportChange = useCallback((next: LocatorReport) => {
+    // Pending detail hooks may return new empty arrays on each render. Do not
+    // let an equivalent child report start another parent/child update cycle.
+    setLocatorReport((current) => sameLocatorReport(current, next) ? current : next);
+  }, []);
+  const latestIssueSignature = latestIssues.map((issue) => issue.id).join(",");
+  const currentLocatorReport = locatorReport?.requestId === latestResultRequestId &&
+    locatorReport.issueIdsSignature === latestIssueSignature ? locatorReport : null;
+  const locatorCheckState = currentLocatorReport?.state ?? "loading";
+
+  function revealHiddenIssue(issueId: number) {
+    setSelectedIssueId(issueId);
+    setSelectedIssueFocusRequestId((current) => current + 1);
+  }
+
+  // The URL owns the selected view so reload, links and Back keep it. The
+  // read-only preview must not rewrite the landing or preview page address.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [previewView, setPreviewView] = useState<DashboardView>("results");
+  const view = previewEvidence ? previewView : parseDashboardView(searchParams.get("view"));
+  const [hasOpenedReport, setHasOpenedReport] = useState(view === "report");
+  const pendingPageFocusRef = useRef(false);
+  const evidenceGridItemRef = useRef<HTMLDivElement>(null);
+
+  function changeView(next: DashboardView) {
+    if (next === view) return;
+    if (previewEvidence) {
+      setPreviewView(next);
+      return;
+    }
+    // The page detail route has no other query parameters to preserve.
+    setSearchParams(next === "report" ? { view: "report" } : {});
+  }
+
+  function showIssueOnPage(issueId: number) {
+    pendingPageFocusRef.current = true;
+    changeView("results");
+    revealHiddenIssue(issueId);
+  }
+
+  // The report mounts on first use and then keeps its filters. When a report
+  // button moves to the page, that button is hidden with its panel: bring the
+  // page view into sight and keep keyboard focus on it instead of the body.
+  // Router updates commit as a transition, so act once the view has changed.
+  useEffect(() => {
+    if (view === "report") {
+      setHasOpenedReport(true);
+      return;
+    }
+    if (!pendingPageFocusRef.current) return;
+    pendingPageFocusRef.current = false;
+    const gridItem = evidenceGridItemRef.current;
+    gridItem?.scrollIntoView({ block: "start" });
+    gridItem?.querySelector<HTMLElement>(".site-report-focus-guard")?.focus({ preventScroll: true });
+  }, [view]);
+
+  useEffect(() => {
+    setSelectedIssueId((current) => {
+      if (current !== null && latestIssues.some((issue) => issue.id === current)) {
+        return current;
+      }
+
+      // Markers should start in their neutral state. A target is highlighted
+      // only after the user hovers, focuses, or explicitly selects its marker.
+      return null;
+    });
+  }, [latestIssueSignature, latestResultRequestId]);
+
+  const [replayIssueRows, excludedIssueRows] = useMemo(() => {
+    const toRow = (issue: IssueResultModel): RecentIssueRow => ({
       issue,
-      severity,
-      wcagCriterion: wcagCriterionByIssueCode[issue.issueCode] ?? fallbackWcagCriterion,
-      issueGuides: guidesByIssueId.get(issue.id) ?? [],
-      analyzerLabel: getAnalyzerTypeLabel(analysisResultById.get(issue.analysisResultId)?.analyzerType)
-    };
-  });
-  const recentIssueDateLabel = latestCompletedScoreItem
-    ? formatDateLabel(latestCompletedScoreItem.request.updatedAt)
-    : "최근 평가 기준";
-
-  void recentIssueDateLabel;
+      severity: severityChartItems.find((item) => item.key === issue.severity) ?? severityChartItems[0]!,
+      analyzerType: analysisResultById.get(issue.analysisResultId)?.analyzerType
+    });
+    return [latestIssues.map(toRow), excludedIssues.map(toRow)];
+  }, [analysisResultById, latestIssues, excludedIssues]);
+  const unavailableLocatorIssueRows = useMemo(() => {
+    const unavailableIssueIds = new Set(currentLocatorReport?.unavailableIssueIds);
+    return replayIssueRows.filter(({ issue }) => unavailableIssueIds.has(issue.id));
+  }, [replayIssueRows, currentLocatorReport]);
+  const recoverableHiddenLocatorIssueRows = useMemo(() => {
+    const hiddenIssueIds = new Set(currentLocatorReport?.recoverableHiddenIssueIds);
+    return replayIssueRows.filter(({ issue }) => hiddenIssueIds.has(issue.id));
+  }, [currentLocatorReport, replayIssueRows]);
+  const locationRow = replayIssueRows.find(({ issue }) => issue.id === locationIssueId);
+  const evidenceLiveSessionLoadState =
+    previewEvidence !== undefined
+      ? "idle"
+      : resultDetailsLoadState === "ready"
+        ? liveSessionLoadState
+        : resultDetailsLoadState === "error"
+          ? "error"
+          : latestResultRequestId === null
+            ? "idle"
+            : "loading";
+  const retryEvidence = () => {
+    if (resultDetailsLoadState === "error") {
+      retryResultDetails();
+      return;
+    }
+    retryLiveSession();
+    retryCaptureMetadata();
+  };
+  // Severity comes from the result-details request and remains independent of
+  // whether the current live page can still resolve every historical locator.
+  const showsRailDetailCards = resultDetailsLoadState === "ready";
+  const latestAnalyzedAt =
+    captureMetadata?.capturedAt ??
+    latestResultRequest?.requestedAt ??
+    latestResultRequest?.updatedAt ??
+    null;
 
   return (
-    <div className="grid min-h-[31rem] items-stretch gap-3 lg:h-[clamp(31rem,calc(100vh-var(--dashboard-top-height)-5rem),35rem)] lg:min-h-0 lg:grid-cols-2">
-      <div className="min-h-0">
-        <ScoreTrendCard chartData={chartData} summaryItems={summaryItems} />
+    <div className="site-dashboard-view" data-active-view={view}>
+      <DashboardViewTabs value={view} onChange={changeView} />
+      <div
+        id="site-dashboard-panel-results"
+        role="tabpanel"
+        aria-labelledby="site-dashboard-tab-results"
+        className="site-dashboard-layout grid min-h-[31rem] grid-cols-1 items-stretch"
+      >
+        <div ref={evidenceGridItemRef} className="site-page-evidence-grid-item">
+          <RenderedPageEvidenceCard
+            accessUrl={evaluationTarget.accessUrl}
+            headerActions={<PageAnalysisActions
+              analyzedAt={latestAnalyzedAt}
+              isRequestingAnalysis={isRequestingAnalysis}
+              analysisRequestError={analysisRequestError}
+              onRequestAnalysis={!previewEvidence && onRequestEvaluationTargetAnalysis && onAnalysisAccepted
+                ? handleRequestAnalysis
+                : undefined}
+            />}
+            faviconUrl={evaluationTarget.faviconUrl}
+            captureMetadata={captureMetadata}
+            errorMessage={resultDetailsErrorMessage ?? liveSessionErrorMessage}
+            evaluationRequestId={latestResultRequestId}
+            liveSession={liveSession}
+            liveSessionLoadState={evidenceLiveSessionLoadState}
+            previewRuntimeUrl={previewEvidence?.previewRuntimeUrl}
+            rows={replayIssueRows}
+            selectedIssueId={selectedIssueId}
+            selectedIssueFocusRequestId={selectedIssueFocusRequestId}
+            targetName={evaluationTarget.name}
+            onRetry={retryEvidence}
+            onRetryLiveSession={retryLiveSession}
+            onLocatorReportChange={handleLocatorReportChange}
+            onSelectIssue={setSelectedIssueId}
+          />
+        </div>
+        <div className="site-dashboard-rail">
+          {(showsPreviousResult || analysisRequestError || captureMetadataLoadState === "loading" || captureMetadataLoadState === "error") && (
+            <div className="site-result-notices">
+              {showsPreviousResult && <p className="site-result-notice" role="status">
+                최신 재분석에 실패했습니다. {formatDateTime(latestAnalyzedAt)} 분석의 이전 성공 결과를 표시하고 있습니다.
+              </p>}
+              {analysisRequestError && (
+                <p id="site-analysis-request-error" className="site-result-notice" role="alert">
+                  {analysisRequestError}
+                </p>
+              )}
+              {captureMetadataLoadState === "loading" && (
+                <p className="site-capture-metadata-status site-result-notice" role="status">
+                  분석 당시 화면 정보를 불러오는 중입니다.
+                </p>
+              )}
+              {captureMetadataLoadState === "error" && (
+                <div className="site-capture-metadata-status site-result-notice" role="alert">
+                  <p>분석 당시 화면 정보를 불러오지 못했습니다.</p>
+                  {captureMetadataErrorMessage && <p>{captureMetadataErrorMessage}</p>}
+                  <button type="button" onClick={retryCaptureMetadata}>
+                    화면 정보 다시 불러오기
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          <AnalysisTrendPanel
+            evaluationRequests={evaluationRequests}
+            evaluationTargetId={evaluationTarget.id}
+            resultSummaries={resultSummaries}
+            scoreResults={scoreResults}
+          />
+
+          {showsRailDetailCards && (
+            <>
+              <SeverityDistributionPanel issues={latestIssues}>
+                {liveSessionLoadState === "error" && <p className="site-result-notice" role="status">
+                  현재 페이지에 연결하지 못했습니다. 저장된 분석 결과를 표시합니다.
+                </p>}
+              </SeverityDistributionPanel>
+              <UnavailableLocatorPanel
+                mode="recoverable"
+                checkState={locatorCheckState}
+                rows={recoverableHiddenLocatorIssueRows}
+                onSelectIssue={revealHiddenIssue}
+                onShowLocation={setLocationIssueId}
+                issueStates={currentLocatorReport?.issueStates}
+              />
+              <UnavailableLocatorPanel
+                checkState={locatorCheckState}
+                hasHiddenIssues={recoverableHiddenLocatorIssueRows.length > 0}
+                rows={unavailableLocatorIssueRows}
+                onShowLocation={setLocationIssueId}
+                issueStates={currentLocatorReport?.issueStates}
+              />
+            </>
+          )}
+        </div>
       </div>
-      <RecentIssuesCard rows={recentIssueRows} />
+      <div
+        id="site-dashboard-panel-report"
+        role="tabpanel"
+        aria-labelledby="site-dashboard-tab-report"
+        className="site-dashboard-report-panel"
+        hidden={view !== "report"}
+      >
+        {hasOpenedReport && (
+          <ErrorBoundary resetKey={String(latestResultRequestId)} fallback={RoutePanelErrorFallback}>
+            <Suspense fallback={<RoutePanelFallback />}>
+              <FinalReportPanel
+                active={view === "report"}
+                target={evaluationTarget}
+                analyzedAt={latestAnalyzedAt}
+                requestId={latestResultRequestId}
+                scoreResults={scoreResults}
+                resultSummaries={resultSummaries}
+                rows={replayIssueRows}
+                excludedRows={excludedIssueRows}
+                loadState={resultDetailsLoadState}
+                errorMessage={resultDetailsErrorMessage}
+                onRetry={retryResultDetails}
+                locatorCheckState={locatorCheckState}
+                issueStates={currentLocatorReport?.issueStates}
+                onShowOnPage={showIssueOnPage}
+                onShowDetails={setLocationIssueId}
+              />
+            </Suspense>
+          </ErrorBoundary>
+        )}
+      </div>
+      {locationRow ? (
+        <ErrorBoundary
+          resetKey={`issue-location:${locationRow.issue.id}`}
+          fallback={({ error, resetErrorBoundary }) => (
+            <ModalErrorFallback
+              isChunkError={isLazyChunkLoadError(error)}
+              onDismiss={() => setLocationIssueId(null)}
+              onRetry={resetErrorBoundary}
+              onReload={() => window.location.reload()}
+            />
+          )}
+        >
+          <Suspense fallback={<ModalLoadFallback />}>
+            <IssueLocationDialog
+              row={locationRow}
+              state={currentLocatorReport?.issueStates[locationRow.issue.id]}
+              onClose={() => setLocationIssueId(null)}
+            />
+          </Suspense>
+        </ErrorBoundary>
+      ) : null}
     </div>
   );
-}
-
-function buildGuidesByIssueId(improvementGuides: ImprovementGuide[]): Map<number, ImprovementGuide[]> {
-  const guidesByIssueId = new Map<number, ImprovementGuide[]>();
-
-  for (const guide of improvementGuides) {
-    const currentGuides = guidesByIssueId.get(guide.issueResultId) ?? [];
-    currentGuides.push(guide);
-    guidesByIssueId.set(guide.issueResultId, currentGuides);
-  }
-
-  return guidesByIssueId;
-}
-
-function buildScoreChartData(
-  completedScoreItems: Array<{ request: EvaluationRequestModel; scoreResult: ScoreResult }>,
-  issueCountByRequestId: Map<number, number>
-): ScoreChartItem[] {
-  const latestScoreItems = completedScoreItems.slice(-SCORE_CHART_POINT_COUNT);
-  const emptyPointCount = Math.max(0, SCORE_CHART_POINT_COUNT - latestScoreItems.length);
-  const emptyScoreItems: ScoreChartItem[] = Array.from({ length: emptyPointCount }, (_, index) => ({
-    slot: index,
-    date: "",
-    label: "",
-    score: 0,
-    issueCount: 0
-  }));
-  const scoreItems = latestScoreItems.map((item, index) => {
-    const date = item.request.updatedAt;
-    return {
-      slot: emptyPointCount + index,
-      date,
-      label: formatShortDate(date),
-      score: Math.round(item.scoreResult.totalScore),
-      issueCount: issueCountByRequestId.get(item.request.id) ?? 0
-    };
-  });
-
-  return [...emptyScoreItems, ...scoreItems];
-}
-
-function buildSummaryItems({
-  latestCompletedScoreItem,
-  totalEvaluationRequestCount
-}: {
-  latestCompletedScoreItem: { request: EvaluationRequestModel; scoreResult: ScoreResult } | null;
-  totalEvaluationRequestCount: number;
-}): SiteSummaryItem[] {
-  return [
-    {
-      label: "최신 점수",
-      value: latestCompletedScoreItem ? `${Math.round(latestCompletedScoreItem.scoreResult.totalScore)}` : "-",
-      unit: "점"
-    },
-    {
-      label: "등급",
-      value: latestCompletedScoreItem ? getScoreGrade(latestCompletedScoreItem.scoreResult.totalScore) : "-",
-      unit: latestCompletedScoreItem ? "등급" : ""
-    },
-    {
-      label: "평가 횟수",
-      value: `${totalEvaluationRequestCount}`,
-      unit: "건"
-    }
-  ];
 }

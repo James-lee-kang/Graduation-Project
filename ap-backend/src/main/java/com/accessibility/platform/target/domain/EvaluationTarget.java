@@ -9,7 +9,13 @@ import lombok.NoArgsConstructor;
 
 @Getter
 @Entity
-@Table(name = "evaluation_target")
+@Table(
+        name = "evaluation_target",
+        indexes = @Index(
+                name = "idx_evaluation_target_organization_status",
+                columnList = "organization_id,status"
+        )
+)
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class EvaluationTarget extends BaseTimeEntity {
 
@@ -32,6 +38,9 @@ public class EvaluationTarget extends BaseTimeEntity {
     private String accessUrl;
 
     @Column(length = 1000)
+    private String faviconUrl;
+
+    @Column(length = 1000)
     private String description;
 
     @Enumerated(EnumType.STRING)
@@ -39,19 +48,36 @@ public class EvaluationTarget extends BaseTimeEntity {
     private TargetStatus status;
 
     public EvaluationTarget(Organization organization, String name, TargetType targetType, String accessUrl, String description) {
+        this(organization, name, targetType, accessUrl, description, null);
+    }
+
+    public EvaluationTarget(
+            Organization organization,
+            String name,
+            TargetType targetType,
+            String accessUrl,
+            String description,
+            String faviconUrl
+    ) {
         this.organization = organization;
         this.name = name;
         this.targetType = targetType;
         this.accessUrl = accessUrl;
         this.description = description;
+        this.faviconUrl = faviconUrl;
         this.status = TargetStatus.ACTIVE;
     }
 
-    public void update(String name, TargetType targetType, String accessUrl, String description) {
+    public void update(String name, TargetType targetType, String accessUrl, String description, String faviconUrl) {
         this.name = name;
         this.targetType = targetType;
         this.accessUrl = accessUrl;
         this.description = description;
+        this.faviconUrl = faviconUrl;
+    }
+
+    public void updateFaviconUrl(String faviconUrl) {
+        this.faviconUrl = faviconUrl;
     }
 
     public void deactivate() {

@@ -1,52 +1,25 @@
-import { FileBarChart2, FolderKanban, LayoutDashboard } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import type { SidebarItem } from "@/components/ui/sidebar";
 import {
-  createEvaluationTargetModel,
   deleteEvaluationTargetModel,
   deleteOrganizationModel,
-  updateEvaluationTargetModel,
   updateOrganizationModel
 } from "@/services/backend-api";
-import type { CreateEvaluationTargetInput as CreateEvaluationTargetModelInput, MenuType } from "@/types/accessibility-domain";
+import { parseDashboardRoute } from "@/services/dashboard-route";
+import type { EvaluationRequestModel } from "@/types/accessibility-domain";
 
-import type { DashboardRouteState } from "./types";
+import { runDirectoryMutation } from "./directory-mutation";
 import { useDashboardData } from "./use-dashboard-data";
 import { useDashboardTheme } from "./use-dashboard-theme";
-import { useEvaluationTargetRescan } from "./use-evaluation-target-rescan";
 import { useOrganizationModelCreateForm } from "./use-organization-model-create-form";
+import { useSiteCreateWorkflow } from "./use-site-create-workflow";
 import { formatDateTime } from "./utils";
 
-function parseDashboardRoute(pathname: string): DashboardRouteState {
-  const segments = pathname.split("/").filter(Boolean);
+const APP_HOME_PATH = "/analyze";
 
-  if (segments[0] === "reports") {
-    return {
-      menu: "reports" as MenuType,
-      selectedOrganizationModelId: null,
-      selectedEvaluationTargetModelId: null
-    };
-  }
-
-  if (segments[0] === "projects") {
-    const projectId = segments[1] ? Number(segments[1]) : null;
-    const siteId = (segments[2] === "pages" || segments[2] === "sites") && segments[3] ? Number(segments[3]) : null;
-
-    return {
-      menu: "projects" as MenuType,
-      selectedOrganizationModelId: projectId && !Number.isNaN(projectId) ? projectId : null,
-      selectedEvaluationTargetModelId: siteId && !Number.isNaN(siteId) ? siteId : null
-    };
-  }
-
-  return {
-    menu: "dashboard" as MenuType,
-    selectedOrganizationModelId: null,
-    selectedEvaluationTargetModelId: null
-  };
-}
 
 export function useDashboardController({
   onBootstrapComplete
@@ -57,26 +30,78 @@ export function useDashboardController({
   const navigate = useNavigate();
   const { isDarkMode, themeMode, setThemeMode } = useDashboardTheme();
   const routeState = useMemo(() => parseDashboardRoute(location.pathname), [location.pathname]);
-  const { dashboardData, dashboardError, isDashboardLoading, loadDashboard, setDashboardError } = useDashboardData({
-    onBootstrapComplete
-  });
+  const {
+    beginDirectoryRecovery,
+    trackEvaluationRequest,
+    dashboardData,
+    dashboardError,
+    pausedStatusCount,
+    retryStatusChecks,
+    endDirectoryRecovery,
+    isDashboardLoading,
+    loadDashboard
+  } = useDashboardData({ onBootstrapComplete });
 
   const [isSiteCreateOpen, setIsSiteCreateOpen] = useState(false);
-  const handleOrganizationModelCreated = useCallback(() => {
-    navigate("/projects");
-  }, [navigate]);
+  const directoryOperationsRef = useRef(new Set<AbortController>());
+  useEffect(() => () => {
+    for (const controller of directoryOperationsRef.current) controller.abort();
+    directoryOperationsRef.current.clear();
+  }, []);
+  const organizationCreationNavigationRef = useRef<number | null>(null);
+  const {
+    handleCreateEvaluationTargetModel,
+    handleRequestEvaluationTargetAnalysis
+  } = useSiteCreateWorkflow({
+    beginDirectoryRecovery,
+    dashboardData,
+    endDirectoryRecovery,
+    loadDashboard
+  });
+
+  const handleOrganizationModelCreated = useCallback(
+    (projectId: number) => {
+      // Claim the intended destination synchronously. Effects from the render
+      // that removed the previous project must not overwrite this navigation.
+      organizationCreationNavigationRef.current = projectId;
+      navigate(`/projects/${projectId}`);
+    },
+    [navigate]
+  );
   const organizationCreateForm = useOrganizationModelCreateForm({
+    beginDirectoryRecovery,
+    dashboardData,
+    endDirectoryRecovery,
     loadDashboard,
     onCreated: handleOrganizationModelCreated
   });
 
   const selectedOrganizationModel = useMemo(() => {
-    if (routeState.selectedOrganizationModelId === null) {
+    if (routeState.selectedOrganizationModelId !== null) {
+      return (
+        dashboardData?.organizations.find(
+          (organization) => organization.id === routeState.selectedOrganizationModelId
+        ) ?? null
+      );
+    }
+
+    if (routeState.kind !== "recentPage" || routeState.selectedEvaluationTargetModelId === null) {
       return null;
     }
 
-    return dashboardData?.organizations.find((organization) => organization.id === routeState.selectedOrganizationModelId) ?? null;
-  }, [dashboardData?.organizations, routeState.selectedOrganizationModelId]);
+    return (
+      dashboardData?.organizations.find((organization) =>
+        organization.evaluationTargets.some(
+          (target) => target.id === routeState.selectedEvaluationTargetModelId
+        )
+      ) ?? null
+    );
+  }, [
+    dashboardData?.organizations,
+    routeState.kind,
+    routeState.selectedEvaluationTargetModelId,
+    routeState.selectedOrganizationModelId
+  ]);
 
   const selectedEvaluationTargetModel = useMemo(() => {
     if (!selectedOrganizationModel || routeState.selectedEvaluationTargetModelId === null) {
@@ -84,7 +109,9 @@ export function useDashboardController({
     }
 
     return (
-      selectedOrganizationModel.evaluationTargets.find((target) => target.id === routeState.selectedEvaluationTargetModelId) ?? null
+      selectedOrganizationModel.evaluationTargets.find(
+        (target) => target.id === routeState.selectedEvaluationTargetModelId
+      ) ?? null
     );
   }, [routeState.selectedEvaluationTargetModelId, selectedOrganizationModel]);
 
@@ -92,176 +119,168 @@ export function useDashboardController({
     routeState.menu === "projects" &&
     selectedOrganizationModel !== null &&
     selectedEvaluationTargetModel === null;
+
+  useEffect(() => {
+    if (!selectedOrganizationModel?.systemManaged) return;
+    if (routeState.kind === "projectPage" && selectedEvaluationTargetModel) {
+      navigate(`/recent-pages/${selectedEvaluationTargetModel.id}`, { replace: true });
+    } else if (routeState.kind === "project") {
+      navigate(APP_HOME_PATH, { replace: true });
+    }
+  }, [navigate, routeState.kind, selectedOrganizationModel, selectedEvaluationTargetModel]);
   const isSiteDetailView =
     routeState.menu === "projects" &&
     selectedOrganizationModel !== null &&
     selectedEvaluationTargetModel !== null;
 
   useEffect(() => {
-    if (!selectedOrganizationModel) {
-      setIsSiteCreateOpen(false);
+    setIsSiteCreateOpen(false);
+  }, [selectedOrganizationModel?.id]);
+
+  // Project list page removed — bare /projects goes to app home (quick analyze).
+  useEffect(() => {
+    if (routeState.kind === "invalidProject") {
+      navigate(APP_HOME_PATH, { replace: true });
     }
-  }, [selectedOrganizationModel]);
+  }, [navigate, routeState.kind]);
 
   useEffect(() => {
-    if (!dashboardData || routeState.selectedOrganizationModelId === null) {
+    const creationTargetId = organizationCreationNavigationRef.current;
+    if (
+      creationTargetId !== null &&
+      routeState.selectedOrganizationModelId === creationTargetId &&
+      dashboardData?.organizations.some((project) => project.id === creationTargetId)
+    ) {
+      organizationCreationNavigationRef.current = null;
+    }
+  }, [dashboardData, routeState.selectedOrganizationModelId]);
+
+  useEffect(() => {
+    if (
+      organizationCreationNavigationRef.current !== null ||
+      !dashboardData ||
+      routeState.selectedOrganizationModelId === null
+    ) {
       return;
     }
 
-    const projectStillExists = dashboardData.organizations.some((project) => project.id === routeState.selectedOrganizationModelId);
+    const projectStillExists = dashboardData.organizations.some(
+      (project) => project.id === routeState.selectedOrganizationModelId
+    );
     if (!projectStillExists) {
-      navigate("/projects", { replace: true });
+      navigate(APP_HOME_PATH, { replace: true });
     }
   }, [dashboardData, navigate, routeState.selectedOrganizationModelId]);
 
   useEffect(() => {
-    if (!selectedOrganizationModel || routeState.selectedEvaluationTargetModelId === null) {
+    if (
+      organizationCreationNavigationRef.current !== null ||
+      !dashboardData ||
+      routeState.selectedEvaluationTargetModelId === null
+    ) {
       return;
     }
 
-    const siteStillExists = selectedOrganizationModel.evaluationTargets.some(
-      (target) => target.id === routeState.selectedEvaluationTargetModelId
-    );
-    if (!siteStillExists) {
+    if (routeState.kind === "recentPage" && !selectedEvaluationTargetModel) {
+      navigate(APP_HOME_PATH, { replace: true });
+      return;
+    }
+
+    if (
+      routeState.kind === "projectPage" &&
+      selectedOrganizationModel &&
+      !selectedEvaluationTargetModel
+    ) {
       navigate(`/projects/${routeState.selectedOrganizationModelId}`, { replace: true });
     }
-  }, [navigate, routeState.selectedEvaluationTargetModelId, routeState.selectedOrganizationModelId, selectedOrganizationModel]);
+  }, [
+    dashboardData,
+    navigate,
+    routeState.kind,
+    routeState.selectedEvaluationTargetModelId,
+    routeState.selectedOrganizationModelId,
+    selectedEvaluationTargetModel,
+    selectedOrganizationModel
+  ]);
+
+  const applyDirectoryMutation = useCallback(async (
+    options: Omit<Parameters<typeof runDirectoryMutation>[0], "signal">
+  ) => {
+    const controller = new AbortController();
+    directoryOperationsRef.current.add(controller);
+    try {
+      await runDirectoryMutation({ ...options, signal: controller.signal });
+      controller.signal.throwIfAborted();
+      await loadDashboard({ refreshAfterInFlight: true, clearOnError: false });
+      controller.signal.throwIfAborted();
+    } finally {
+      directoryOperationsRef.current.delete(controller);
+    }
+  }, [loadDashboard]);
 
   const handleUpdateOrganizationModel = useCallback(
-    async ({ projectId, name, description }: { projectId: number; name: string; description: string }) => {
-      await updateOrganizationModel({
-        projectId,
-        name,
-        description
+    async ({
+      projectId,
+      name,
+      description
+    }: {
+      projectId: number;
+      name: string;
+      description: string;
+    }) => {
+      await applyDirectoryMutation({
+        operation: (signal) => updateOrganizationModel({ projectId, name, description }, signal),
+        isApplied: (snapshot) => snapshot.organizations.some((project) =>
+          project.id === projectId && project.name === name && project.description === description)
       });
-
-      await loadDashboard({ clearOnError: false });
     },
-    [loadDashboard]
+    [applyDirectoryMutation]
   );
 
   const handleDeleteOrganizationModel = useCallback(
     async (projectId: number) => {
-      await deleteOrganizationModel(projectId);
-
-      if (routeState.selectedOrganizationModelId === projectId) {
-        navigate("/projects", { replace: true });
-      }
-
-      await loadDashboard({ clearOnError: false });
-    },
-    [loadDashboard, navigate, routeState.selectedOrganizationModelId]
-  );
-
-  const handleCreateEvaluationTargetModel = useCallback(
-    async ({ projectId, name, accessUrl }: CreateEvaluationTargetModelInput) => {
-      await createEvaluationTargetModel({
-        projectId,
-        name,
-        accessUrl
+      await applyDirectoryMutation({
+        operation: (signal) => deleteOrganizationModel(projectId, signal),
+        isApplied: (snapshot) => !snapshot.organizations.some((project) => project.id === projectId)
       });
 
-      await loadDashboard({ clearOnError: false });
+      // The route-validation effect above uses the current selection after the
+      // refresh. A late deletion must not replace a page opened while waiting.
     },
-    [loadDashboard]
-  );
-
-  const handleUpdateEvaluationTargetModel = useCallback(
-    async ({
-      projectId,
-      siteId,
-      name,
-      accessUrl
-    }: {
-      projectId: number;
-      siteId: number;
-      name: string;
-      accessUrl: string;
-    }) => {
-      await updateEvaluationTargetModel({
-        projectId,
-        siteId,
-        name,
-        accessUrl
-      });
-
-      await loadDashboard({ clearOnError: false });
-    },
-    [loadDashboard]
+    [applyDirectoryMutation]
   );
 
   const handleDeleteEvaluationTargetModel = useCallback(
     async ({ projectId, siteId }: { projectId: number; siteId: number }) => {
-      await deleteEvaluationTargetModel({
-        projectId,
-        siteId
+      await applyDirectoryMutation({
+        operation: (signal) => deleteEvaluationTargetModel({ projectId, siteId }, signal),
+        isApplied: (snapshot) => !snapshot.organizations.some((project) =>
+          project.id === projectId && project.evaluationTargets.some((target) => target.id === siteId))
       });
-
-      await loadDashboard({ clearOnError: false });
     },
-    [loadDashboard]
+    [applyDirectoryMutation]
   );
-  const { handleRescanEvaluationTargetModel, isRescanningSite } = useEvaluationTargetRescan({
-    dashboardData,
-    loadDashboard,
-    onError: setDashboardError,
-    selectedEvaluationTargetModel,
-    selectedOrganizationModel
-  });
-
   const sidebarLinks: SidebarItem[] = useMemo(
     () => [
       {
-        label: "대시보드",
-        href: "/dashboard",
-        icon: <LayoutDashboard size={18} />,
-        onClick: () => navigate("/dashboard"),
-        active: routeState.menu === "dashboard"
-      },
-      {
-        label: "프로젝트",
-        href: "/projects",
-        icon: <FolderKanban size={18} />,
-        onClick: () => navigate("/projects"),
-        active: routeState.menu === "projects" || routeState.menu === "project-create"
-      },
-      {
-        label: "리포트",
-        href: "/reports",
-        icon: <FileBarChart2 size={18} />,
-        onClick: () => navigate("/reports"),
-        active: routeState.menu === "reports"
+        label: "새 페이지 분석",
+        href: APP_HOME_PATH,
+        icon: <Link2 size={18} />,
+        onClick: () => navigate(APP_HOME_PATH),
+        active: routeState.menu === "analyze"
       }
     ],
     [navigate, routeState.menu]
   );
 
-  const headerLabel =
-    routeState.menu === "dashboard"
-      ? "Dashboard"
-      : routeState.menu === "reports"
-        ? "Report"
-        : isSiteDetailView
-          ? "Page Details"
-          : isProjectDetailView
-            ? "Project Details"
-            : "Project";
   const headerTitle =
-    routeState.menu === "dashboard"
-      ? "대시보드"
-      : routeState.menu === "reports"
-        ? "리포트"
-        : isSiteDetailView
-          ? selectedEvaluationTargetModel.name
-          : isProjectDetailView
-            ? selectedOrganizationModel.name
-            : "프로젝트";
-  const headerDescription = isSiteDetailView
-    ? selectedEvaluationTargetModel.accessUrl
-    : isProjectDetailView
-      ? selectedOrganizationModel.description || "설명이 없습니다."
-      : "";
-  const headerDescriptionHref = isSiteDetailView ? headerDescription : "";
+    routeState.menu === "analyze"
+      ? "새 페이지 분석"
+      : isSiteDetailView
+        ? selectedEvaluationTargetModel!.name
+        : isProjectDetailView
+          ? selectedOrganizationModel!.name
+          : "프로젝트";
   const siteLatestScanLabel = useMemo(() => {
     if (!isSiteDetailView || !selectedEvaluationTargetModel) {
       return "";
@@ -282,7 +301,7 @@ export function useDashboardController({
     [navigate]
   );
   const goToProjectsRoot = useCallback(() => {
-    navigate("/projects");
+    navigate(APP_HOME_PATH);
   }, [navigate]);
   const goToSite = useCallback(
     (siteId: number) => {
@@ -293,9 +312,9 @@ export function useDashboardController({
     },
     [navigate, selectedOrganizationModel]
   );
-  const goToSiteByIds = useCallback(
-    ({ projectId, siteId }: { projectId: number; siteId: number }) => {
-      navigate(`/projects/${projectId}/pages/${siteId}`);
+  const goToRecentPage = useCallback(
+    (pageId: number) => {
+      navigate(`/recent-pages/${pageId}`);
     },
     [navigate]
   );
@@ -305,45 +324,78 @@ export function useDashboardController({
     }
     navigate(`/projects/${selectedOrganizationModel.id}`);
   }, [navigate, selectedOrganizationModel]);
+  const refreshDashboard = useCallback(
+    () =>
+      loadDashboard({
+        refreshAfterInFlight: true,
+        showLoading: true,
+        clearOnError: false
+      }),
+    [loadDashboard]
+  );
+  const handleAnalysisAccepted = useCallback(
+    (request: EvaluationRequestModel) => {
+      trackEvaluationRequest(request);
+      void loadDashboard({ refreshAfterInFlight: true, clearOnError: false });
+    },
+    [loadDashboard, trackEvaluationRequest]
+  );
+  const handleQuickAnalysisAccepted = useCallback(
+    (request: EvaluationRequestModel) => {
+      handleAnalysisAccepted({ ...request, quickAnalysis: true });
+    },
+    [handleAnalysisAccepted]
+  );
+  const organizations = dashboardData?.organizations ?? [];
+  const selectedOrganizationModelId = selectedOrganizationModel?.id ?? null;
+
   return {
+    canDiscardOrganizationCreateRecovery:
+      organizationCreateForm.canDiscardOrganizationCreateRecovery,
     dashboardData,
     dashboardError,
+    pausedStatusCount,
+    retryStatusChecks,
     goBackToProject,
     goToProject,
     goToProjectsRoot,
+    goToRecentPage,
     goToSite,
-    goToSiteByIds,
+    handleAnalysisAccepted,
+    handleQuickAnalysisAccepted,
     handleCreateEvaluationTargetModel,
+    handleRequestEvaluationTargetAnalysis,
     handleDeleteEvaluationTargetModel,
     handleCreateOrganizationModel: organizationCreateForm.handleCreateOrganizationModel,
-    handleUpdateEvaluationTargetModel,
+    discardOrganizationCreateRecovery:
+      organizationCreateForm.discardOrganizationCreateRecovery,
     handleDeleteOrganizationModel,
     handleUpdateOrganizationModel,
-    handleRescanEvaluationTargetModel,
-    headerDescription,
-    headerDescriptionHref,
-    headerLabel,
     headerTitle,
+    hasPendingOrganizationCreate: organizationCreateForm.hasPendingOrganizationCreate,
     isCreatingOrganizationModel: organizationCreateForm.isCreatingOrganizationModel,
-    isDashboardLoading,
+    isOrganizationCreateRecoveryBlocked:
+      organizationCreateForm.isOrganizationCreateRecoveryBlocked,
     isDarkMode,
+    isDashboardLoading,
     isOrganizationCreateOpen: organizationCreateForm.isOrganizationCreateOpen,
-    isRescanningSite,
     isSiteCreateOpen,
     menu: routeState.menu,
-    newOrganizationModelDescription: organizationCreateForm.newOrganizationModelDescription,
     newOrganizationModelName: organizationCreateForm.newOrganizationModelName,
     openOrganizationCreateModal: organizationCreateForm.openOrganizationCreateModal,
     openSiteCreateModal: () => {
       setIsSiteCreateOpen(true);
     },
+    organizations,
     projectCreateError: organizationCreateForm.projectCreateError,
+    refreshDashboard,
     selectedEvaluationTargetModel,
     selectedOrganizationModel,
+    selectedOrganizationModelId,
+    sidebarSelection: routeState.sidebarSelection,
     siteLatestScanLabel,
     setIsOrganizationCreateOpen: organizationCreateForm.setIsOrganizationCreateOpen,
     setIsSiteCreateOpen,
-    setNewOrganizationModelDescription: organizationCreateForm.setNewOrganizationModelDescription,
     setNewOrganizationModelName: organizationCreateForm.setNewOrganizationModelName,
     setThemeMode,
     sidebarLinks,

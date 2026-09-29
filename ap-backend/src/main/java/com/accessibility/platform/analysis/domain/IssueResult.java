@@ -6,9 +6,18 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+import java.util.ArrayList;
+import java.util.List;
+
 @Getter
 @Entity
-@Table(name = "issue_result")
+@Table(
+        name = "issue_result",
+        indexes = @Index(
+                name = "idx_issue_result_analysis_severity_code",
+                columnList = "analysis_result_id,severity,issue_code"
+        )
+)
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class IssueResult extends BaseTimeEntity {
 
@@ -36,8 +45,43 @@ public class IssueResult extends BaseTimeEntity {
     @Lob
     private String message;
 
+    @Column(length = 100)
+    private String ruleId;
+
     @Column(nullable = false)
     private boolean resolved;
+
+    @Column(length = 40)
+    private String locatorKind;
+
+    @Lob
+    @Convert(converter = IssueLocatorPathStepsConverter.class)
+    private List<IssueLocatorPathStep> locatorPathSteps;
+
+    private Double locatorX;
+    private Double locatorY;
+    private Double locatorWidth;
+    private Double locatorHeight;
+
+    @Column(length = 40)
+    private String locatorCoordinateSpace;
+
+    private Boolean locatorVisible;
+
+    @Lob
+    private String locatorHtmlSnippet;
+
+    @Column(name = "locator_carousel_id")
+    private Integer locatorCarouselId;
+
+    @Column(name = "locator_carousel_slide_index")
+    private Integer locatorCarouselSlideIndex;
+
+    @Column(name = "locator_carousel_slide_count")
+    private Integer locatorCarouselSlideCount;
+
+    @Column(length = 20)
+    private String exclusionReason;
 
     public IssueResult(AnalysisResult analysisResult, String issueCode, String issueTitle, Severity severity, String locationPath, String message) {
         this.analysisResult = analysisResult;
@@ -47,5 +91,93 @@ public class IssueResult extends BaseTimeEntity {
         this.locationPath = locationPath;
         this.message = message;
         this.resolved = false;
+        this.locatorPathSteps = new ArrayList<>();
+    }
+
+    /**
+     * AD or DYNAMIC when the finding was inside an advertising region or a region
+     * whose content changed between two loads. Such findings are kept for the
+     * report but excluded from scores and issue counts.
+     */
+    public void applyExclusion(String reason) {
+        this.exclusionReason = "AD".equals(reason) || "DYNAMIC".equals(reason) ? reason : null;
+    }
+
+    public void applyRuleId(String ruleId) {
+        this.ruleId = ruleId != null && ruleId.matches("[a-z0-9][a-z0-9-]{0,99}") ? ruleId : null;
+    }
+
+    public void applyLocator(IssueLocator locator) {
+        if (locator == null) {
+            return;
+        }
+        this.locatorKind = locator.kind();
+        this.locatorPathSteps = new ArrayList<>(locator.pathSteps());
+        this.locatorX = locator.x();
+        this.locatorY = locator.y();
+        this.locatorWidth = locator.width();
+        this.locatorHeight = locator.height();
+        this.locatorCoordinateSpace = locator.coordinateSpace();
+        this.locatorVisible = locator.visible();
+        this.locatorHtmlSnippet = locator.htmlSnippet();
+        IssueLocatorCarouselContext carouselContext = locator.carouselContext();
+        this.locatorCarouselId = carouselContext == null ? null : carouselContext.carouselId();
+        this.locatorCarouselSlideIndex = carouselContext == null ? null : carouselContext.slideIndex();
+        this.locatorCarouselSlideCount = carouselContext == null ? null : carouselContext.slideCount();
+    }
+
+    public void reclassify(String issueCode, String issueTitle) {
+        if (issueCode == null || issueCode.isBlank() || issueTitle == null || issueTitle.isBlank()) {
+            throw new IllegalArgumentException("Issue classification must include a code and title");
+        }
+        this.issueCode = issueCode;
+        this.issueTitle = issueTitle;
+    }
+
+    public IssueLocator getLocator() {
+        IssueLocatorCarouselContext carouselContext = getCarouselContext();
+        boolean hasLocator = locatorKind != null
+                || (locatorPathSteps != null && !locatorPathSteps.isEmpty())
+                || locatorX != null
+                || locatorY != null
+                || locatorWidth != null
+                || locatorHeight != null
+                || locatorCoordinateSpace != null
+                || locatorVisible != null
+                || locatorHtmlSnippet != null
+                || carouselContext != null;
+        if (!hasLocator) {
+            return null;
+        }
+        return new IssueLocator(
+                locatorKind,
+                locatorPathSteps == null ? List.of() : locatorPathSteps,
+                locatorX,
+                locatorY,
+                locatorWidth,
+                locatorHeight,
+                locatorCoordinateSpace,
+                locatorVisible,
+                locatorHtmlSnippet,
+                carouselContext
+        );
+    }
+
+    private IssueLocatorCarouselContext getCarouselContext() {
+        if (locatorCarouselId == null
+                || locatorCarouselSlideIndex == null
+                || locatorCarouselSlideCount == null
+                || !IssueLocatorCarouselContext.isValid(
+                        locatorCarouselId,
+                        locatorCarouselSlideIndex,
+                        locatorCarouselSlideCount
+                )) {
+            return null;
+        }
+        return new IssueLocatorCarouselContext(
+                locatorCarouselId,
+                locatorCarouselSlideIndex,
+                locatorCarouselSlideCount
+        );
     }
 }

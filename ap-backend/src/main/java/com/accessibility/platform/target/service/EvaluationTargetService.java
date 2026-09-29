@@ -7,12 +7,15 @@ import com.accessibility.platform.target.domain.EvaluationTarget;
 import com.accessibility.platform.target.dto.EvaluationTargetCreateRequest;
 import com.accessibility.platform.target.dto.EvaluationTargetResponse;
 import com.accessibility.platform.target.dto.EvaluationTargetUpdateRequest;
+import com.accessibility.platform.target.domain.TargetStatus;
 import com.accessibility.platform.target.repository.EvaluationTargetRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Propagation;
 
 import java.util.List;
+import java.util.Objects;
 
 @Service
 @RequiredArgsConstructor
@@ -21,6 +24,7 @@ public class EvaluationTargetService {
 
     private final EvaluationTargetRepository evaluationTargetRepository;
     private final OrganizationRepository organizationRepository;
+    private final FaviconService faviconService;
 
     @Transactional
     public EvaluationTargetResponse create(EvaluationTargetCreateRequest request) {
@@ -32,7 +36,8 @@ public class EvaluationTargetService {
                 request.name(),
                 request.targetType(),
                 request.accessUrl(),
-                request.description()
+                request.description(),
+                faviconService.findFaviconUrl(request.accessUrl()).orElse(null)
         );
         return EvaluationTargetResponse.from(evaluationTargetRepository.save(target));
     }
@@ -44,7 +49,7 @@ public class EvaluationTargetService {
     }
 
     public List<EvaluationTargetResponse> findByOrganizationId(Long organizationId) {
-        return evaluationTargetRepository.findByOrganizationId(organizationId).stream()
+        return evaluationTargetRepository.findByOrganizationIdAndStatusNot(organizationId, TargetStatus.DELETED).stream()
                 .map(EvaluationTargetResponse::from)
                 .toList();
     }
@@ -56,13 +61,26 @@ public class EvaluationTargetService {
     @Transactional
     public EvaluationTargetResponse update(Long id, EvaluationTargetUpdateRequest request) {
         EvaluationTarget target = getTarget(id);
+        String faviconUrl = Objects.equals(target.getAccessUrl(), request.accessUrl())
+                ? target.getFaviconUrl()
+                : faviconService.findFaviconUrl(request.accessUrl()).orElse(null);
         target.update(
                 request.name(),
                 request.targetType(),
                 request.accessUrl(),
-                request.description()
+                request.description(),
+                faviconUrl
         );
         return EvaluationTargetResponse.from(target);
+    }
+
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
+    public EvaluationTargetResponse refreshFavicon(Long id) {
+        String originalUrl = getTarget(id).getAccessUrl();
+        faviconService.findFaviconUrl(originalUrl).ifPresent(url ->
+                evaluationTargetRepository.updateFaviconIfUrlUnchanged(id, originalUrl, url, TargetStatus.DELETED));
+        return EvaluationTargetResponse.from(evaluationTargetRepository.findWithOrganizationById(id)
+                .orElseThrow(ResourceNotFoundException::new));
     }
 
     @Transactional

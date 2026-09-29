@@ -1,5 +1,7 @@
 package com.accessibility.platform.request.service;
 
+import com.accessibility.platform.common.exception.BusinessException;
+import com.accessibility.platform.common.exception.ErrorCode;
 import com.accessibility.platform.common.exception.ResourceNotFoundException;
 import com.accessibility.platform.request.domain.EvaluationRequest;
 import com.accessibility.platform.request.dto.EvaluationRequestCreateRequest;
@@ -10,16 +12,19 @@ import com.accessibility.platform.target.domain.EvaluationTarget;
 import com.accessibility.platform.target.service.EvaluationTargetService;
 import com.accessibility.platform.request.dto.EvaluateUrlRequest;
 import com.accessibility.platform.organization.domain.Organization;
-import com.accessibility.platform.organization.domain.OrganizationType;
-import com.accessibility.platform.organization.repository.OrganizationRepository;
+import com.accessibility.platform.organization.service.ImportedOrganizationService;
+import com.accessibility.platform.organization.domain.OrganizationStatus;
 import com.accessibility.platform.target.domain.TargetType;
+import com.accessibility.platform.target.domain.TargetStatus;
 import com.accessibility.platform.target.repository.EvaluationTargetRepository;
+import com.accessibility.platform.target.service.FaviconService;
 import com.accessibility.platform.integration.service.AiEvaluationRunnerService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -29,8 +34,9 @@ public class EvaluationRequestService {
     private final EvaluationRequestRepository evaluationRequestRepository;
     private final EvaluationTargetService evaluationTargetService;
     private final EvaluationTargetRepository evaluationTargetRepository;
-    private final OrganizationRepository organizationRepository;
+    private final ImportedOrganizationService importedOrganizationService;
     private final AiEvaluationRunnerService aiEvaluationRunnerService;
+    private final FaviconService faviconService;
 
     @Transactional
     public EvaluationRequestResponse create(EvaluationRequestCreateRequest request) {
@@ -47,32 +53,43 @@ public class EvaluationRequestService {
     @Transactional
     public EvaluationRequestResponse createForUrl(EvaluateUrlRequest request) {
         String url = request.url();
-        EvaluationTarget target = evaluationTargetRepository.findByAccessUrl(url)
-                .orElseGet(() -> {
-                    Organization organization = organizationRepository.findByName("AI Module Imported")
-                            .orElseGet(() -> organizationRepository.save(new Organization(
-                                    "AI Module Imported",
-                                    OrganizationType.ETC,
-                                    null,
-                                    "AI-module imported evaluation results"
-                            )));
+        Optional<EvaluationTarget> existingTarget = evaluationTargetRepository.findAllByAccessUrlOrderByIdDesc(url).stream()
+                .filter(candidate -> candidate.getStatus() != TargetStatus.DELETED)
+                .filter(candidate -> candidate.getOrganization().getStatus() == OrganizationStatus.ACTIVE)
+                .findFirst();
 
-                    return evaluationTargetRepository.save(new EvaluationTarget(
-                            organization,
-                            targetName(url),
-                            TargetType.WEB,
-                            url,
-                            "Created automatically from Web UI URL input"
-                    ));
-                });
+        EvaluationTarget target;
+        if (existingTarget.isPresent()) {
+            target = existingTarget.get();
+            enrichFaviconIfMissing(target);
+        } else {
+            Organization organization = importedOrganizationService.getOrCreate();
 
-        EvaluationRequest evaluationRequest = new EvaluationRequest(target, "Web UI initiated request");
+            target = evaluationTargetRepository.save(new EvaluationTarget(
+                    organization,
+                    targetName(url),
+                    TargetType.WEB,
+                    url,
+                    "Created automatically from Web UI URL input",
+                    faviconService.findFaviconUrl(url).orElse(null)
+            ));
+        }
+
+        EvaluationRequest evaluationRequest = new EvaluationRequest(target, EvaluationRequest.QUICK_ANALYSIS_NOTE);
         EvaluationRequest savedRequest = evaluationRequestRepository.save(evaluationRequest);
 
         // Run the Python analysis asynchronously in the background
         aiEvaluationRunnerService.runEvaluationAsync(savedRequest.getId(), target.getAccessUrl());
 
         return EvaluationRequestResponse.from(savedRequest);
+    }
+
+    // Also replaces legacy remote URLs and cache entries missing on this
+    // machine, so a rescan restores the favicon. A failed lookup keeps the value.
+    private void enrichFaviconIfMissing(EvaluationTarget target) {
+        if (!faviconService.hasServableFavicon(target.getFaviconUrl())) {
+            faviconService.findFaviconUrl(target.getAccessUrl()).ifPresent(target::updateFaviconUrl);
+        }
     }
 
     private String targetName(String url) {
@@ -97,9 +114,35 @@ public class EvaluationRequestService {
         return EvaluationRequestResponse.from(getRequest(id));
     }
 
+    public List<EvaluationRequestResponse> findActiveForTarget(Long targetId) {
+        evaluationTargetService.getTarget(targetId);
+        return evaluationRequestRepository.findByEvaluationTargetIdAndStatusIn(targetId,
+                List.of(com.accessibility.platform.request.domain.EvaluationRequestStatus.PENDING,
+                        com.accessibility.platform.request.domain.EvaluationRequestStatus.IN_PROGRESS))
+                .stream().map(EvaluationRequestResponse::from).toList();
+    }
+
+    public List<com.accessibility.platform.request.dto.EvaluationRequestStatusEntry> findStatuses(List<Long> ids) {
+        if (ids.isEmpty() || ids.size() > 100 || ids.stream().anyMatch(id -> id == null || id <= 0)
+                || ids.stream().distinct().count() != ids.size()) throw new BusinessException(ErrorCode.INVALID_REQUEST);
+        var found = evaluationRequestRepository.findStatusRequests(ids).stream().collect(java.util.stream.Collectors.toMap(EvaluationRequest::getId, value -> value));
+        return ids.stream().map(id -> {
+            var request = found.get(id);
+            if (request == null) return new com.accessibility.platform.request.dto.EvaluationRequestStatusEntry(id, "NOT_FOUND", null);
+            var target = request.getEvaluationTarget();
+            if (target.getStatus() != TargetStatus.ACTIVE || target.getOrganization().getStatus() != OrganizationStatus.ACTIVE)
+                return new com.accessibility.platform.request.dto.EvaluationRequestStatusEntry(id, "REMOVED", null);
+            return new com.accessibility.platform.request.dto.EvaluationRequestStatusEntry(id, "FOUND", EvaluationRequestResponse.from(request));
+        }).toList();
+    }
+
     @Transactional
     public EvaluationRequestResponse updateStatus(Long id, EvaluationRequestStatusUpdateRequest request) {
-        EvaluationRequest evaluationRequest = getRequest(id);
+        EvaluationRequest evaluationRequest = evaluationRequestRepository.findByIdForUpdate(id)
+                .orElseThrow(ResourceNotFoundException::new);
+        if (!evaluationRequest.getStatus().canTransitionTo(request.status())) {
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION);
+        }
         evaluationRequest.changeStatus(request.status());
         return EvaluationRequestResponse.from(evaluationRequest);
     }

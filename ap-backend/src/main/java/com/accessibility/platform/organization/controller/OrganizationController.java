@@ -12,6 +12,8 @@ import com.accessibility.platform.target.dto.EvaluationTargetUpdateRequest;
 import com.accessibility.platform.target.service.EvaluationTargetService;
 import com.accessibility.platform.target.domain.TargetType;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
@@ -26,8 +28,11 @@ public class OrganizationController {
     private final EvaluationTargetService evaluationTargetService;
 
     @PostMapping
-    public ApiResponse<OrganizationResponse> create(@Valid @RequestBody OrganizationCreateRequest request) {
-        return ApiResponse.ok(organizationService.create(request));
+    public ApiResponse<OrganizationResponse> create(
+            @Valid @RequestBody OrganizationCreateRequest request,
+            @RequestHeader(name = "Idempotency-Key", required = false) String idempotencyKey
+    ) {
+        return ApiResponse.ok(organizationService.create(request, idempotencyKey));
     }
 
     @GetMapping
@@ -48,10 +53,30 @@ public class OrganizationController {
         return ApiResponse.ok(organizationService.update(id, request));
     }
 
+    @PatchMapping("/{id}")
+    public ApiResponse<OrganizationResponse> patch(
+        @PathVariable Long id,
+        @Valid @RequestBody OrganizationLightRequest requestLight
+    ) {
+        OrganizationUpdateRequest request = new OrganizationUpdateRequest(
+                requestLight.name(),
+                com.accessibility.platform.organization.domain.OrganizationType.ETC,
+                null,
+                requestLight.description()
+        );
+        return ApiResponse.ok(organizationService.update(id, request));
+    }
+
     @PatchMapping("/{id}/deactivate")
     public ApiResponse<Void> deactivate(@PathVariable Long id) {
         organizationService.deactivate(id);
         return ApiResponse.ok(null, "기관이 비활성화되었습니다.");
+    }
+
+    @DeleteMapping("/{id}")
+    public ApiResponse<Void> delete(@PathVariable Long id) {
+        organizationService.deactivate(id);
+        return ApiResponse.ok(null, "Organization deactivated.");
     }
 
     @GetMapping("/{organizationId}/evaluation-targets")
@@ -96,5 +121,11 @@ public class OrganizationController {
     ) {
         evaluationTargetService.deleteLogical(targetId);
         return ApiResponse.ok(null, "평가 대상이 삭제되었습니다.");
+    }
+
+    private record OrganizationLightRequest(
+            @NotBlank @Size(max = 100) String name,
+            @Size(max = 500) String description
+    ) {
     }
 }

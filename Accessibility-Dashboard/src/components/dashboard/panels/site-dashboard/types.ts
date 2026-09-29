@@ -1,19 +1,13 @@
-import type { ImprovementGuide, IssueResultModel, SeverityLevel } from "@/types/accessibility-domain";
-
-export type ChartSeriesKey = "score" | "issueCount";
+import type { AnalyzerType, IssueResultModel, SeverityLevel } from "@/types/accessibility-domain";
+import type { LocatorConnectionStatus } from "./page-replay-protocol";
 
 export type ScoreChartItem = {
   slot: number;
   date: string;
   label: string;
   score: number;
-  issueCount: number;
-};
-
-export type SiteSummaryItem = {
-  label: string;
-  value: string;
-  unit: string;
+  issueCount: number | null;
+  isPlaceholder?: boolean;
 };
 
 export type SeverityChartItem = {
@@ -22,20 +16,25 @@ export type SeverityChartItem = {
   color: string;
 };
 
-export type IssueSeverityRow = SeverityChartItem & {
-  count: number;
-  percent: number;
-};
-
-export type WcagCriterion = {
-  criterion: string;
-  title: string;
-};
-
 export type RecentIssueRow = {
   issue: IssueResultModel;
   severity: SeverityChartItem;
-  wcagCriterion: WcagCriterion;
-  issueGuides: ImprovementGuide[];
-  analyzerLabel: string;
+  analyzerType?: AnalyzerType;
+};
+
+export type LocatorCheckState = "loading" | "ready" | "error";
+
+export type LocatorIssueState = {
+  status: LocatorConnectionStatus;
+  reason?: string;
+  recoverable?: boolean;
+};
+
+export type LocatorReport = {
+  requestId: number | null;
+  issueIdsSignature: string;
+  state: LocatorCheckState;
+  unavailableIssueIds: number[];
+  recoverableHiddenIssueIds: number[];
+  issueStates: Record<number, LocatorIssueState>;
 };

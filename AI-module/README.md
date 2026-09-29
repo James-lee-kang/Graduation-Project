@@ -4,10 +4,13 @@ URL을 입력하면 웹페이지의 접근성을 자동으로 평가하고, 총�
 
 ## 실행 방법
 
-```bash
-# 예시
-cd graduation_project
-python run_all.py https://www.gov.kr
+```powershell
+# Windows PowerShell (환경 설정 완료 후)
+cd AI-module
+.\.venv\Scripts\python run_all.py https://www.gov.kr
+
+# macOS/Linux
+# cd AI-module && .venv/bin/python run_all.py https://www.gov.kr
 ```
 
 이 한 줄이면 3개 모듈이 순서대로 실행되고, `output/result_final.json`에 최종 결과가 생성된다.
@@ -17,7 +20,7 @@ python run_all.py https://www.gov.kr
 ## 프로젝트 구조
 
 ```
-graduation_project/
+AI-module/
 ├── rule-based-analyzer/     # 모듈 1: 규칙 기반 코드 분석
 ├── text-level-analyzer/     # 모듈 2: 문장 난이도 + 수정 제안
 ├── cv-analyzer/             # 모듈 3: 시각 명암비 분석
@@ -38,12 +41,46 @@ graduation_project/
 
 | 파일 | 역할 |
 |------|------|
-| run.js | 파이프라인 실행기. Playwright로 페이지를 열고 axe-core 검사 + HTML/스크린샷 저장 |
+| run.js | Playwright로 페이지를 열어 axe-core 검사 + 내부 분석용 DOM snapshot 저장. 통합 실행 시에만 CV 전용 임시 PNG 생성 |
+| carousel-audit.js | Swiper/Slick/Splide/generic 캐러셀의 숨은 논리 슬라이드를 제한적으로 검사하고 결과 중복 제거 |
+| excluded-regions.js | 광고와 두 번 불러올 때 내용이 바뀐 영역을 표시하고, 그 안의 위반을 점수 대상과 분리 |
+| artifact.js | typed locator를 만들고 annotation을 포함한 내부 분석용 DOM snapshot 직렬화 |
 | adapter.js | axe-core 결과를 KWCAG 항목으로 매핑하는 어댑터 |
 | mapping.js | KWCAG 33개 항목의 매핑 데이터 (axe 규칙 ID, 심각도, 가중치) |
 | scorer.js | 100점 감점 방식 점수 계산 (심각도 × 가중치) |
 
 **검사 예시:** 대체 텍스트 누락, heading 구조, 색 대비, 버튼 레이블 등 KWCAG 33개 항목
+
+KWCAG에 매핑되지 않은 규칙 위반도 `unmapped_violations`에 규칙 ID와 노드별
+selector·HTML·locator를 보존하고 백엔드 이슈로 저장한다. 실제 axe 규칙 ID를 유지하며,
+위치 정보를 찾지 못한 문제도 결과 목록에서 확인할 수 있다.
+
+기준 상태의 axe 검사에 더해 캐러셀의 비기준 논리 슬라이드를 하나씩 임시로
+활성화해 검사한다. clone은 제외하고 캐러셀 12개, 캐러셀당 20개 슬라이드,
+추가 상태 60개를 기본 상한으로 둔다. 원 페이지의 style/ARIA/scroll/focus는
+복원하며 클릭과 사용자 네트워크 동작은 수행하지 않는다. 숨은 슬라이드에서 발견한
+이슈에도 typed locator와 carousel context를 남겨 현재 페이지에서 요소를 다시 찾을
+수 있게 한다. `result.html`의 annotation은 로컬 분석과 진단에만 사용한다.
+
+**제외 영역:** 사이트의 고정 콘텐츠가 아닌 영역은 모든 검사와 점수에서 빼고 따로 보고한다.
+
+| 사유 | 판정 |
+|---|---|
+| `AD` | 광고 표식(`ins.adsbygoogle`, `data-ad-slot`, `aria-label="광고"` 등)이나 광고 서버 주소의 iframe. 두 번 모두 같은 광고가 나와도 제외한다 |
+| `DYNAMIC` | 같은 브라우저 컨텍스트에서 페이지를 한 번 더 불러와 비교했을 때 글자·이미지 주소·iframe 주소가 달라진 요소. 하위 내용의 절반 이상이 바뀐 부모까지(페이지 면적의 25% 이하) 넓혀 목록 전체를 묶는다 |
+
+사이트 캐러셀과 슬라이드 배너는 `carousel-audit.js`가 모든 슬라이드를 검사하므로 `DYNAMIC`으로 보지 않는다.
+바뀌지 않는 배너와 광고 신호가 없는 자체 커머스 영역도 두 번 불러와 같으면 그대로 검사한다.
+정적 fallback(`INITIAL_RESPONSE_STATIC`)은 비교할 두 번째 응답이 없어 `AD`만 적용한다.
+
+표시한 요소에는 `data-ua-excluded-region` 속성을 남기고, `result_api.json`에 다음을 기록한다.
+
+- `metadata.excluded_regions`: 최상위 제외 영역의 사유와 문서 좌표(CSS px)
+- `excluded_violations`: 사유별 `{reason, violations, unmapped_violations}`. 형식은 점수 대상 위반과 같다
+
+텍스트 추출기는 이 속성이 붙은 요소를 읽지 않고, CV 분석기는 텍스트 상자 중심이 제외 영역 안에 있으면
+통과율 표본에서 빼고 위반만 `excluded_violations`(사유 포함)에 남긴다. 백엔드는 제외 위반을
+`exclusion_reason`과 함께 저장하되 점수와 문제 수에는 넣지 않고, 최종 리포트는 별도 항목으로 보여준다.
 
 ---
 
@@ -74,7 +111,20 @@ graduation_project/
 | contrast_analyzer.py | WCAG 명암비 공식으로 전경색/배경색 대비 계산 + AA/AAA 판정 + 수정 색상 추천 |
 | cv_runner.py | OCR → 명암비 분석 → 결과 JSON 출력 통합 실행기 |
 
-**검사 기준:** KWCAG 5.3.3 콘텐츠의 명도 대비 (AA 기준 4.5:1, 큰 텍스트 3.0:1)
+**검사 기준:** KWCAG 5.4.3 텍스트 콘텐츠의 명도 대비 (AA 기준 4.5:1, 큰 텍스트 3.0:1)
+
+**색상 측정:** 배경색은 텍스트 상자 안의 최빈색, 글자색은 상자 안에서 일정 비율 이상을 차지하면서
+배경과 가장 대비가 큰 색으로 잡는다. 상자 바깥은 버튼·배너 밖의 페이지 배경일 수 있어 쓰지 않는다. 글자가 배경보다 어둡다고 가정하지 않으므로 어두운
+배경의 밝은 글씨도 측정한다. 대표색은 양자화 구간이 아니라 실제 픽셀의 평균이다.
+
+**판정 제외:** 글자색·배경색을 구분할 수 없는 텍스트는 위반·통과 어디에도 세지 않고
+`summary.skipped_unmeasured`에 기록한다. `|`, `/`, `▼`처럼 기호만 인식된 결과도 다른 텍스트와 같이
+판정한다. 인식한 텍스트가 모두 제외되면 `NO_MEASURABLE_TEXT` 사유의 미측정 결과가 된다.
+
+**규칙 엔진과의 중복:** 결과 통합 단계에서 CV 위반 상자의 50% 이상이 규칙 엔진 `color-contrast`
+위반 요소의 문서 좌표와 겹치면 CV 위반 목록에서 뺀다(스크린샷 픽셀은 `deviceScaleFactor`로 나눠
+CSS px로 맞춘다). 위치를 표시할 수 있는 규칙 엔진 결과를 남기며, 뺀 건수는
+`summary.duplicate_rule_violations`에 기록한다. CV 통과율(총점)은 바꾸지 않는다.
 
 ---
 
@@ -83,30 +133,58 @@ graduation_project/
 ```
 python run_all.py <URL>
 
-  Step 1: [Node.js] 규칙 기반 평가     → result.json, result_api.json, result.html, result.png
+  Step 1: [Node.js] 규칙 기반 평가     → result.json, result_api.json, result.html, result_artifact.json
   Step 2: [Python]  텍스트 추출        → result_text.json
   Step 3: [Python]  난이도 분석        → result_text_difficulty.json
   Step 4: [Python]  LLM 수정 제안      → result_text_suggestions.json
-  Step 5: [Python]  CV 명암비 분석     → result_cv.json
+  Step 5: CV 명암비 분석               → 전용 임시 PNG 사용 후 즉시 삭제
   Step 6: 결과 통합 + 총점 계산        → result_final.json
-  Step 7: 백엔드 전송                  → POST /api/v1/evaluations
+  Step 7: 백엔드 전송                  → capture metadata를 포함한 평가 JSON을 한 번 저장
 ```
 
 모든 결과 파일은 `output/` 폴더에 저장된다.
+
+규칙 기반 Step 1은 axe 검사 전에 받은 문서가 대상 페이지인지 확인한다. 다음 경우에는 검사와 점수를 만들지 않고
+`result_api.json`에 `metadata.document_health`만 기록한 뒤 종료 코드 2로 끝난다.
+
+| 상태 | 판정 |
+|---|---|
+| `HTTP_ERROR` | 리다이렉트 뒤 최종 문서 응답이 4xx·5xx. 본문이 있어도 오류 화면으로 본다 |
+| `EMPTY` | 보이는 글자 20자 미만이고 보이는 이미지·링크·입력 요소도 없음. 늦게 채워지는 본문을 위해 최대 15초 더 확인한다 |
+| `BLOCKED` | 출처와 관계없이, 보이는 글자 600자 이하·링크 4개 이하의 짧은 문서에 보안 확인·자동 접근 차단 문구가 있음. 출처가 바뀐 봇 확인 화면에서 쓸 초기 HTML이 없을 때도 해당한다 |
+
+본문 측정은 열린 Shadow DOM 안의 글자와 요소도 포함한다. CAPTCHA 입력칸이 있는 일반 페이지는 자체 본문과 링크가
+있어 차단 화면으로 보지 않는다. `run_all.py`는 세 상태를 대상 페이지 접근 실패(종료 코드 2, 백엔드
+`TARGET_PAGE_UNAVAILABLE`)로 처리하며 점수로 저장하지 않는다.
+
+외부 명령의 기본 제한 시간은 120초이며, 느린 공공 사이트의 로딩·정적 fallback·axe 검사를
+포함하는 규칙 기반 Step 1만 240초까지 기다린다. 제한 시간을 넘기면 Windows에서는
+해당 프로세스 트리, macOS/Linux에서는 별도 프로세스 그룹을 종료해 Chromium 자식
+프로세스가 남지 않게 한다.
 
 ---
 
 ## 총점 계산 방식
 
 ```
-총점 = (규칙 기반 점수 × 50%) + ((100 - 난이도 점수) × 30%) + (CV 통과율 × 20%)
+정상 실행: 총점 = (규칙 기반 점수 × 50%) + (난이도 page_score × 30%) + (CV pass_rate × 20%)
 ```
 
 | 모듈 | 가중치 | 점수 체계 | 근거 |
 |------|--------|-----------|------|
 | 규칙 기반 | 50% | 100점 감점 방식 | KWCAG 33개 항목 대부분 커버 |
-| 난이도 분석 | 30% | 100점 (높을수록 어려움 → 반전) | 콘텐츠 품질 평가 |
-| CV 시각 분석 | 20% | 통과율(%) | KWCAG 5.3.3 한 항목 |
+| 난이도 분석 | 30% | 100점 감점 방식(높을수록 좋음) | 콘텐츠 품질 평가 |
+| CV 시각 분석 | 20% | OCR 명암비 통과율 | 이미지·캔버스 렌더링 텍스트 보완 |
+
+`run_all.py`가 만드는 PNG는 CV 프로세스에만 전달되는 OS 임시 파일이다. `output/`에
+저장하거나 백엔드에 올리지 않으며, CV 성공·실패와 관계없이 즉시 삭제한다. CV가
+실패했거나 측정한 텍스트가 0개이면 CV를 총점에서 제외하고 남은 모듈 가중치를
+재분배한다. 텍스트를 실제로 측정한 뒤 통과율이 0%인 경우는 CV 0점으로 합산한다.
+미측정 결과에는 이유를 남기고, 백엔드는 CV 점수를 `null`, 상태를 `NOT_MEASURED`로
+저장한다. 실행 실패는 `FAILED`, 실제 측정 점수는 `SUCCESS`로 구분한다. 과거 기록의
+상태가 `null`이면 당시 측정 여부를 확인할 수 없다는 뜻이며 기존 0점을 일괄 변경하지 않는다.
+현재 실행에서 생성되고 계약 검증을 통과한 규칙 기반 결과와 capture metadata는 완료 저장의
+필수 조건이며, 규칙 기반 단계가 실패하면 난이도/CV 결과만으로 완료 처리하지 않는다.
 
 등급 기준: A+(95↑), A(90↑), B+(85↑), B(80↑), C(70↑), D(60↑), F(60미만)
 
@@ -116,7 +194,9 @@ python run_all.py <URL>
 
 ### 백엔드가 받는 것
 
-최종 통합 결과인 `result_final.json` 하나만 받아서 DB에 저장하면 된다.
+백엔드는 `result_final.json` 한 번만 받는다. 점수, 규칙, 이슈, typed locator와
+라이브 화면 정렬에 필요한 `capture_metadata`가 모두 이 JSON에 포함된다.
+`result.html`은 문장 난이도 추출을 위한 로컬 중간 파일이며 외부로 전송하지 않는다.
 
 ### result_final.json 구조
 
@@ -125,6 +205,16 @@ python run_all.py <URL>
   "url": "https://www.gov.kr",
   "analyzed_at": "2026-05-11T23:42:27",
   "elapsed_seconds": 13.31,
+  "capture_metadata": {
+    "requestedUrl": "https://www.gov.kr",
+    "finalUrl": "https://www.gov.kr/portal/main",
+    "capturedAt": "2026-08-11T18:30:00.000",
+    "viewportWidthCssPx": 1280,
+    "viewportHeightCssPx": 720,
+    "deviceScaleFactor": 1,
+    "pageWidthCssPx": 1280,
+    "pageHeightCssPx": 4200
+  },
   "total_score": 94.2,
   "grade": "A",
 
@@ -159,6 +249,56 @@ Body: result_final.json 전체
 Response: { "evaluation_id": "...", "status": "saved" }
 ```
 
+`result_final.json.capture_metadata` 계약 (`result_artifact.json`에서 통합):
+
+```json
+{
+  "requestedUrl": "https://example.test",
+  "finalUrl": "https://example.test/",
+  "capturedAt": "2026-08-11T18:30:00.000",
+  "viewportWidthCssPx": 1280,
+  "viewportHeightCssPx": 720,
+  "deviceScaleFactor": 1,
+  "pageWidthCssPx": 1280,
+  "pageHeightCssPx": 4200
+}
+```
+
+규칙 기반 위반 노드는 기존 `selector`, `html`과 함께 아래 locator를 가진다.
+
+```json
+{
+  "kind": "DOM_RECT",
+  "pathSteps": [
+    { "context": "DOCUMENT", "selector": "iframe#content", "frameUrl": "https://example.test/frame" },
+    { "context": "FRAME", "selector": "my-widget", "frameUrl": "https://example.test/frame" },
+    { "context": "SHADOW_ROOT", "selector": "button.submit", "frameUrl": "https://example.test/frame" }
+  ],
+  "x": 120,
+  "y": 840,
+  "width": 160,
+  "height": 48,
+  "coordinateSpace": "DOCUMENT_CSS_PX",
+  "visible": true,
+  "htmlSnippet": "<button class=\"submit\">...</button>"
+}
+```
+
+`finalUrl`은 규칙 기반 분석이 실제로 완료된 HTTPS 문서 URL과 일치해야 하며,
+라이브 게이트웨이가 받을 수 있도록 fragment를 제외한다. locator 좌표는 분석 당시
+문서의 CSS 좌표이며 스크린샷 높이/타일로
+잘리지 않는다. 라이브 화면에서는 `pathSteps`로 요소를 다시 찾은 뒤 현재
+`getBoundingClientRect()`를 우선 사용하고, 저장 좌표는 초기 위치 힌트로만 사용한다.
+로컬 `result.html`에는 실행 가능한 script/inline handler/meta refresh를 제거하고
+원본 base URL을 넣어 텍스트 추출 시 상대 CSS·이미지 경로를 해석할 수 있게 한다.
+
+초기 2xx 페이지가 5초 뒤 교차 출처 봇/보안 챌린지로 이동하거나, 같은 URL에서
+BotManager 전용 `#bm-wait-background`와 `#loading-overlay`가 표시되고 그 밖의 본문이
+보이지 않는 경우 최초 응답 HTML을
+스크립트 없이 정적으로 다시 열어 분석한다. 이 제한적 fallback은 로그와 HTML의
+`data-accessibility-replay-source="INITIAL_RESPONSE_STATIC"` 표식으로 드러나며,
+CAPTCHA 우회나 `navigator.webdriver` 위장은 수행하지 않는다.
+
 ### 프론트엔드에 내려줄 때
 
 대시보드에 필요한 데이터는 전부 `result_final.json` 안에 있음:
@@ -167,6 +307,7 @@ Response: { "evaluation_id": "...", "status": "saved" }
 - 위반 항목 리스트 → `modules.rule_based.violations`
 - 수정 가이드 → `modules.text_suggestions`
 - 명암비 위반 → `modules.cv_visual.violations`
+- 분석 당시 화면 크기 → `capture_metadata`
 
 ---
 
@@ -178,12 +319,12 @@ Response: { "evaluation_id": "...", "status": "saved" }
 |------|------|
 | result.json | axe-core 원본 결과 + KWCAG 매핑 |
 | result_api.json | 규칙 기반 결과 API 스펙 형태 |
-| result.html | 렌더링된 HTML (텍스트 추출 입력) |
-| result.png | 풀페이지 스크린샷 (CV 분석 입력) |
+| result.html | 스크립트를 제거한 UTF-8 DOM snapshot (로컬 텍스트 추출 입력, 외부 미전송) |
+| result_artifact.json | 최종 JSON의 `capture_metadata`로 통합할 URL·뷰포트·문서 크기 |
 | result_text.json | 추출된 텍스트 블록 (카테고리별 분류) |
 | result_text_difficulty.json | 블록별 난이도 점수 상세 |
 | result_text_suggestions.json | 블록별 수정 제안 |
-| result_cv.json | 텍스트별 명암비 + 수정 추천 색상 |
+| result_cv.json | CV 텍스트별 명암비 + 수정 추천 색상 (입력 이미지 경로 미포함) |
 | result_final.json | 최종 통합 결과 (백엔드 전송용) |
 
 ---
@@ -193,17 +334,33 @@ Response: { "evaluation_id": "...", "status": "saved" }
 ### 필수 설치
 
 ```bash
-# Node.js 패키지 (rule-based-analyzer 폴더에서)
-npm install
+# AI-module 폴더에서 Python 가상 환경 생성
+python -m venv .venv
 
-# Python 패키지
-pip install beautifulsoup4 mecab-python3 python-dotenv openai Pillow google-cloud-vision
+# Windows PowerShell
+.\.venv\Scripts\python -m pip install -r requirements.txt
+
+# macOS/Linux
+# .venv/bin/python -m pip install -r requirements.txt
+
+# 잠금 파일로 Node.js 패키지 설치
+npm --prefix rule-based-analyzer ci
 ```
 
-### API 키 설정
+백엔드에서 실행할 때도 가상 환경의 Python을 지정하면 하위 Python 모듈도
+동일한 인터프리터와 패키지를 사용한다.
 
-- **OpenAI API 키:** `text-level-analyzer/.env` 파일에 `OPENAI_API_KEY=sk-...`
-- **Google Vision API 키:** `cv-analyzer/uniaccess-*.json` (서비스 계정 키)
-- **MeCab 사전:** `C:\mecab\share\mecab-ko-dic\`에 한국어 사전 설치
+```powershell
+$env:AI_PYTHON_EXECUTABLE = (Resolve-Path '.\.venv\Scripts\python.exe').Path
+```
 
-이 파일들은 `.gitignore`에 포함되어 있으므로 각자 로컬에 설정해야 한다.
+### 선택 기능 설정
+
+- **OpenAI API 키:** `text-level-analyzer/.env` 파일에 `OPENAI_API_KEY=...`. 없으면 LLM 호출만 건너뛰고 규칙 기반 제안을 사용한다.
+- **Google Vision 자격증명:** `GOOGLE_APPLICATION_CREDENTIALS`에 서비스 계정 JSON 경로를 지정한다. 없거나 잘못되면 CV 모듈만 실패로 기록한다.
+- **MeCab 사전:** 현재 Windows 설정은 `C:\mecab\share\mecab-ko-dic\`을 사용한다. 사전이 없으면 난이도와 수정 제안 모듈만 건너뛴다.
+
+자격증명과 `.env`는 `.gitignore`에 포함되므로 로컬에만 설정한다. 이 선택 설정이 없어도
+규칙 기반 평가가 성공하면 성공한 모듈만으로 가중치를 재분배해 부분 분석 결과를 완료한다.
+점수를 산출하는 모듈이 모두 실패하면 `result_final.json`은 진단용으로만 남기고,
+백엔드에 0점 결과를 저장하지 않은 채 0이 아닌 종료 코드로 끝난다.

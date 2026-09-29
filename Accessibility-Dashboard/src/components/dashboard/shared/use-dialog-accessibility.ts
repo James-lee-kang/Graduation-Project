@@ -1,4 +1,9 @@
 import { useEffect, useRef } from "react";
+import type { RefObject } from "react";
+
+let activeBodyScrollLocks = 0;
+let bodyOverflowBeforeLock = "";
+let bodyPaddingRightBeforeLock = "";
 
 const focusableSelector = [
   "a[href]",
@@ -11,18 +16,51 @@ const focusableSelector = [
 
 function getFocusableElements(container: HTMLElement): HTMLElement[] {
   return Array.from(container.querySelectorAll<HTMLElement>(focusableSelector)).filter((element) => {
-    return !element.hasAttribute("disabled") && element.getAttribute("aria-hidden") !== "true";
+    const style = window.getComputedStyle(element);
+    return (
+      !element.hasAttribute("disabled") &&
+      element.getAttribute("aria-hidden") !== "true" &&
+      style.display !== "none" &&
+      style.visibility !== "hidden"
+    );
   });
+}
+
+function lockBodyScroll() {
+  if (activeBodyScrollLocks === 0) {
+    bodyOverflowBeforeLock = document.body.style.overflow;
+    bodyPaddingRightBeforeLock = document.body.style.paddingRight;
+
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+    document.body.style.overflow = "hidden";
+    if (scrollbarWidth > 0) {
+      document.body.style.paddingRight = `${scrollbarWidth}px`;
+    }
+  }
+
+  activeBodyScrollLocks += 1;
+}
+
+function unlockBodyScroll() {
+  activeBodyScrollLocks = Math.max(0, activeBodyScrollLocks - 1);
+  if (activeBodyScrollLocks === 0) {
+    document.body.style.overflow = bodyOverflowBeforeLock;
+    document.body.style.paddingRight = bodyPaddingRightBeforeLock;
+  }
 }
 
 export function useDialogAccessibility<TElement extends HTMLElement = HTMLElement>({
   isOpen,
   onClose,
-  closeDisabled = false
+  closeDisabled = false,
+  initialFocusRef,
+  returnFocusRef
 }: {
   isOpen: boolean;
   onClose: () => void;
   closeDisabled?: boolean;
+  initialFocusRef?: RefObject<HTMLElement>;
+  returnFocusRef?: RefObject<HTMLElement>;
 }) {
   const dialogRef = useRef<TElement | null>(null);
   const onCloseRef = useRef(onClose);
@@ -46,10 +84,18 @@ export function useDialogAccessibility<TElement extends HTMLElement = HTMLElemen
       return;
     }
 
-    const previouslyFocusedElement = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previouslyFocusedElement =
+      returnFocusRef?.current ??
+      (document.activeElement instanceof HTMLElement ? document.activeElement : null);
+    lockBodyScroll();
     const focusTimer = window.setTimeout(() => {
       const [firstFocusableElement] = getFocusableElements(dialog);
-      (firstFocusableElement ?? dialog).focus({ preventScroll: true });
+      const requestedInitialFocus = initialFocusRef?.current;
+      const focusTarget =
+        requestedInitialFocus && dialog.contains(requestedInitialFocus)
+          ? requestedInitialFocus
+          : (firstFocusableElement ?? dialog);
+      focusTarget.focus({ preventScroll: true });
     }, 0);
 
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -74,14 +120,21 @@ export function useDialogAccessibility<TElement extends HTMLElement = HTMLElemen
 
       const firstFocusableElement = focusableElements[0]!;
       const lastFocusableElement = focusableElements[focusableElements.length - 1]!;
+      const activeElement = document.activeElement;
 
-      if (event.shiftKey && document.activeElement === firstFocusableElement) {
+      if (!(activeElement instanceof Node) || !dialog.contains(activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? lastFocusableElement : firstFocusableElement).focus({ preventScroll: true });
+        return;
+      }
+
+      if (event.shiftKey && activeElement === firstFocusableElement) {
         event.preventDefault();
         lastFocusableElement.focus({ preventScroll: true });
         return;
       }
 
-      if (!event.shiftKey && document.activeElement === lastFocusableElement) {
+      if (!event.shiftKey && activeElement === lastFocusableElement) {
         event.preventDefault();
         firstFocusableElement.focus({ preventScroll: true });
       }
@@ -91,11 +144,12 @@ export function useDialogAccessibility<TElement extends HTMLElement = HTMLElemen
     return () => {
       window.clearTimeout(focusTimer);
       document.removeEventListener("keydown", handleKeyDown);
+      unlockBodyScroll();
       if (previouslyFocusedElement && document.contains(previouslyFocusedElement)) {
         previouslyFocusedElement.focus({ preventScroll: true });
       }
     };
-  }, [isOpen]);
+  }, [initialFocusRef, isOpen, returnFocusRef]);
 
   return dialogRef;
 }
