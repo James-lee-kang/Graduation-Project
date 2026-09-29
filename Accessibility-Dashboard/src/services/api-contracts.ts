@@ -9,6 +9,7 @@ import type {
   EvaluationTarget,
   IssueLocator,
   IssueLocatorCarouselContext,
+  IssueLocatorContent,
   IssueLocatorPathStep,
   LiveReportSession,
   Organization,
@@ -716,10 +717,20 @@ const parseIssueLocatorCarouselContext: ApiResponseParser<IssueLocatorCarouselCo
   return { carouselId, slideIndex, slideCount };
 };
 
+const parseIssueLocatorContent: ApiResponseParser<IssueLocatorContent> = (value, path) => {
+  const fields = readFields(value, path);
+  return {
+    text: fields.required("text", parseNullableString) ?? "",
+    image: fields.required("image", parseNullableString)
+  };
+};
+
 const parseIssueLocator: ApiResponseParser<IssueLocator> = (value, path) => {
   const fields = readFields(value, path);
   const carouselContext = fields.optional("carouselContext", (field, fieldPath) =>
     field === null ? null : parseIssueLocatorCarouselContext(field, fieldPath));
+  const content = fields.optional("content", (field, fieldPath) =>
+    field === null ? null : parseIssueLocatorContent(field, fieldPath));
   const nullableNumber: ApiResponseParser<number | null> = (field, fieldPath) =>
     field === null ? null : parseFiniteNumber(field, fieldPath);
   return {
@@ -731,7 +742,8 @@ const parseIssueLocator: ApiResponseParser<IssueLocator> = (value, path) => {
     width: fields.optional("width", nullableNumber),
     height: fields.optional("height", nullableNumber),
     coordinateSpace: fields.optional("coordinateSpace", parseNullableString),
-    ...(carouselContext !== undefined ? { carouselContext } : {})
+    ...(carouselContext !== undefined ? { carouselContext } : {}),
+    ...(content !== undefined ? { content } : {})
   };
 };
 

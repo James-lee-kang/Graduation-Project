@@ -22,6 +22,8 @@ import com.accessibility.platform.integration.service.AiEvaluationRunnerService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
 import java.util.Optional;
@@ -71,8 +73,9 @@ public class EvaluationRequestService {
                     TargetType.WEB,
                     url,
                     "Created automatically from Web UI URL input",
-                    faviconService.findFaviconUrl(url).orElse(null)
+                    null
             ));
+            fetchFaviconAfterCommit(target);
         }
 
         EvaluationRequest evaluationRequest = new EvaluationRequest(target, EvaluationRequest.QUICK_ANALYSIS_NOTE);
@@ -88,7 +91,28 @@ public class EvaluationRequestService {
     // machine, so a rescan restores the favicon. A failed lookup keeps the value.
     private void enrichFaviconIfMissing(EvaluationTarget target) {
         if (!faviconService.hasServableFavicon(target.getFaviconUrl())) {
-            faviconService.findFaviconUrl(target.getAccessUrl()).ifPresent(target::updateFaviconUrl);
+            fetchFaviconAfterCommit(target);
+        }
+    }
+
+    // A favicon fetch can take up to its 10 second deadline. Run it after the
+    // commit and off the request thread so the analysis receipt returns at
+    // once; the dashboard shows the icon on its next overview refresh.
+    private void fetchFaviconAfterCommit(EvaluationTarget target) {
+        Long targetId = target.getId();
+        String pageUrl = target.getAccessUrl();
+        Runnable lookup = () -> faviconService.findFaviconUrlInBackground(pageUrl, faviconUrl ->
+                evaluationTargetRepository.updateFaviconIfUrlUnchanged(
+                        targetId, pageUrl, faviconUrl, TargetStatus.DELETED));
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    lookup.run();
+                }
+            });
+        } else {
+            lookup.run();
         }
     }
 

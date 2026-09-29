@@ -48,6 +48,7 @@
     result_text_suggestions.json ← 블록별 수정 제안
     result_cv.json              ← 임시 PNG를 분석한 CV 결과(입력 경로 미포함)
     cv_excluded_regions.json    ← CV에 넘기는 광고·동적 영역(스크린샷 px), 있을 때만
+    result_cv_anchors.json      ← CV 캡처 시점의 요소 위치·선택자·내용 서명 (CV 위반을 요소에 연결)
     ★result_final.json          ← 최종 통합 결과 (백엔드가 받는 파일)
 """
 
@@ -90,6 +91,7 @@ RUN_OUTPUT_FILES = [
     "result_text_suggestions.json",
     "result_cv.json",
     "cv_excluded_regions.json",
+    "result_cv_anchors.json",
     "result_ocr.json",
     "result_final.json",
     "result_artifact.json",
@@ -781,6 +783,77 @@ def drop_cv_violations_covered_by_rules(cv_result: Any,
     }
 
 
+def cv_anchor_for_box(anchors: List[Dict[str, Any]],
+                      box: Tuple[float, float, float, float]) -> Optional[Dict[str, Any]]:
+    """CV 상자 중심을 덮는 가장 작은 요소. 같은 크기면 문서 순서상 뒤(더 안쪽) 요소."""
+    left, top, width, height = box
+    center_x, center_y = left + width / 2, top + height / 2
+    best = None
+    best_area = None
+    for anchor in anchors:
+        values = [finite_numeric_score(anchor.get(key)) for key in ("x", "y", "width", "height")]
+        selector = anchor.get("selector")
+        if None in values or values[2] <= 0 or values[3] <= 0 or not isinstance(selector, str) or not selector:
+            continue
+        ax, ay, aw, ah = values
+        if not (ax <= center_x <= ax + aw and ay <= center_y <= ay + ah):
+            continue
+        area = aw * ah
+        if best_area is None or area <= best_area:
+            best, best_area = anchor, area
+    return best
+
+
+def attach_cv_locators(cv_result: Any, anchors: Any, capture_metadata: Any) -> Any:
+    """
+    CV 위반마다 그 상자 아래에 있던 요소를 locator로 붙인다.
+
+    CV 좌표는 스크린샷 기준이라, 위쪽 콘텐츠 높이나 화면 폭이 바뀌면 라이브 화면에서
+    엉뚱한 곳을 가리킨다. 요소 선택자와 분석 당시 내용 서명(글자·이미지 경로)을 함께
+    남기면 라이브 화면은 요소를 따라가고, 내용이 바뀌었으면 마커를 숨길 수 있다.
+    요소를 찾지 못한 위반은 기존처럼 좌표만 남는다.
+    """
+    if not valid_cv_result(cv_result) or not isinstance(anchors, list) or not anchors:
+        return cv_result
+    scale = finite_numeric_score(capture_metadata.get("deviceScaleFactor")) if isinstance(capture_metadata, dict) else None
+    if scale is None or scale <= 0:
+        scale = 1.0
+
+    def with_locator(violation: Any) -> Any:
+        location = violation.get("location") if isinstance(violation, dict) else None
+        values = [finite_numeric_score(location.get(key)) for key in ("x", "y", "width", "height")]             if isinstance(location, dict) else [None]
+        if None in values or values[2] <= 0 or values[3] <= 0:
+            return violation
+        box = tuple(value / scale for value in values)
+        anchor = cv_anchor_for_box(anchors, box)
+        if anchor is None:
+            return violation
+        content = {
+            "text": anchor.get("text") if isinstance(anchor.get("text"), str) else "",
+            "image": anchor.get("image") if isinstance(anchor.get("image"), str) else None,
+        }
+        return {
+            **violation,
+            "locator": {
+                "kind": "CSS_SELECTOR",
+                "pathSteps": [{"context": "DOCUMENT", "selector": anchor["selector"]}],
+                "x": round(box[0], 2),
+                "y": round(box[1], 2),
+                "width": round(box[2], 2),
+                "height": round(box[3], 2),
+                "coordinateSpace": "DOCUMENT_CSS_PX",
+                "visible": True,
+                "htmlSnippet": anchor.get("htmlSnippet") if isinstance(anchor.get("htmlSnippet"), str) else None,
+                "content": content,
+            },
+        }
+
+    result = {**cv_result, "violations": [with_locator(v) for v in cv_result["violations"]]}
+    if isinstance(cv_result.get("excluded_violations"), list):
+        result["excluded_violations"] = [with_locator(v) for v in cv_result["excluded_violations"]]
+    return result
+
+
 def calculate_total_score(rule_score: Optional[Dict],
                           difficulty_score: Optional[Dict],
                           cv_score: Optional[Dict]) -> Dict[str, Any]:
@@ -1298,6 +1371,9 @@ def main():
     cv_result = load_json(OUTPUT_DIR / "result_cv.json") if step5_ok else None
     if step1_ok:
         cv_result = drop_cv_violations_covered_by_rules(cv_result, rule_result, capture_metadata)
+        cv_anchors_path = OUTPUT_DIR / "result_cv_anchors.json"
+        if is_fresh_nonempty_file(cv_anchors_path, step1_started_ns):
+            cv_result = attach_cv_locators(cv_result, load_json(cv_anchors_path), capture_metadata)
 
     total_score = calculate_total_score(rule_result, difficulty_result, cv_result)
 

@@ -1,10 +1,16 @@
-import type { AnalyzerType, IssueLocatorCarouselContext, IssueLocatorPathStep } from "@/types/accessibility-domain";
+import type {
+  AnalyzerType,
+  IssueLocatorCarouselContext,
+  IssueLocatorContent,
+  IssueLocatorPathStep
+} from "@/types/accessibility-domain";
 
 import { normalizeIssueCode } from "./constants";
 import { localizeRuleDescription } from "./rule-issue-description";
 import {
   getIssueCoordinateBox,
   getReplayIssueCarouselContext,
+  getReplayIssueContent,
   getReplayIssuePathSteps,
   type IssueCoordinateBox
 } from "./issue-locator";
@@ -116,6 +122,8 @@ export type PageReplayIssue = {
   pathSteps: IssueLocatorPathStep[];
   /** Document CSS px box for findings without a DOM path (visual engine). */
   box: IssueCoordinateBox | null;
+  /** Analysed content of the element under a visual-engine finding. */
+  content: IssueLocatorContent | null;
   carouselContext: IssueLocatorCarouselContext | null;
 };
 
@@ -354,6 +362,7 @@ export function toPageReplayIssue(row: RecentIssueRow, deviceScaleFactor?: numbe
     path: box ? null : toOptionalBoundedReplayText(row.issue.locationPath, REPLAY_TEXT_LIMITS.path),
     pathSteps: getReplayIssuePathSteps(row.issue),
     box,
+    content: getReplayIssueContent(row.issue),
     carouselContext: getReplayIssueCarouselContext(row.issue)
   };
 }

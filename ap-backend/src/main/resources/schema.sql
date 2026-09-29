@@ -33,6 +33,12 @@ ALTER TABLE IF EXISTS issue_result
 ALTER TABLE IF EXISTS issue_result
     ADD COLUMN IF NOT EXISTS exclusion_reason VARCHAR(20);
 
+-- Content of the element under a visual-engine finding, compared by the live report.
+ALTER TABLE IF EXISTS issue_result
+    ADD COLUMN IF NOT EXISTS locator_content_text VARCHAR(200);
+ALTER TABLE IF EXISTS issue_result
+    ADD COLUMN IF NOT EXISTS locator_content_image VARCHAR(2048);
+
 ALTER TABLE IF EXISTS evaluation_request
     ADD COLUMN IF NOT EXISTS failure_code VARCHAR(40);
 

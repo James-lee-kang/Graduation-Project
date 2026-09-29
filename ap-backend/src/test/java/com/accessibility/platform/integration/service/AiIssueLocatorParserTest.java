@@ -118,5 +118,35 @@ class AiIssueLocatorParserTest {
         assertThat(locator.x()).isEqualTo(100.0);
         assertThat(locator.height()).isEqualTo(24.0);
         assertThat(locator.carouselContext()).isNull();
+        assertThat(locator.content()).isNull();
+    }
+
+    @Test
+    void keepsTheAnalysedContentOfTheElementUnderACvBox() throws Exception {
+        JsonNode violation = objectMapper.readTree("""
+                {"location":{"x":140,"y":130,"width":20,"height":10},
+                 "locator":{"kind":"CSS_SELECTOR",
+                            "pathSteps":[{"context":"DOCUMENT","selector":"#feed > li:nth-of-type(2)"}],
+                            "x":140,"y":130,"width":20,"height":10,"coordinateSpace":"DOCUMENT_CSS_PX",
+                            "content":{"text":"%s","image":null}}}
+                """.formatted("가".repeat(250)));
+
+        IssueLocator locator = parser.fromCvViolation(violation);
+
+        assertThat(locator.pathSteps()).singleElement()
+                .extracting(step -> step.selector())
+                .isEqualTo("#feed > li:nth-of-type(2)");
+        assertThat(locator.coordinateSpace()).isEqualTo("DOCUMENT_CSS_PX");
+        assertThat(locator.content().text()).hasSize(200);
+        assertThat(locator.content().image()).isNull();
+    }
+
+    @Test
+    void ignoresContentWithoutAnElementPath() throws Exception {
+        JsonNode violation = objectMapper.readTree("""
+                {"locator":{"x":1,"y":2,"width":3,"height":4,"content":{"text":"글자","image":null}}}
+                """);
+
+        assertThat(parser.fromCvViolation(violation).content()).isNull();
     }
 }

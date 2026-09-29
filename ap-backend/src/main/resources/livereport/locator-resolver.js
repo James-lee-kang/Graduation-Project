@@ -41,6 +41,36 @@ function createLiveLocatorResolver({document, layer, observeMarkerShadowRoot, is
   const hasAnalyzedText = issue => issue?.analyzer === 'AI_TEXT'
     && isObjectRecord(issue.textAnalysis) && issue.textAnalysis.kind === 'text-analysis'
     && typeof issue.textAnalysis.sourceText === 'string';
+  // Visual-engine findings follow the element that was under their box and
+  // carry what it showed then: its text without whitespace and the path and
+  // query of its image (the session mirror keeps both). A feed card that now
+  // shows another article must not carry the old finding.
+  const hasAnalyzedContent = issue => issue?.analyzer === 'CV_VISION'
+    && isObjectRecord(issue.content) && typeof issue.content.text === 'string';
+  const analyzedContentTextLength = 160;
+  const imageSourcesOf = element => {
+    const sources = ['data-src', 'data-original', 'src', 'poster']
+      .map(name => element.getAttribute(name)).filter(Boolean);
+    if (typeof element.currentSrc === 'string' && element.currentSrc) sources.push(element.currentSrc);
+    const background = /url\(\s*(['"]?)([^'")]+)\1\s*\)/.exec(getComputedStyle(element).backgroundImage || '');
+    if (background) sources.push(background[2]);
+    return sources;
+  };
+  const matchesAnalyzedContent = (element, issue) => {
+    if (!hasAnalyzedContent(issue)) return true;
+    const expected = issue.content.text;
+    const text = String(element.textContent || '').normalize('NFKC').replace(/\s+/g, '');
+    // The analyzer keeps a bounded prefix of long container text.
+    if (expected.length >= analyzedContentTextLength ? !text.startsWith(expected) : text !== expected) return false;
+    const image = issue.content.image;
+    if (typeof image !== 'string' || !image) return true;
+    return imageSourcesOf(element).some(source => {
+      try {
+        const url = new URL(source, document.baseURI);
+        return `${url.pathname}${url.search}`.endsWith(image);
+      } catch (_) { return false; }
+    });
+  };
   const createLocatorQueryCache = () => ({single:new WeakMap(), all:new WeakMap(), shadowRoots:new Set()});
   const queryLocator = (root, selector, queries, all = false) => {
     const roots = all ? queries.all : queries.single;
@@ -157,8 +187,11 @@ function createLiveLocatorResolver({document, layer, observeMarkerShadowRoot, is
     } catch (_) { return {element:null, reason:'INVALID_SELECTOR'}; }
     // An nth-of-type selector can still resolve after a news card was
     // replaced. Its old analysis must never label the new content.
-    if (!matchesAnalyzedText(current, item)) return {element:null, reason:'ELEMENT_CONTENT_CHANGED'};
+    if (!matchesAnalyzedText(current, item) || !matchesAnalyzedContent(current, item)) {
+      return {element:null, reason:'ELEMENT_CONTENT_CHANGED'};
+    }
     return {element:current, reason:null, recovered:reordered};
   };
-  return {isSimpleDocumentLocator, hasAnalyzedText, createLocatorQueryCache, resolveIssue, releaseCoordinateTargets};
+  return {isSimpleDocumentLocator, hasAnalyzedText, hasAnalyzedContent, createLocatorQueryCache, resolveIssue,
+    releaseCoordinateTargets};
 }

@@ -234,6 +234,29 @@ export function filterReportRows(
   });
 }
 
+// Section labels written by the rule guide, the text analysis formatter and
+// the backend's recommendation suffix; the report shows them as sub-headings.
+const descriptionHeadings = new Set(["개선 안내", "분석 문장", "개선 필요", "개선 제안", "수정 예시", "수정 이유"]);
+const inlineHeadingPattern = /^(권장사항)\s*:\s*/;
+
+export type ReportDescriptionSection = { heading: string | null; body: string };
+
+export function splitDescriptionSections(description: string): ReportDescriptionSection[] {
+  return description
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter((block) => block.length > 0)
+    .map((block) => {
+      const inline = inlineHeadingPattern.exec(block);
+      if (inline) return { heading: inline[1]!, body: block.slice(inline[0].length).trim() };
+      const newline = block.indexOf("\n");
+      const firstLine = newline === -1 ? "" : block.slice(0, newline).trim();
+      return descriptionHeadings.has(firstLine)
+        ? { heading: firstLine, body: block.slice(newline + 1).trim() }
+        : { heading: null, body: block };
+    });
+}
+
 export type ReportIssueLocation =
   | { kind: "path"; steps: Array<{ context: string; selector: string }> }
   | { kind: "coordinates"; x: number; y: number; width: number | null; height: number | null }

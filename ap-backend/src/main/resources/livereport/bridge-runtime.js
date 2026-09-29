@@ -71,6 +71,7 @@
   const dirtyTextIssueIds = new Set();
   let simpleDocumentLocators = false;
   let textLocatorIssues = [];
+  let contentLocatorIssues = [];
   let focusRequestVersion = 0;
   let pendingFocusIssueId = null;
   let locatorTargetsNeedReconciliation = false;
@@ -103,6 +104,9 @@
   let openEntry = null;
   let highlightedEntry = null;
   let closeTimer = 0;
+  // Once the reader works inside the popover (paging a cluster, selecting text)
+  // it stays open when the pointer drifts off; outside clicks and Escape close it.
+  let popoverPinned = false;
   let restoringMarkerFocus = false;
   let markerPositionFrame = 0;
   let pendingMarkerPositionMode = 'preserve-root';
@@ -134,6 +138,14 @@
   const markerSearchRingLimit = 12;
   const markerProtectedTextRectBudget = 512;
   const markerProtectedTextPerElementLimit = 32;
+  // 탭 줄·메뉴·달력처럼 한 덩어리로 읽히는 작은 목록/표 안의 칩은 하나로 묶는다
+  const markerGroupContainerSelector = [
+    'ul', 'ol', 'menu', 'nav', 'table',
+    '[role="list"]', '[role="tablist"]', '[role="menubar"]', '[role="menu"]', '[role="listbox"]',
+    '[role="grid"]', '[role="treegrid"]', '[role="table"]', '[role="tree"]', '[role="radiogroup"]',
+    '[role="toolbar"]', '[role="navigation"]'
+  ].join(',');
+  const markerGroupMaxHeight = 360;
   const maxHighlightFragments = 128;
   const popover = document.createElement('section');
   popover.id = 'ap-live-issue-popover';
@@ -253,6 +265,13 @@
       .every(entry => numberIsFinite(entry) && Math.abs(entry) <= 1000000)
     && value.width > 0 && value.height > 0
   );
+  const isBoundedLocatorContent = value => value === undefined || value === null || (
+    isObjectRecord(value)
+    && Object.keys(value).length <= 4
+    && typeof value.text === 'string' && value.text.length <= 200
+    && (value.image === null || value.image === undefined
+      || (typeof value.image === 'string' && value.image.length <= 2048))
+  );
   const isBoundedLiveCommand = payload => {
     if (!isObjectRecord(payload) || payload.source !== parentSource || typeof payload.type !== 'string') return false;
     if (payload.type === 'REQUEST_DOCUMENT_STATE') return true;
@@ -280,6 +299,7 @@
             && (typeof issue.analyzer !== 'string' || issue.analyzer.length > 16))
           || !arrayIsArray(issue.pathSteps) || issue.pathSteps.length > 128
           || !isBoundedCoordinateBox(issue.box)
+          || !isBoundedLocatorContent(issue.content)
           || !isBoundedCarouselContext(issue.carouselContext)) return false;
     }
     return true;
@@ -1408,6 +1428,17 @@ const handleMarkerMutations = records => {
           if (!previous?.element || previous.recovered || textRecords.some(record =>
               previous.element.contains(record.target))) dirtyTextIssueIds.add(issue.id);
         });
+        // Visual-engine findings compare text and image; a swapped image
+        // source or background class changes what the element shows.
+        const contentRecords = externalRecords.filter(record => record.type === 'characterData'
+          || (record.type === 'attributes'
+            && ['src', 'srcset', 'data-src', 'data-original', 'poster', 'style', 'class']
+              .includes(record.attributeName)));
+        if (contentRecords.length > 0) contentLocatorIssues.forEach(issue => {
+          const previous = resolvedIssueTargets.get(issue.id);
+          if (!previous?.element || contentRecords.some(record =>
+              previous.element.contains(record.target))) dirtyTextIssueIds.add(issue.id);
+        });
       }
       if (externalRecords.some(record => (
         record.type === 'childList'
@@ -1905,6 +1936,7 @@ const setHighlightedEntry = (entry, selected = false) => {
 };
 const closePopover = ({restoreFocus = false} = {}) => {
   clearCloseTimer();
+  popoverPinned = false;
   const previous = openEntry;
   openEntry = null;
   openTargetEntry = null;
@@ -1927,6 +1959,7 @@ const closePopover = ({restoreFocus = false} = {}) => {
 };
 const scheduleClosePopover = () => {
   clearCloseTimer();
+  if (popoverPinned) return;
   closeTimer = setTimeout(() => {
     closeTimer = 0;
     if (!popover.matches(':hover') && !popover.contains(document.activeElement)
@@ -1937,7 +1970,65 @@ const scheduleClosePopover = () => {
 };
 let openSelected = false;
 let openTargetEntry = null;
-  const {renderDetailContent, sizePopoverForCluster, positionPopover} = createLivePopoverView({document, popover, popoverTags, popoverDetail, createSeverityBadge, createCodeBadge, textValue, clusterIssuesFor, presentationNoteFor, getState: () => ({openEntry, openTargetEntry, viewScale, viewTopInset})});
+  const {renderDetailContent, sizePopoverForCluster, positionPopover:placePopoverBesideChip} = createLivePopoverView({document, popover, popoverTags, popoverDetail, createSeverityBadge, createCodeBadge, textValue, clusterIssuesFor, presentationNoteFor, getState: () => ({openEntry, openTargetEntry, viewScale, viewTopInset})});
+// 팝오버가 문제 위치를 덮으면 어디가 문제인지 안 보인다. 칩 옆 자리가 칩이나 칩에
+// 묶인 요소(넘겨 볼 이슈의 하이라이트 자리)를 가리면, 가리지 않는 자리로 옮긴다.
+// 묶인 요소 전체를 피해야 < > 로 넘길 때도 팝오버가 제자리에 있다.
+const positionPopover = (documentLeft = globalThis.scrollX, documentTop = globalThis.scrollY) => {
+  placePopoverBesideChip(documentLeft, documentTop);
+  if (popover.hidden || !openEntry) return;
+  const current = popover.getBoundingClientRect();
+  const width = current.width;
+  const height = current.height;
+  const highlightGap = 4 / viewScale;
+  const gap = 8 / viewScale;
+  const markerVisible = openEntry.marker?.isConnected && !openEntry.marker.hidden;
+  const avoided = markerVisible ? [openEntry.marker.getBoundingClientRect()] : [];
+  [openEntry, ...(openEntry.clusterMembers || [])].forEach(entry => {
+    if (!entry?.element?.isConnected) return;
+    const rect = entry.element.getBoundingClientRect();
+    avoided.push({
+      left:rect.left - highlightGap, top:rect.top - highlightGap,
+      right:rect.right + highlightGap, bottom:rect.bottom + highlightGap
+    });
+  });
+  if (avoided.length === 0) return;
+  const overlapAt = (left, top) => avoided.reduce((sum, rect) => sum
+    + Math.max(0, Math.min(left + width, rect.right) - Math.max(left, rect.left))
+    * Math.max(0, Math.min(top + height, rect.bottom) - Math.max(top, rect.top)), 0);
+  const currentOverlap = overlapAt(current.left, current.top);
+  if (currentOverlap === 0) return;
+  const viewportLeft = 12;
+  const viewportTop = 12 + viewTopInset / viewScale;
+  const viewportRight = innerWidth - 12;
+  const viewportBottom = innerHeight - 12;
+  const clamp = (value, min, max) => Math.max(min, Math.min(value, Math.max(min, max)));
+  const anchor = avoided[0];
+  const covered = avoided.reduce((union, rect) => ({
+    left:Math.min(union.left, rect.left), top:Math.min(union.top, rect.top),
+    right:Math.max(union.right, rect.right), bottom:Math.max(union.bottom, rect.bottom)
+  }), anchor);
+  const alignedLeft = anchor.left + width <= viewportRight ? anchor.left : anchor.right - width;
+  // 칩 위 → 칩 옆 → 묶인 요소 전체의 아래·옆 순서로 가리지 않는 첫 자리를 쓰고,
+  // 모두 가리면 가장 적게 가리는 자리를 쓴다.
+  const best = [
+    {left:alignedLeft, top:anchor.top - gap - height},
+    {left:anchor.right + gap, top:anchor.top},
+    {left:anchor.left - gap - width, top:anchor.top},
+    {left:alignedLeft, top:covered.bottom + gap},
+    {left:covered.right + gap, top:anchor.top},
+    {left:covered.left - gap - width, top:anchor.top}
+  ].reduce((chosen, candidate) => {
+    if (chosen.overlap === 0) return chosen;
+    const left = clamp(candidate.left, viewportLeft, viewportRight - width);
+    const top = clamp(candidate.top, viewportTop, viewportBottom - height);
+    const overlap = overlapAt(left, top);
+    return overlap < chosen.overlap ? {left, top, overlap} : chosen;
+  }, {left:current.left, top:current.top, overlap:currentOverlap});
+  const fixed = popover.style.position === 'fixed';
+  popover.style.left = `${best.left + (fixed ? 0 : documentLeft)}px`;
+  popover.style.top = `${best.top + (fixed ? 0 : documentTop)}px`;
+};
 const renderDetail = (entry, issue, notify = false) => {
   if (!entry || !issue) return;
   entry.selectedIssueId = issue.id;
@@ -1968,7 +2059,14 @@ const navigatePopoverIssue = delta => {
     Math.max(0, (currentIndex < 0 ? 0 : currentIndex) + delta)
   );
   if (nextIndex === currentIndex || nextIndex < 0) return;
+  popoverPinned = true;
+  clearCloseTimer();
+  const focusedPager = [popoverPrevious, popoverNext].find(button => button === document.activeElement);
   renderDetail(openEntry, clusterIssues[nextIndex], true);
+  // The first/last issue disables its pager button; keep keyboard focus in the popover.
+  if (focusedPager?.disabled) {
+    (focusedPager === popoverNext ? popoverPrevious : popoverNext).focus({preventScroll:true});
+  }
 };
 popoverPrevious.addEventListener('click', event => {
   event.preventDefault(); event.stopPropagation(); navigatePopoverIssue(-1);
@@ -1983,6 +2081,7 @@ const openPopover = (entry, preferredIssueId = null, notify = false, selected = 
   }
   if (!entry) return;
   clearCloseTimer();
+  if (entry !== openEntry) popoverPinned = false;
   openEntry = entry;
   openSelected = selected;
   setHighlightedEntry(entry, selected);
@@ -2357,6 +2456,24 @@ const targetVisibleInViewport = (element, rect) => (
       ? targetGeometry.rects
       : [];
   };
+  // Nearest compact list/table around the target, so tabs or calendar cells
+  // share one chip. Only items of the same kind join: a header nav holding a
+  // search form and a tab list must not pull the tabs' chip up to the search.
+  // Tall lists keep per-item chips.
+  const markerGroupFor = (element, heights) => {
+    const container = element.closest(markerGroupContainerSelector);
+    if (!container || container === element
+        || container === document.body || container === document.documentElement) return null;
+    let height = heights.get(container);
+    if (height === undefined) {
+      height = container.getBoundingClientRect().height;
+      heights.set(container, height);
+    }
+    if (!(height > 0) || height > markerGroupMaxHeight) return null;
+    let item = element;
+    while (item.parentElement && item.parentElement !== container) item = item.parentElement;
+    return item.parentElement === container ? {container, itemTag:item.localName} : null;
+  };
   const markerClearsTarget = (footprint, targetRects) => {
     const gap = markerTargetGap / viewScale;
     return !targetRects.some(rect => rectanglesOverlap(footprint, {
@@ -2552,6 +2669,7 @@ const targetVisibleInViewport = (element, rect) => (
     const viewportWidth = document.documentElement.clientWidth || innerWidth;
     const viewportHeight = document.documentElement.clientHeight || innerHeight;
     const spatialIndex = createMarkerSpatialIndex();
+    const groupContainerHeights = new Map();
     const measurements = marked.map(entry => {
       if (!preserveRootPlacement) entry.positionAnchor = undefined;
       const targetRect = entry.element.getBoundingClientRect();
@@ -2590,6 +2708,7 @@ const targetVisibleInViewport = (element, rect) => (
         targetGeometry,
         protectedTextRects:[],
         visible:targetGeometry !== null,
+        group:targetGeometry ? markerGroupFor(entry.element, groupContainerHeights) : null,
         viewportAttached,
         preservePlacement:preservePlacement && Boolean(preservedInsideViewport)
       };
@@ -2622,6 +2741,14 @@ const targetVisibleInViewport = (element, rect) => (
     });
     const preferredRowPositions = preferredMarkerRowPositions(orderedMeasurements);
     const contentSpatialIndex = createMarkerSpatialIndex();
+    const groupHosts = new Map();
+    const groupHostFor = group => group ? groupHosts.get(group.container)?.get(group.itemTag) || null : null;
+    const claimGroupHost = measurement => {
+      const group = measurement.group;
+      if (!group || groupHostFor(group)) return;
+      if (!groupHosts.has(group.container)) groupHosts.set(group.container, new Map());
+      groupHosts.get(group.container).set(group.itemTag, measurement.entry);
+    };
     orderedMeasurements.forEach(measurement => {
       measurement.protectedTextRects.forEach(rect => contentSpatialIndex.add(rect));
       const preferred = preferredRowPositions.get(measurement.entry);
@@ -2639,6 +2766,7 @@ const targetVisibleInViewport = (element, rect) => (
       );
       preservedFootprint.entry = measurement.entry;
       spatialIndex.add(preservedFootprint);
+      claimGroupHost(measurement);
     });
     const placements = new Map();
     const placeMeasurement = measurement => {
@@ -2646,6 +2774,12 @@ const targetVisibleInViewport = (element, rect) => (
       if (measurement.preservePlacement) return;
       leaveCluster(entry);
       if (!measurement.visible) return;
+      // 같은 목록·표 안에서 먼저 자리 잡은 칩이 있으면 겹치지 않아도 그 칩에 합류한다
+      const groupHost = groupHostFor(measurement.group);
+      if (groupHost && groupHost !== entry && groupHost.element?.isConnected) {
+        joinCluster(groupHost, entry);
+        return;
+      }
       // 코너 자리가 이미 놓인 칩과 겹치면 옆으로 밀지 않고 그 칩에 합류한다
       const family = markerLeftGutter(entry, measurement.targetGeometry);
       const preferred = preferredRowPositions.get(entry);
@@ -2671,6 +2805,7 @@ const targetVisibleInViewport = (element, rect) => (
       placements.set(measurement.entry, placement);
       placement.footprint.entry = measurement.entry;
       spatialIndex.add(placement.footprint);
+      claimGroupHost(measurement);
     };
     orderedMeasurements.forEach(placeMeasurement);
     let closeOpenPopover = false;
@@ -2774,7 +2909,9 @@ const targetVisibleInViewport = (element, rect) => (
       position(scheduledMode);
     });
   };
-    const {isSimpleDocumentLocator, hasAnalyzedText, createLocatorQueryCache, resolveIssue, releaseCoordinateTargets} = createLiveLocatorResolver({document, layer, observeMarkerShadowRoot, isObjectRecord, carouselDescriptorFor});
+    const {isSimpleDocumentLocator, hasAnalyzedText, hasAnalyzedContent, createLocatorQueryCache, resolveIssue,
+      releaseCoordinateTargets} = createLiveLocatorResolver({document, layer, observeMarkerShadowRoot, isObjectRecord,
+      carouselDescriptorFor});
 const resolveIssueSnapshot = (issueIds = null) => {
     const queries = createLocatorQueryCache();
     const snapshot = issueIds ? new Map(resolvedIssueTargets) : new Map();
@@ -2954,6 +3091,7 @@ const resolveIssueSnapshot = (issueIds = null) => {
     currentIssues = (Array.isArray(items) ? items : []).slice(0, 5000);
     simpleDocumentLocators = currentIssues.every(isSimpleDocumentLocator);
     textLocatorIssues = currentIssues.filter(hasAnalyzedText);
+    contentLocatorIssues = currentIssues.filter(hasAnalyzedContent);
     locatorTargetsNeedReconciliation = false;
     lastFocusedIssueId = isIssueId(selectedIssueId)
         && currentIssues.some(issue => issue?.id === selectedIssueId)
@@ -3109,6 +3247,10 @@ const resolveIssueSnapshot = (issueIds = null) => {
     });
   };
   popover.addEventListener('pointerenter', clearCloseTimer);
+  popover.addEventListener('pointerdown', () => {
+    popoverPinned = true;
+    clearCloseTimer();
+  });
   popover.addEventListener('pointerleave', scheduleClosePopover);
   popover.addEventListener('focusin', clearCloseTimer);
   popover.addEventListener('focusout', scheduleClosePopover);

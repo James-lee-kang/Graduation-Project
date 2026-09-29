@@ -2,6 +2,7 @@ package com.accessibility.platform.integration.service;
 
 import com.accessibility.platform.analysis.domain.IssueLocator;
 import com.accessibility.platform.analysis.domain.IssueLocatorCarouselContext;
+import com.accessibility.platform.analysis.domain.IssueLocatorContent;
 import com.accessibility.platform.analysis.domain.IssueLocatorPathStep;
 import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.stereotype.Component;
@@ -50,7 +51,8 @@ public class AiIssueLocatorParser {
                 firstText(location, "coordinateSpace", "coordinate_space", "SCREENSHOT_PX"),
                 booleanValue(location, "visible", true),
                 bounded(firstText(location, "htmlSnippet", "html_snippet", null), MAX_HTML_SNIPPET_LENGTH),
-                carouselContext(location)
+                carouselContext(location),
+                content(location)
         );
     }
 
@@ -91,7 +93,8 @@ public class AiIssueLocatorParser {
                 firstText(source, "coordinateSpace", "coordinate_space", hasBox ? defaultCoordinateSpace : null),
                 nullableBoolean(source, "visible"),
                 htmlSnippet,
-                carouselContext(source)
+                carouselContext(source),
+                null
         );
     }
 
@@ -114,6 +117,25 @@ public class AiIssueLocatorParser {
             return null;
         }
         return new IssueLocatorCarouselContext(carouselId, slideIndex, slideCount);
+    }
+
+    // Only a located element has content to compare; a bare box has none.
+    private IssueLocatorContent content(JsonNode locator) {
+        JsonNode content = locator.path("content");
+        if (!content.isObject() || pathSteps(locator, null).isEmpty()) {
+            return null;
+        }
+        JsonNode text = content.path("text");
+        String image = bounded(text(content, "image", null), IssueLocatorContent.MAX_IMAGE_LENGTH);
+        String normalizedText = text.isTextual() ? text.asText() : "";
+        if (normalizedText.length() > IssueLocatorContent.MAX_TEXT_LENGTH) {
+            int end = IssueLocatorContent.MAX_TEXT_LENGTH;
+            if (Character.isHighSurrogate(normalizedText.charAt(end - 1))) {
+                end -= 1;
+            }
+            normalizedText = normalizedText.substring(0, end);
+        }
+        return new IssueLocatorContent(normalizedText, image);
     }
 
     private Integer strictInteger(JsonNode node, String primaryField, String fallbackField) {

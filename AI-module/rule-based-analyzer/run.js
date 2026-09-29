@@ -60,6 +60,7 @@ const {
 } = require('./artifact');
 const { analyzeWithCarouselStates } = require('./carousel-audit');
 const { markHiddenElements } = require('./hidden-elements');
+const { collectCvAnchors } = require('./cv-anchors');
 const {
   changedContentKeys,
   collectContentSignatures,
@@ -779,6 +780,15 @@ async function run(url, outputPath, options = {}) {
     } catch { }
     initialSnapshot = await initialResponseCapture.value();
     await initialResponseCapture.stop();
+    // The second visit that reveals changing content needs only the loaded
+    // URL. Start it now so its load and settle overlap this page's settle and
+    // health checks; it is used only if the analyzed URL stays the same.
+    const earlyComparisonUrl = withoutUrlFragment(page.url());
+    const earlyComparison = options.compareLoad !== false && /^https?:/i.test(earlyComparisonUrl)
+      ? loadComparisonSignatures(context, earlyComparisonUrl, { settleMs })
+      : null;
+    // Awaited below when still needed; an unused visit must not crash the run.
+    earlyComparison?.catch(() => {});
     await page.waitForTimeout(settleMs);
     
     await page.waitForFunction(() => document.readyState === 'complete', { timeout: 10000 }).catch(() => {});
@@ -829,9 +839,12 @@ async function run(url, outputPath, options = {}) {
     // A second load reveals content that differs between visits (news,
     // products, rotating ads). The static fallback reproduces one saved
     // response, so it has nothing to compare against.
-    const comparisonSignatures = replaySourceMode === 'RENDERED_DOM' && options.compareLoad !== false
-      ? await loadComparisonSignatures(context, analysisFinalUrl, { settleMs })
-      : null;
+    let comparisonSignatures = null;
+    if (replaySourceMode === 'RENDERED_DOM' && options.compareLoad !== false) {
+      comparisonSignatures = earlyComparison && earlyComparisonUrl === analysisFinalUrl
+        ? await earlyComparison
+        : await loadComparisonSignatures(context, analysisFinalUrl, { settleMs });
+    }
 
     // Freeze CSS/Web Animations before both axe and snapshot serialization so
     // the reported element rectangles describe the analyzed DOM state.
@@ -903,6 +916,10 @@ async function run(url, outputPath, options = {}) {
           });
           fs.writeFileSync(cvScreenshotPath, cvImage);
           console.log(`   CV 전용 임시 이미지 생성: ${cvScreenshotPath}`);
+          // Elements under CV boxes, from the same page state as the image, so
+          // CV findings can follow elements instead of screenshot coordinates.
+          const cvAnchorsOutput = siblingOutputPath(output, '_cv_anchors.json');
+          fs.writeFileSync(cvAnchorsOutput, JSON.stringify(await collectCvAnchors(page)), 'utf-8');
         } catch (error) {
           console.warn(`   CV 전용 임시 이미지 생성 실패: ${error.message}`);
         }

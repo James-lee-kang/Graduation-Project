@@ -83,6 +83,12 @@ public class IssueResult extends BaseTimeEntity {
     @Column(length = 20)
     private String exclusionReason;
 
+    @Column(name = "locator_content_text", length = IssueLocatorContent.MAX_TEXT_LENGTH)
+    private String locatorContentText;
+
+    @Column(name = "locator_content_image", length = IssueLocatorContent.MAX_IMAGE_LENGTH)
+    private String locatorContentImage;
+
     public IssueResult(AnalysisResult analysisResult, String issueCode, String issueTitle, Severity severity, String locationPath, String message) {
         this.analysisResult = analysisResult;
         this.issueCode = issueCode;
@@ -124,6 +130,9 @@ public class IssueResult extends BaseTimeEntity {
         this.locatorCarouselId = carouselContext == null ? null : carouselContext.carouselId();
         this.locatorCarouselSlideIndex = carouselContext == null ? null : carouselContext.slideIndex();
         this.locatorCarouselSlideCount = carouselContext == null ? null : carouselContext.slideCount();
+        IssueLocatorContent content = locator.content();
+        this.locatorContentText = content == null ? null : content.text();
+        this.locatorContentImage = content == null ? null : content.image();
     }
 
     public void reclassify(String issueCode, String issueTitle) {
@@ -145,7 +154,8 @@ public class IssueResult extends BaseTimeEntity {
                 || locatorCoordinateSpace != null
                 || locatorVisible != null
                 || locatorHtmlSnippet != null
-                || carouselContext != null;
+                || carouselContext != null
+                || locatorContentText != null;
         if (!hasLocator) {
             return null;
         }
@@ -159,7 +169,8 @@ public class IssueResult extends BaseTimeEntity {
                 locatorCoordinateSpace,
                 locatorVisible,
                 locatorHtmlSnippet,
-                carouselContext
+                carouselContext,
+                locatorContentText == null ? null : new IssueLocatorContent(locatorContentText, locatorContentImage)
         );
     }
 
