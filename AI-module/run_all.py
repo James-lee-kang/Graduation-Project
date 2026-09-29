@@ -902,7 +902,6 @@ def build_final_result(url, rule_result, difficulty_result,
         "url": url,
         "analyzed_at": datetime.now().isoformat(),
         "elapsed_seconds": elapsed,
-        "platform_version": "1.0.0",
         "request_id": request_id,
         "capture_metadata": capture_metadata_payload(capture_metadata),
 

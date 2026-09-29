@@ -350,7 +350,7 @@ const API_BASE_URL = 'http://localhost:8080/api/v1';
  *      - meta: { url, timestamp, engine, engineVersion, adapterVersion }
  *
  *    scoreResult (from scorer.js):
- *      - score, maxScore, totalDeduction, grade
+ *      - score, maxScore, totalDeduction
  *      - severityBreakdown: { critical, major, minor } — 심각도별 감점 집계
  *      - items: KWCAG 항목별 점수 상세 (weight, weightMultiplier 포함)
  *
@@ -439,7 +439,6 @@ function toApiFormat(kwcagResult, scoreResult) {
     score: scoreResult.score,
     max_score: scoreResult.maxScore,
     total_deduction: scoreResult.totalDeduction,
-    grade: scoreResult.grade,
     severity_breakdown: {
       critical: {
         count: scoreResult.severityBreakdown.critical.count,
@@ -843,10 +842,26 @@ async function run(url, outputPath, options = {}) {
     //     wcag22aa          : WCAG 2.2 AA (국제 최신 기준 — 추가 참고용)
     //   → KWCAG 2.2와 매핑되는 핵심 규칙을 모두 커버하되, AAA(최상위) 등급은
     //      공공 서비스의 현실적 준수 수준을 고려해 제외함.
+    //
+    //   [2026-09-16 규칙기반 1차 개선] landmark-one-main 추가.
+    //   WAVE/Lighthouse 교차검증에서 5개 사이트 중 3곳이 main 랜드마크 누락을
+    //   Lighthouse에서만 잡혔다. 이 규칙은 tags가 ['cat.semantics','best-practice']
+    //   뿐이라 WCAG 태그 필터에 걸러지고 있었음(axe-core 4.13에서 직접 조회).
+    //   best-practice 전체를 켜면 재검증 범위가 커지므로 이 규칙만 개별로 켠다.
+    //   주의: AxeBuilder#options()는 기존 설정과 병합되지 않고 통째로 교체되므로
+    //   withTags()와 체이닝하면 태그 제한이 풀린다. runOnly와 rules를 한 번에 넘긴다.
     console.log('3. axe-core 접근성 검사 실행 중...');
     const scanStart = Date.now();
     const scanPage = () => new AxeBuilder({ page })
-      .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
+      .options({
+        runOnly: {
+          type: 'tag',
+          values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'],
+        },
+        rules: {
+          'landmark-one-main': { enabled: true },
+        },
+      })
       .analyze();
     const axeResults = await analyzeWithCarouselStates(page, scanPage);
     // page.setContent() intentionally uses an about:blank container in static
@@ -963,8 +978,8 @@ async function run(url, outputPath, options = {}) {
     console.log(`  스캔 소요: ${scanDuration}ms`);
     console.log('');
 
-    // 점수 & 등급 출력
-    console.log(`   접근성 점수: ${scoreResult.score} / ${scoreResult.maxScore}점 (등급: ${scoreResult.grade})`);
+    // 점수 출력 (등급은 run_all.py의 최종 결과 grade 하나로 통일 — 2026-09-27)
+    console.log(`   접근성 점수: ${scoreResult.score} / ${scoreResult.maxScore}점`);
     console.log(`    총 감점: -${scoreResult.totalDeduction}점`);
     console.log('');
 
