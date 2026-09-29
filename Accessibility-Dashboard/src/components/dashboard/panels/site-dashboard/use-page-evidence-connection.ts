@@ -801,7 +801,8 @@ export function usePageEvidenceConnection({
       enqueueLocatorState(message.issueId, {
         status: message.status,
         reason: message.reason,
-        recoverable: message.recoverable
+        recoverable: message.recoverable,
+        ownerKind: message.ownerKind
       });
     }
   }

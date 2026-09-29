@@ -28,7 +28,7 @@ import {
   type ReportFilters,
   type ReportLocationStatus
 } from "./final-report";
-import { getLocatorExplanation } from "./locator-explanation";
+import { getLocatorExplanation, hasLocatorPresentation } from "./locator-explanation";
 import { formatIssueDescription } from "./page-replay-protocol";
 import type { LocatorCheckState, LocatorIssueState, RecentIssueRow } from "./types";
 import type { EvaluationResultDetailsLoadState } from "./use-evaluation-result-details";
@@ -72,9 +72,15 @@ function locationLabel(status: ReportLocationStatus, state?: LocatorIssueState):
     case "disconnected":
       return "현재 페이지 연결 안 됨";
     case "on-page":
-      return "페이지에서 확인 가능";
+      return hasLocatorPresentation(state)
+        ? `페이지에서 확인 가능 · ${getLocatorExplanation(state).label}`
+        : "페이지에서 확인 가능";
     case "other-state":
-      return "다른 화면 상태에서 확인 가능";
+      return `다른 화면 상태에서 확인 가능 · ${getLocatorExplanation(state).label}`;
+    case "page-setting":
+      return "페이지 전체 설정 · 화면 위치 없음";
+    case "outdated":
+      return `분석 이후 바뀜 · ${getLocatorExplanation(state).label}`;
     case "unavailable":
       return `위치 표시 불가 · ${getLocatorExplanation(state).label}`;
   }
@@ -257,7 +263,7 @@ export function FinalReportPanel({
               <div>
                 <dt>위치 표시 불가</dt>
                 <dd>{locatorCheckState === "ready"
-                  ? formatCount(locationSummary.unavailable)
+                  ? formatCount(locationSummary.unavailable + locationSummary.outdated + locationSummary["page-setting"])
                   : locatorCheckState === "error" ? "연결 안 됨" : "확인 중"}</dd>
               </div>
             </dl>
@@ -289,6 +295,12 @@ export function FinalReportPanel({
             {textFailed && (
               <p className="site-final-report__notice" role="note">
                 텍스트 검사가 실패해 읽기 수준·링크 텍스트 등 문장 기반 문제는 이 리포트에 포함되지 않았고 점수에도 반영되지 않았습니다.
+              </p>
+            )}
+            {locatorCheckState === "ready" && locationSummary.outdated > 0 && (
+              <p className="site-final-report__notice" role="note">
+                분석 이후 페이지 내용이 바뀌어 문제 {formatCount(locationSummary.outdated)}의 위치를 현재 페이지에서 찾지 못했습니다.
+                최신 결과를 보려면 페이지를 재분석해 주세요.
               </p>
             )}
             {cvIncomplete && (
@@ -384,7 +396,8 @@ export function FinalReportPanel({
               onToggle={() => setExcludedExpanded((current) => !current)} />
           )}
           <p className="site-final-report__footnote">
-            자동 검사 결과이며 분석 당시 페이지를 기준으로 합니다. 표준 적합성은 전문가 점검과 함께 판단해 주세요.
+            자동 검사 결과이며 분석 당시 페이지를 기준으로 합니다. 열어야 보이는 메뉴·탭·팝업과 메뉴·머리글·바닥글의 문장은
+            이번 검사에 포함되지 않았습니다. 표준 적합성은 전문가 점검과 함께 판단해 주세요.
           </p>
         </>
       )}
@@ -403,6 +416,8 @@ const analyzerOptions: Array<{ value: ReportFilters["analyzer"]; label: string }
 const locationOptions: Array<{ value: ReportFilters["location"]; label: string }> = [
   { value: "ALL", label: "전체 위치 상태" },
   { value: "on-page", label: "페이지에서 확인 가능" },
+  { value: "outdated", label: "분석 이후 바뀜" },
+  { value: "page-setting", label: "페이지 전체 설정" },
   { value: "unavailable", label: "위치 표시 불가" }
 ];
 

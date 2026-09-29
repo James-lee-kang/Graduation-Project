@@ -114,6 +114,7 @@ overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!import
 scrollbar-width:none!important;-ms-overflow-style:none!important}
 .ap-live-popover__detail::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}
 .ap-live-popover__title{margin:0 0 6px;color:#101828;font:700 14px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;word-break:keep-all;overflow-wrap:anywhere}
+.ap-live-popover__note{margin:0 0 8px;padding:6px 8px;border-radius:7px;background:#eef4ff;color:#1d3f8f;font-size:12px;line-height:1.45}
 .ap-live-popover__message{margin:0 0 8px;color:#344054;white-space:pre-wrap;word-break:keep-all;overflow-wrap:anywhere}
 .ap-live-popover__path{display:block;margin:0;padding:7px 8px;border:1px solid #eaecf0;border-radius:7px;background:#f8fafc;color:#475467;
 font:500 10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}

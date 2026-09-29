@@ -1,4 +1,4 @@
-function createLiveLocatorResolver({document, layer, observeMarkerShadowRoot, isObjectRecord}) {
+function createLiveLocatorResolver({document, layer, observeMarkerShadowRoot, isObjectRecord, carouselDescriptorFor}) {
   const issuePathSteps = item => {
     const storedSteps = Array.isArray(item?.pathSteps) ? item.pathSteps : [];
     return storedSteps.length > 0 ? storedSteps
@@ -103,6 +103,18 @@ function createLiveLocatorResolver({document, layer, observeMarkerShadowRoot, is
     }
     return match;
   };
+  // Older analyses stored selectors that include the carousel audit's
+  // temporary slide attributes. The live page never has them, so search
+  // without them and keep only the element on the recorded logical slide.
+  const auditAttribute = /\[data-ua-audit-[\w-]+(?:=(?:"[^"]*"|'[^']*'|[^\]]*))?\]/g;
+  const queryAuditedSlideLocator = (root, selector, item, queries) => {
+    const stripped = selector
+      .replace(new RegExp(`(^|[\\s>+~])${auditAttribute.source}`, 'g'), '$1*')
+      .replace(auditAttribute, '');
+    const candidates = Array.from(queryLocator(root, stripped, queries, true));
+    return candidates.find(candidate => !layer.contains(candidate)
+      && carouselDescriptorFor(candidate, item?.carouselContext)) || null;
+  };
   const resolveIssue = (item, queries = createLocatorQueryCache()) => {
     const steps = issuePathSteps(item);
     if (steps.length === 0) {
@@ -127,9 +139,15 @@ function createLiveLocatorResolver({document, layer, observeMarkerShadowRoot, is
           observeMarkerShadowRoot(root);
           queries.shadowRoots.add(root);
         } else if (context === 'FRAME') {
-          return {element:null, reason:'FRAME_UNSUPPORTED'};
+          // The frame document is not reachable from here. Show the finding on
+          // the frame that contains it instead of dropping its location.
+          return ['IFRAME', 'FRAME'].includes(current?.tagName)
+            ? {element:current, reason:null, presentation:{kind:'FRAME_CONTENT'}}
+            : {element:null, reason:'FRAME_UNSUPPORTED'};
         } else return {element:null, reason:'UNSUPPORTED_CONTEXT'};
-        current = queryLocator(root, step.selector, queries);
+        current = step.selector.includes('[data-ua-audit-')
+          ? queryAuditedSlideLocator(root, step.selector, item, queries)
+          : queryLocator(root, step.selector, queries);
         if (index === steps.length - 1 && (!current || !matchesAnalyzedText(current, item))) {
           const recovered = findReorderedTextTarget(root, step.selector, item, queries);
           if (recovered) { current = recovered; reordered = true; }

@@ -59,6 +59,7 @@ const {
   serializeDomReplayHtml,
 } = require('./artifact');
 const { analyzeWithCarouselStates } = require('./carousel-audit');
+const { markHiddenElements } = require('./hidden-elements');
 const {
   changedContentKeys,
   collectContentSignatures,
@@ -859,6 +860,9 @@ async function run(url, outputPath, options = {}) {
     const excludedRegions = await markExcludedRegions(page, changedContentKeys(
       await collectContentSignatures(page), comparisonSignatures,
     ));
+    // Content not rendered at this viewport (such as a mobile-only copy of a
+    // notice list) reaches no user here, so the text analyzer skips it too.
+    const hiddenElementCount = await markHiddenElements(page);
     const releaseVirtualTime = await pausePageVirtualTime(page);
     let htmlOutput;
     let artifactOutput;
@@ -931,6 +935,7 @@ async function run(url, outputPath, options = {}) {
     apiData.metadata.scan_duration_ms = scanDuration;  // placeholder를 실측값으로 덮어쓰기
     apiData.metadata.document_health = documentHealth;
     apiData.metadata.excluded_regions = excludedRegions;
+    apiData.metadata.hidden_element_count = hiddenElementCount;
     apiData.excluded_violations = toExcludedApiFormat(excluded);
 
     // ── 8) 로컬 JSON 저장 ──

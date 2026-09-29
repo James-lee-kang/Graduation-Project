@@ -1635,18 +1635,115 @@ try {
   });
   await initializeLocatorIssues([createIssue(703, "#changing-hidden-reason", "숨김 이유", "HIGH", "rule", "5.1.1")]);
   await waitForContentStatus(703, "HIDDEN_STATE", "DISPLAY_NONE");
+  // A transparent element is still read by screen readers, so its marker
+  // moves to the element it belongs to and returns when it is hidden again.
   await frame.locator("#changing-hidden-reason").evaluate(element => {
     element.style.display = "block"; element.style.opacity = "0";
   });
-  await waitForContentStatus(703, "HIDDEN_STATE", "ZERO_OPACITY", 3_000);
+  await waitForContentStatus(703, "VISIBLE", "INVISIBLE_ELEMENT", 3_000);
   await frame.locator("#changing-hidden-reason").evaluate(element => {
     element.style.opacity = "1"; element.hidden = true;
   });
   await waitForContentStatus(703, "HIDDEN_STATE", "HIDDEN_ATTRIBUTE", 3_000);
 
+  // Findings that are not on screen themselves are shown where they belong.
+  await frame.locator("html").evaluate(() => {
+    const style = document.createElement("style");
+    style.textContent = ".presentation-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}"
+      + ".presentation-skip{position:absolute;left:-9999px;top:0}.presentation-skip:focus{left:8px;top:8px}"
+      + "#presentation-carousel .swiper-wrapper{display:flex;gap:8px}#presentation-carousel .swiper-slide{width:120px}";
+    document.head.append(style);
+    const viewport = document.createElement("meta");
+    viewport.name = "viewport"; viewport.content = "width=device-width, user-scalable=no";
+    document.head.append(viewport);
+    const section = document.createElement("section");
+    section.id = "presentation-fixture";
+    section.innerHTML = `<h2 id="presentation-heading" class="presentation-sr">주요 소식</h2>
+      <button id="presentation-button" style="width:48px;height:32px"><span id="presentation-label" class="presentation-sr">검색</span>?</button>
+      <p id="presentation-ghost" style="opacity:0">투명한 안내 문구</p>
+      <div aria-hidden="true"><p id="presentation-decorative">장식 문구</p></div>
+      <div id="presentation-carousel" class="swiper"><div class="swiper-wrapper">
+        <div class="swiper-slide"><a href="#one">첫 번째</a></div>
+        <div class="swiper-slide"><a href="#two" title="">두 번째</a></div>
+        <div class="swiper-slide"><a href="#three">세 번째</a></div>
+      </div></div>`;
+    document.querySelector("main").prepend(section);
+    const skip = document.createElement("a");
+    skip.id = "presentation-skip"; skip.className = "presentation-skip"; skip.href = "#main"; skip.textContent = "본문 바로가기";
+    document.body.prepend(skip);
+    window.scrollTo(0, 0);
+  });
+  const presentationIssues = [
+    createIssue(801, "#presentation-label", "버튼 이름", "HIGH", "rule", "5.1.1"),
+    createIssue(802, "#presentation-heading", "영역 제목", "HIGH", "rule", "5.1.1"),
+    createIssue(803, "#presentation-ghost", "투명 문구", "HIGH", "rule", "5.1.1"),
+    createIssue(804, "#presentation-decorative", "장식 문구", "HIGH", "rule", "5.1.1"),
+    createIssue(805, "#presentation-skip", "건너뛰기 링크", "HIGH", "rule", "6.4.1"),
+    createIssue(806, 'meta[name="viewport"]', "확대 제한", "HIGH", "rule", "meta-viewport"),
+    createIssue(807, "html", "기본 언어", "HIGH", "rule", "7.1.1"),
+    createIssue(808, 'div[data-ua-audit-slide-index="1"] > a[title=""]', "예전 슬라이드 경로", "HIGH", "rule", "6.4.3",
+      { carouselId: 1, slideIndex: 1, slideCount: 3 }),
+    { ...createIssue(809, "#unsupported-frame", "프레임 내부", "HIGH", "rule", "5.1.1"),
+      pathSteps: [{ context: "DOCUMENT", selector: "#unsupported-frame" }, { context: "FRAME", selector: "button" }] }
+  ];
+  await initializeLocatorIssues(presentationIssues);
+  const latestLocatorStatus = issueId => page.evaluate(id => window.__liveEvents.filter(event => event?.type === "EVENT"
+    && event.payload?.type === "LOCATOR_STATUS" && event.payload.issueId === id).at(-1)?.payload ?? null, issueId);
+  const waitForLocatorReason = (issueId, reason, timeout = 10_000) => page.waitForFunction(expected => {
+    const latest = window.__liveEvents.filter(event => event?.type === "EVENT"
+      && event.payload?.type === "LOCATOR_STATUS" && event.payload.issueId === expected.issueId).at(-1)?.payload;
+    return latest?.reason === expected.reason;
+  }, { issueId, reason }, { timeout });
+  for (const [issueId, reason, ownerKind] of [
+    [801, "SCREEN_READER_ONLY", "BUTTON"],
+    [802, "SCREEN_READER_ONLY", "REGION"],
+    [803, "INVISIBLE_ELEMENT", "ELEMENT"],
+    [804, "ASSISTIVE_HIDDEN", undefined],
+    [809, "FRAME_CONTENT", undefined]
+  ]) {
+    await waitForLocatorReason(issueId, reason);
+    const latest = await latestLocatorStatus(issueId);
+    assert.ok(["VISIBLE", "OFFSCREEN"].includes(latest.status), `${issueId} is shown on the page`);
+    assert.equal(latest.ownerKind, ownerKind, `${issueId} names the element it belongs to`);
+  }
+  await waitForContentStatus(805, "HIDDEN_STATE", "FOCUS_TO_REVEAL");
+  assert.equal((await latestLocatorStatus(805)).recoverable, true);
+  await waitForContentStatus(806, "UNAVAILABLE", "DOCUMENT_METADATA");
+  await waitForContentStatus(807, "UNAVAILABLE", "DOCUMENT_METADATA");
+  await page.waitForFunction(() => window.__liveEvents.some(event => event?.type === "EVENT"
+    && event.payload?.type === "LOCATOR_STATUS" && event.payload.issueId === 808));
+  assert.notEqual((await latestLocatorStatus(808)).status, "UNAVAILABLE",
+    "a selector with the scanner's temporary slide attribute still finds its slide");
+
+  // The screen-reader-only label is marked on its button, with a note.
+  await page.evaluate(() => window.__sendLiveCommand({ source: "accessibility-dashboard", type: "FOCUS_ISSUE", issueId: 801 }));
+  await popover.locator(".ap-live-popover__note").filter({ hasText: "버튼에 표시했습니다" }).waitFor();
+  const buttonMarker = await frame.locator('.ap-live-marker[data-issue-id="801"]').isVisible();
+  assert.equal(buttonMarker, true, "the button carries the marker of its hidden label");
+  await page.evaluate(() => window.__sendLiveCommand({ source: "accessibility-dashboard", type: "FOCUS_ISSUE", issueId: 809 }));
+  await popover.locator(".ap-live-popover__note").filter({ hasText: "iframe" }).waitFor();
+
+  // A skip link appears once it has focus.
+  await page.evaluate(() => window.__sendLiveCommand({ source: "accessibility-dashboard", type: "FOCUS_ISSUE", issueId: 805 }));
+  await page.waitForFunction(() => {
+    const latest = window.__liveEvents.filter(event => event?.type === "EVENT"
+      && event.payload?.type === "LOCATOR_STATUS" && event.payload.issueId === 805).at(-1)?.payload;
+    return latest?.status === "VISIBLE" || latest?.reason === "FOCUS_REVEAL_FAILED";
+  });
+  assert.equal((await latestLocatorStatus(805)).status, "VISIBLE", "focusing the skip link reveals it");
+
+  // Page settings never get a marker and open the details instead.
+  await page.evaluate(() => window.__sendLiveCommand({ source: "accessibility-dashboard", type: "FOCUS_ISSUE", issueId: 806 }));
+  await page.waitForFunction(() => window.__liveEvents.some(event =>
+    event.payload?.type === "ISSUE_DETAIL_FALLBACK" && event.payload.issueId === 806));
+  assert.equal(await frame.locator('.ap-live-marker[data-issue-id="806"]').count(), 0);
+  await initializeLocatorIssues([]);
+  await frame.locator("#presentation-fixture").evaluate(element => element.remove());
+  await frame.locator("#presentation-skip").evaluate(element => element.remove());
+
   const locationReasonCases = [
-    { issue: { ...createIssue(401, "#unsupported-frame", "프레임 내부", "HIGH", "rule", "5.1.1"),
-      pathSteps: [{ context: "DOCUMENT", selector: "#unsupported-frame" }, { context: "FRAME", selector: "button" }] }, reason: "FRAME_UNSUPPORTED" },
+    { issue: { ...createIssue(401, "", "프레임 내부", "HIGH", "rule", "5.1.1"),
+      pathSteps: [{ context: "FRAME", selector: "button" }] }, reason: "FRAME_UNSUPPORTED" },
     { issue: { ...createIssue(402, "", "경로 없음", "HIGH", "rule", "5.1.1"), pathSteps: [] }, reason: "EMPTY_PATH" },
     { issue: createIssue(403, "[", "경로 오류", "HIGH", "rule", "5.1.1"), reason: "INVALID_SELECTOR" }
   ];

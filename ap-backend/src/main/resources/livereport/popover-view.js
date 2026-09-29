@@ -1,4 +1,4 @@
-function createLivePopoverView({document, popover, popoverTags, popoverDetail, createSeverityBadge, createCodeBadge, textValue, clusterIssuesFor, getState}) {
+function createLivePopoverView({document, popover, popoverTags, popoverDetail, createSeverityBadge, createCodeBadge, textValue, clusterIssuesFor, presentationNoteFor, getState}) {
   const renderDetailContent = issue => {
     const severityBadge = createSeverityBadge(issue);
     const codeBadge = createCodeBadge(issue);
@@ -14,7 +14,13 @@ function createLivePopoverView({document, popover, popoverTags, popoverDetail, c
     const path = document.createElement('code');
     path.className = 'ap-live-popover__path';
     path.textContent = textValue(issue.path, 2048) || '요소 경로 정보 없음';
-    popoverDetail.replaceChildren(title, message, path);
+    const noteText = presentationNoteFor(issue);
+    if (noteText) {
+      const note = document.createElement('p');
+      note.className = 'ap-live-popover__note';
+      note.textContent = noteText;
+      popoverDetail.replaceChildren(title, note, message, path);
+    } else popoverDetail.replaceChildren(title, message, path);
   };
   // 묶인 이슈를 < > 로 넘길 때 팝오버 크기가 출렁이지 않도록, 가장 긴 이슈 높이에 맞춰 고정
   const sizePopoverForCluster = entry => {

@@ -298,6 +298,23 @@ describe("replay locator status messages", () => {
       reason: "CAROUSEL_STATE_AVAILABLE",
       recoverable: true
     });
+    expect(parsePageReplayMessage({
+      source: PAGE_REPLAY_SOURCE,
+      type: "LOCATOR_STATUS",
+      documentToken: "doc_9005",
+      issueId: 9005,
+      status: "VISIBLE",
+      reason: "SCREEN_READER_ONLY",
+      ownerKind: "BUTTON"
+    })).toMatchObject({ status: "VISIBLE", reason: "SCREEN_READER_ONLY", ownerKind: "BUTTON" });
+    expect(parsePageReplayMessage({
+      source: PAGE_REPLAY_SOURCE,
+      type: "LOCATOR_STATUS",
+      documentToken: "doc_9006",
+      issueId: 9006,
+      status: "VISIBLE",
+      ownerKind: "WINDOW"
+    })).toBeNull();
     for (const status of ["VISIBLE", "OFFSCREEN"] as const) {
       expect(parsePageReplayMessage({
         source: PAGE_REPLAY_SOURCE,

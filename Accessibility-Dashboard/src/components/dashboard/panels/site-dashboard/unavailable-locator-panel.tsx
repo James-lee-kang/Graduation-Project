@@ -9,11 +9,18 @@ import type { LocatorCheckState, LocatorIssueState, RecentIssueRow } from "./typ
 type UnavailableLocatorPanelProps = {
   checkState: LocatorCheckState;
   hasHiddenIssues?: boolean;
-  mode?: "recoverable" | "unavailable";
+  mode?: "recoverable" | "page-settings" | "outdated" | "unavailable";
   onSelectIssue?: (issueId: number) => void;
   onShowLocation: (issueId: number) => void;
   issueStates?: Record<number, LocatorIssueState>;
   rows: RecentIssueRow[];
+};
+
+const panelHeadings = {
+  recoverable: "다른 화면 상태의 문제",
+  "page-settings": "페이지 전체 설정",
+  outdated: "분석 이후 바뀐 문제",
+  unavailable: "화면에 표시되지 않은 문제"
 };
 
 // 최대 세 페이지를 표시하며 첫 페이지는 왼쪽, 마지막 페이지는 오른쪽에 둔다.
@@ -103,6 +110,7 @@ export function UnavailableLocatorPanel({
   const [activeIssueId, setActiveIssueId] = useState<number | null>(null);
   const { listRef, pageSize } = useUnavailableIssuePageSize(checkState === "ready" && rows.length > 0);
   const isRecoverable = mode === "recoverable";
+  const heading = panelHeadings[mode];
   const headingId = `site-${mode}-locator-heading`;
 
   const selectedIndex = rows.findIndex((row) => row.issue.id === activeIssueId);
@@ -128,7 +136,8 @@ export function UnavailableLocatorPanel({
   }, [activeIssueId, rows]);
 
   if (checkState !== "ready" || rows.length === 0) {
-    if (isRecoverable) {
+    // Only the last list explains an empty or pending state.
+    if (mode !== "unavailable") {
       return null;
     }
     return (
@@ -156,7 +165,7 @@ export function UnavailableLocatorPanel({
             : checkState === "error"
               ? "검사 화면에 연결하지 못해 문제 위치를 확인할 수 없습니다."
               : hasHiddenIssues
-                ? "다른 화면 상태의 문제는 위 목록에서 확인할 수 있습니다."
+                ? "그 밖의 문제는 위 목록에서 확인할 수 있습니다."
                 : "모든 문제가 화면에 표시되고 있습니다."}
         </p>
       </section>
@@ -168,8 +177,9 @@ export function UnavailableLocatorPanel({
       className={`site-rail-card site-unavailable-locator-panel site-unavailable-locator-panel--${mode}`}
       data-locator-mode={mode}
       data-locator-check-state={checkState}
-      data-unavailable-locator-count={isRecoverable ? undefined : rows.length}
+      data-unavailable-locator-count={mode === "unavailable" ? rows.length : undefined}
       data-hidden-state-locator-count={isRecoverable ? rows.length : undefined}
+      data-locator-count={rows.length}
       data-unavailable-page-size={pageSize}
       data-visible-issue-count={visibleRows.length}
       style={{ "--site-unavailable-visible-count": visibleRows.length } as CSSProperties}
@@ -177,9 +187,7 @@ export function UnavailableLocatorPanel({
     >
       <div className="site-unavailable-locator-panel__header">
         <div className="site-rail-card__heading">
-          <h3 id={headingId}>
-            {isRecoverable ? "다른 화면 상태의 문제" : "화면에 표시되지 않은 문제"}
-          </h3>
+          <h3 id={headingId}>{heading}</h3>
         </div>
         <span className="site-unavailable-locator-panel__count" aria-hidden="true">
           {rows.length.toLocaleString("ko-KR")}건
@@ -189,7 +197,7 @@ export function UnavailableLocatorPanel({
       <div
         className="site-unavailable-locator-panel__pagination"
         role="group"
-        aria-label={isRecoverable ? "다른 화면 상태의 문제 탐색" : "화면에 표시되지 않은 문제 탐색"}
+        aria-label={`${heading} 탐색`}
       >
         <ul ref={listRef} className="site-unavailable-locator-panel__issues">
           {visibleRows.map((row) => {

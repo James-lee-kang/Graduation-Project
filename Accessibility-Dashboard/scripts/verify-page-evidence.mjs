@@ -3278,7 +3278,7 @@ async function verifyEvidenceStatusFeedback(page) {
   }
   await successNotice.waitFor();
   await sendReplayTestMessage(frame, { type: "LOCATOR_STATUS", issueId: 9001, status: "HIDDEN_STATE", recoverable: true });
-  await page.getByText("다른 화면 상태의 문제는 위 목록에서 확인할 수 있습니다.", { exact: true }).waitFor();
+  await page.getByText("그 밖의 문제는 위 목록에서 확인할 수 있습니다.", { exact: true }).waitFor();
   assert.equal(await successNotice.count(), 0, "recoverable hidden issues must not be described as already visible");
 
   // A fresh document must discard previously complete locator results.

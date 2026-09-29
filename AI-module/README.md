@@ -44,6 +44,7 @@ AI-module/
 | run.js | Playwright로 페이지를 열어 axe-core 검사 + 내부 분석용 DOM snapshot 저장. 통합 실행 시에만 CV 전용 임시 PNG 생성 |
 | carousel-audit.js | Swiper/Slick/Splide/generic 캐러셀의 숨은 논리 슬라이드를 제한적으로 검사하고 결과 중복 제거 |
 | excluded-regions.js | 광고와 두 번 불러올 때 내용이 바뀐 영역을 표시하고, 그 안의 위반을 점수 대상과 분리 |
+| hidden-elements.js | 분석 화면 폭에서 렌더링되지 않는 요소를 스냅샷에 표시해 텍스트 분석이 같은 기준을 쓰게 함 |
 | artifact.js | typed locator를 만들고 annotation을 포함한 내부 분석용 DOM snapshot 직렬화 |
 | adapter.js | axe-core 결과를 KWCAG 항목으로 매핑하는 어댑터 |
 | mapping.js | KWCAG 33개 항목의 매핑 데이터 (axe 규칙 ID, 심각도, 가중치) |
@@ -62,6 +63,17 @@ selector·HTML·locator를 보존하고 백엔드 이슈로 저장한다. 실제
 이슈에도 typed locator와 carousel context를 남겨 현재 페이지에서 요소를 다시 찾을
 수 있게 한다. `result.html`의 annotation은 로컬 분석과 진단에만 사용한다.
 
+**숨김 요소:** axe 검사가 끝난 뒤 실제 브라우저의 계산된 스타일로 `display:none`, `hidden` 속성,
+`visibility:hidden`(보이는 자식이 없을 때), `content-visibility:hidden`인 요소에 `data-ua-hidden`을 붙인다.
+분석 화면 폭(PC)에서 어떤 사용자에게도 전달되지 않는 콘텐츠라서 axe와 CV처럼 텍스트 분석도 읽지 않는다.
+PC에서는 숨겨진 모바일 전용 공지 목록이 대표적이며, 같은 문장이 보이는 영역에 있으면 그쪽이 분석된다.
+스크린리더 전용 텍스트(잘려 있거나 화면 밖으로 밀린 요소)와 투명한 요소는 스크린리더가 읽으므로 표시하지 않고,
+캐러셀 슬라이드는 슬라이드별로 검사하므로 제외한다. 표시한 개수는 `metadata.hidden_element_count`에 남는다.
+열어야 보이는 메뉴·탭·팝업은 아직 열린 상태로 검사하지 않는다.
+
+**캐러셀 경로:** 캐러셀 검사가 슬라이드에 붙이는 임시 속성(`data-ua-audit-*`)을 axe가 선택자에 쓰면,
+저장 전에 그 요소의 구조 경로(가장 가까운 고유 id와 `태그:nth-of-type`)로 바꾼다. 실시간 페이지에는 임시 속성이 없기 때문이다.
+
 **제외 영역:** 사이트의 고정 콘텐츠가 아닌 영역은 모든 검사와 점수에서 빼고 따로 보고한다.
 
 | 사유 | 판정 |
@@ -78,7 +90,7 @@ selector·HTML·locator를 보존하고 백엔드 이슈로 저장한다. 실제
 - `metadata.excluded_regions`: 최상위 제외 영역의 사유와 문서 좌표(CSS px)
 - `excluded_violations`: 사유별 `{reason, violations, unmapped_violations}`. 형식은 점수 대상 위반과 같다
 
-텍스트 추출기는 이 속성이 붙은 요소를 읽지 않고, CV 분석기는 텍스트 상자 중심이 제외 영역 안에 있으면
+텍스트 추출기는 이 속성(`data-ua-excluded-region`)과 `data-ua-hidden`이 붙은 요소를 읽지 않고, CV 분석기는 텍스트 상자 중심이 제외 영역 안에 있으면
 통과율 표본에서 빼고 위반만 `excluded_violations`(사유 포함)에 남긴다. 백엔드는 제외 위반을
 `exclusion_reason`과 함께 저장하되 점수와 문제 수에는 넣지 않고, 최종 리포트는 별도 항목으로 보여준다.
 

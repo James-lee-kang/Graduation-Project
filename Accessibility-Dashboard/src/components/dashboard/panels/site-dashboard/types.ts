@@ -28,6 +28,8 @@ export type LocatorIssueState = {
   status: LocatorConnectionStatus;
   reason?: string;
   recoverable?: boolean;
+  /** What a marker was moved to when the element itself is not on screen. */
+  ownerKind?: string;
 };
 
 export type LocatorReport = {
@@ -36,5 +38,9 @@ export type LocatorReport = {
   state: LocatorCheckState;
   unavailableIssueIds: number[];
   recoverableHiddenIssueIds: number[];
+  /** Page settings such as the viewport or language have no place on screen. */
+  pageSettingIssueIds: number[];
+  /** The page changed after the analysis, so the stored location no longer matches. */
+  outdatedIssueIds: number[];
   issueStates: Record<number, LocatorIssueState>;
 };

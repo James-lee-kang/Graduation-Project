@@ -538,8 +538,13 @@ def extract_texts(html: str) -> dict:
     #   - data-ua-excluded-region → 규칙 분석기가 표시한 광고·동적 영역.
     #     두 번 불러왔을 때 바뀐 뉴스·상품 목록이나 광고 문구는 사이트가 관리하는
     #     고정 문장이 아니므로 점수와 검사에서 제외함
-    HIDDEN_CLASSES = {'modal', 'popup', 'loading', 'layer-loading', 'skip-nav',
-                      'sr-only', 'screen-reader', 'visually-hidden'}
+    #   - data-ua-hidden → 규칙 분석기가 실제 브라우저에서 계산한 숨김 요소
+    #     (display:none 등). PC용 분석 화면에 나오지 않는 모바일 전용 목록처럼
+    #     어떤 사용자에게도 전달되지 않는 문장이므로 규칙 엔진과 같이 제외함
+    # [제외하지 않는 것]
+    #   스크린리더 전용 텍스트(sr-only, visually-hidden, 본문 바로가기)는 화면에
+    #   보이지 않아도 스크린리더가 읽으므로 분석 대상임
+    HIDDEN_CLASSES = {'modal', 'popup', 'loading', 'layer-loading'}
 
     to_remove = []
     for el in soup.find_all(True):
@@ -548,6 +553,11 @@ def extract_texts(html: str) -> dict:
 
         # 광고·동적 영역 (규칙 분석기의 두 번 불러오기 비교 결과)
         if el.has_attr('data-ua-excluded-region'):
+            to_remove.append(el)
+            continue
+
+        # 분석 화면에서 렌더링되지 않는 숨김 요소 (규칙 분석기가 계산한 결과)
+        if el.has_attr('data-ua-hidden'):
             to_remove.append(el)
             continue
 

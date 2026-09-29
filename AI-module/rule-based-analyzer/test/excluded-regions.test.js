@@ -65,8 +65,11 @@ test('excludes ads and content that changed between loads, and keeps stable cont
   const scored = imageAltSelectors(api.violations);
   assert.ok(scored.some((selector) => selector.includes('logo')), 'the stable banner is still checked');
   assert.ok(scored.every((selector) => !/news-photo|ad-image/.test(selector)), 'excluded images are not scored');
-  assert.equal(scored.filter((selector) => /swiper|slide/.test(selector)).length >= 1, true,
-    'carousel slides that rotate between loads stay in the analysis');
+  const scoredSlideNodes = api.violations
+    .filter((violation) => violation.kwcag_id === '5.1.1')
+    .flatMap((violation) => violation.rules.flatMap((rule) => rule.nodes))
+    .filter((node) => node.locator?.carouselContext);
+  assert.ok(scoredSlideNodes.length >= 1, 'carousel slides that rotate between loads stay in the analysis');
 
   const byReason = Object.fromEntries(api.excluded_violations.map((group) => [group.reason, group]));
   assert.deepEqual(Object.keys(byReason).sort(), ['AD', 'DYNAMIC']);
