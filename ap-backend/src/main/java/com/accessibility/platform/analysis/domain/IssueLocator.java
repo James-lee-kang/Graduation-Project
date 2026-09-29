@@ -12,7 +12,8 @@ public record IssueLocator(
         String coordinateSpace,
         Boolean visible,
         String htmlSnippet,
-        IssueLocatorCarouselContext carouselContext
+        IssueLocatorCarouselContext carouselContext,
+        IssueLocatorContent content
 ) {
     public IssueLocator {
         pathSteps = pathSteps == null ? List.of() : List.copyOf(pathSteps);

@@ -28,6 +28,7 @@ import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.concurrent.*;
+import java.util.function.Consumer;
 
 @Slf4j
 @Service
@@ -98,6 +99,22 @@ public class FaviconService {
         } catch (TimeoutException timeout) { lookup.cancel(true); }
         catch (ExecutionException failed) { log.debug("Favicon lookup failed", failed.getCause()); }
         return Optional.empty();
+    }
+
+    /**
+     * Looks up a favicon without blocking the caller. The same deadline as
+     * {@link #findFaviconUrl} bounds the fetch, and a busy pool skips it.
+     */
+    public void findFaviconUrlInBackground(String pageUrl, Consumer<String> onFound) {
+        long deadline = System.nanoTime() + LOOKUP_TIMEOUT.toNanos();
+        try {
+            lookups.execute(() -> {
+                try { lookup(pageUrl, deadline).ifPresent(onFound); }
+                catch (RuntimeException e) { log.debug("Could not store favicon for {}: {}", pageUrl, e.getMessage()); }
+            });
+        } catch (RejectedExecutionException busy) {
+            log.debug("Favicon lookup skipped for {}: lookup pool is busy", pageUrl);
+        }
     }
 
     private Optional<String> lookup(String pageUrl, long deadline) {

@@ -184,6 +184,24 @@ describe("replay locator adaptation", () => {
     expect(getReplayIssuePathSteps(row.issue)).toEqual([]);
   });
 
+  it("sends the analysed content of the element a visual finding was located on", () => {
+    const locator = {
+      pathSteps: [{ context: "DOCUMENT", selector: "#feed > a:nth-of-type(1) > img" }],
+      x: 140, y: 130, width: 20, height: 10, coordinateSpace: "DOCUMENT_CSS_PX",
+      content: { text: "", image: "/thumb/1.jpg?type=f" }
+    };
+    const issue = replayIssue("text=감량", "CV_VISION", locator);
+    expect(issue.pathSteps).toEqual([{ context: "DOCUMENT", selector: "#feed > a:nth-of-type(1) > img" }]);
+    expect(issue.box).toBeNull();
+    expect(issue.content).toEqual({ text: "", image: "/thumb/1.jpg?type=f" });
+
+    // Content without an element path has nothing to compare against.
+    expect(replayIssue("text=감량", "CV_VISION", { ...locator, pathSteps: [] }).content).toBeNull();
+    expect(replayIssue("", "CV_VISION", { ...locator, content: { text: "가".repeat(201), image: null } }).content)
+      .toBeNull();
+    expect(replayIssue("", "RULE_BASED", { pathSteps: locator.pathSteps }).content).toBeNull();
+  });
+
   it("keeps DOM paths and ignores unusable coordinate boxes", () => {
     const withPath = replayIssue("", "RULE_BASED", {
       pathSteps: [{ context: "DOCUMENT", selector: "#target" }],

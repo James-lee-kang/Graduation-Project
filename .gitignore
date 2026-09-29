@@ -39,6 +39,9 @@ out/
 *.class
 !**/gradle/wrapper/gradle-wrapper.jar
 
+# Local server runtime (copied jars, H2 databases and logs)
+/ap-backend/data/server-runtime/
+
 # H2 / local DB
 *.db
 *.mv.db

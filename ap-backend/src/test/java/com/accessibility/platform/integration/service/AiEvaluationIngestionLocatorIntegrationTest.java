@@ -162,6 +162,21 @@ class AiEvaluationIngestionLocatorIntegrationTest {
                         "required_ratio":4.5,
                         "contrast_display":"2.0:1",
                         "location":{"x":100,"y":200,"width":80,"height":24}
+                      },{
+                        "text":"감량",
+                        "contrast_ratio":1.5,
+                        "required_ratio":4.5,
+                        "contrast_display":"1.5:1",
+                        "location":{"x":140,"y":130,"width":20,"height":10},
+                        "locator":{
+                          "kind":"CSS_SELECTOR",
+                          "pathSteps":[{"context":"DOCUMENT","selector":"#feed > a:nth-of-type(1) > img"}],
+                          "x":140,"y":130,"width":20,"height":10,
+                          "coordinateSpace":"DOCUMENT_CSS_PX",
+                          "visible":true,
+                          "htmlSnippet":"<img src=\\"/thumb/1.jpg\\">",
+                          "content":{"text":"","image":"/thumb/1.jpg?type=f"}
+                        }
                       }]
                     }
                   }
@@ -208,6 +223,7 @@ class AiEvaluationIngestionLocatorIntegrationTest {
 
         EvaluationIssueResponse cvIssue = issues.stream()
                 .filter(issue -> issue.module().equals("cv_visual"))
+                .filter(issue -> issue.locator().pathSteps().isEmpty())
                 .findFirst()
                 .orElseThrow();
         assertThat(cvIssue.selector()).isEqualTo("x=100, y=200, width=80, height=24");
@@ -215,6 +231,18 @@ class AiEvaluationIngestionLocatorIntegrationTest {
         assertThat(cvIssue.locator().coordinateSpace()).isEqualTo("SCREENSHOT_PX");
         assertThat(cvIssue.locator().width()).isEqualTo(80.0);
         assertThat(cvIssue.wcagCode()).isEqualTo("5.4.3");
+        assertThat(cvIssue.locator().content()).isNull();
+
+        EvaluationIssueResponse anchoredCvIssue = issues.stream()
+                .filter(issue -> issue.module().equals("cv_visual"))
+                .filter(issue -> !issue.locator().pathSteps().isEmpty())
+                .findFirst()
+                .orElseThrow();
+        assertThat(anchoredCvIssue.locator().pathSteps().getFirst().selector())
+                .isEqualTo("#feed > a:nth-of-type(1) > img");
+        assertThat(anchoredCvIssue.locator().coordinateSpace()).isEqualTo("DOCUMENT_CSS_PX");
+        assertThat(anchoredCvIssue.locator().content().text()).isEmpty();
+        assertThat(anchoredCvIssue.locator().content().image()).isEqualTo("/thumb/1.jpg?type=f");
     }
 
     @Test

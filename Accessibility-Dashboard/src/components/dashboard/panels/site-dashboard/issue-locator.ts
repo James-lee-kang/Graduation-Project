@@ -1,5 +1,6 @@
 import type {
   IssueLocatorCarouselContext,
+  IssueLocatorContent,
   IssueLocatorContext,
   IssueLocatorPathStep,
   IssueResultModel
@@ -75,6 +76,22 @@ export function getReplayIssuePathSteps(issue: IssueResultModel): IssueLocatorPa
   return fallbackSelector.length > 0
     ? [{ context: "DOCUMENT", selector: fallbackSelector }]
     : [];
+}
+
+const CONTENT_TEXT_LIMIT = 200;
+const CONTENT_IMAGE_LIMIT = 2_048;
+
+// Visual-engine findings follow the element found under their box. The viewer
+// compares this analysed content with the live element and hides the marker
+// once the element shows something else. Without an element path there is
+// nothing to compare.
+export function getReplayIssueContent(issue: IssueResultModel): IssueLocatorContent | null {
+  const content = issue.locator?.content;
+  if (!content || getStoredPathSteps(issue).length === 0) return null;
+  const text = typeof content.text === "string" ? content.text : "";
+  const image = typeof content.image === "string" && content.image.length > 0 ? content.image : null;
+  if (text.length > CONTENT_TEXT_LIMIT || (image !== null && image.length > CONTENT_IMAGE_LIMIT)) return null;
+  return { text, image };
 }
 
 export function getReplayIssueCarouselContext(

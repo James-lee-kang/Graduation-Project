@@ -11,12 +11,14 @@ import { LandingFaqSection } from "@/components/landing/landing-faq-section";
 import { LandingFooter } from "@/components/landing/landing-footer";
 import { mountLandingSnap } from "@/components/landing/landing-scroll-snap";
 
+// Latin 700 only: the landing wordmark is the sole DM Sans text.
+import "@fontsource/dm-sans/latin-700.css";
 import "@/styles/landing-large-screen.css";
 
 const ASSET_ROOT = "/landing/scroll-world";
 
 const LANDING_CONFIG = {
-  brand: { name: "UNI ACCESS", href: "#uni-access-main", wordmark: { strong: "UNI", light: "ACCESS" } },
+  brand: { name: "UNI ACCESS", href: "#uni-access-main", wordmark: { text: "uniaccess" } },
   cta: { label: "새 페이지 분석", href: "/analyze", action: "enter-app" },
   skipLabel: "본문으로 바로가기",
   mainId: "uni-access-main",

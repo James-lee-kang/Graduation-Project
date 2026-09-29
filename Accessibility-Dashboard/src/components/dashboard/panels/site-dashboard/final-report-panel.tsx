@@ -1,4 +1,4 @@
-import { ChevronDown, FileText, LocateFixed, Printer, RotateCcw } from "lucide-react";
+import { ChevronDown, ChevronsUpDown, FileText, Info, LocateFixed, LocateOff, Printer, RotateCcw, TriangleAlert } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { flushSync } from "react-dom";
 
@@ -22,6 +22,7 @@ import {
   filterReportRows,
   getReportLocationStatus,
   groupByCriterion,
+  splitDescriptionSections,
   summarizeReport,
   summarizeReportLocations,
   type ReportCriterionGroup,
@@ -196,7 +197,7 @@ export function FinalReportPanel({
     <article ref={reportRef} className="site-final-report" aria-labelledby="site-final-report-heading">
       <header className="site-final-report__header">
         <div className="site-final-report__identity">
-          <h2 id="site-final-report-heading">최종 리포트</h2>
+          <h2 id="site-final-report-heading" className="site-final-report__eyebrow">최종 리포트</h2>
           <p className="site-final-report__target">{target.name}</p>
           <dl className="site-final-report__meta">
             <div>
@@ -240,7 +241,7 @@ export function FinalReportPanel({
           <section className="site-final-report__section" aria-labelledby="site-final-report-summary">
             <h3 id="site-final-report-summary">요약</h3>
             <dl className="site-final-report__metrics">
-              <div>
+              <div className="site-final-report__metric--score">
                 <dt>접근성 점수</dt>
                 <dd>{score === null ? "미확인" : `${score.toLocaleString("ko-KR", { maximumFractionDigits: 1 })}점`}</dd>
               </div>
@@ -263,7 +264,12 @@ export function FinalReportPanel({
             </dl>
             <div className="site-final-report__breakdown">
               <div>
-                <h4>심각도</h4>
+                <h4>심각도 분포</h4>
+                <div className="site-final-report__severity-bar" aria-hidden="true">
+                  {summary.severities.filter((item) => item.count > 0).map((item) => (
+                    <span key={item.key} style={{ ...severityStyle(item.color), flexGrow: item.count }} />
+                  ))}
+                </div>
                 <ul className="site-final-report__severity-list">
                   {summary.severities.map((item) => (
                     <li key={item.key} style={severityStyle(item.color)}>
@@ -279,7 +285,7 @@ export function FinalReportPanel({
                 <ul className="site-final-report__engine-list">
                   {summary.analyzers.map((item) => (
                     <li key={item.analyzer}>
-                      <span>{item.label}</span>
+                      <span>{item.label} 검사</span>
                       <strong>{engineOutcome(item.analyzer) ?? formatCount(item.count)}</strong>
                     </li>
                   ))}
@@ -288,12 +294,14 @@ export function FinalReportPanel({
             </div>
             {textFailed && (
               <p className="site-final-report__notice" role="note">
-                텍스트 검사가 실패해 읽기 수준·링크 텍스트 등 문장 기반 문제는 이 리포트에 포함되지 않았고 점수에도 반영되지 않았습니다.
+                <TriangleAlert size={16} aria-hidden="true" />
+                <span>텍스트 검사가 실패해 읽기 수준·링크 텍스트 등 문장 기반 문제는 이 리포트에 포함되지 않았고 점수에도 반영되지 않았습니다.</span>
               </p>
             )}
             {cvIncomplete && (
               <p className="site-final-report__notice" role="note">
-                시각 검사가 {cvStatus === "FAILED" ? "실패해" : "측정되지 않아"} 명도 대비 등 화면 기반 문제는 이 리포트에 포함되지 않았을 수 있습니다.
+                <TriangleAlert size={16} aria-hidden="true" />
+                <span>시각 검사가 {cvStatus === "FAILED" ? "실패해" : "측정되지 않아"} 명도 대비 등 화면 기반 문제는 이 리포트에 포함되지 않았을 수 있습니다.</span>
               </p>
             )}
           </section>
@@ -310,17 +318,30 @@ export function FinalReportPanel({
           ) : (
             <>
               <section className="site-final-report__section" aria-labelledby="site-final-report-priorities">
-                <h3 id="site-final-report-priorities">먼저 고칠 항목</h3>
-                <p className="site-final-report__lead">
-                  같은 방법으로 고칠 수 있는 문제를 묶고, 심각도와 건수를 함께 고려해 순서를 정했습니다.
-                </p>
+                <div className="site-final-report__section-heading">
+                  <div>
+                    <h3 id="site-final-report-priorities">먼저 고칠 항목</h3>
+                    <p className="site-final-report__lead">
+                      같은 방법으로 고칠 수 있는 문제를 묶고, 심각도와 건수를 함께 고려해 순서를 정했습니다.
+                    </p>
+                  </div>
+                </div>
+                <div className="site-final-report__priority-head" aria-hidden="true">
+                  <span>순위</span>
+                  <span>심각도</span>
+                  <span>고칠 항목</span>
+                  <span>건수</span>
+                  <span />
+                </div>
                 <ol className="site-final-report__priorities">
                   {priorities.map((unit) => (
                     <li key={unit.key} style={severityStyle(unit.severity.color)}>
+                      <span className="site-final-report__priority-severity">
+                        <span className="site-final-report__severity">{unit.severity.label}</span>
+                      </span>
                       <div className="site-final-report__priority-body">
                         <p className="site-final-report__priority-title">{unit.title}</p>
                         <p className="site-final-report__tags">
-                          <span className="site-final-report__severity">{unit.severity.label}</span>
                           {unit.codeLabel && <span className="site-final-report__code">{unit.codeLabel}</span>}
                           <span>{unit.analyzers.map((analyzer) => analyzerLabels[analyzer]).join(" · ")} 검사</span>
                         </p>
@@ -338,23 +359,29 @@ export function FinalReportPanel({
 
               <section className="site-final-report__section" aria-labelledby="site-final-report-issues">
                 <div className="site-final-report__section-heading">
-                  <h3 id="site-final-report-issues">전체 문제</h3>
-                  <button type="button" className="site-final-report__button site-final-report__link"
-                    onClick={() => setExpandedCodes(allExpanded ? new Set() : new Set(groups.map((group) => group.code)))}
-                    disabled={groups.length === 0}>
-                    {allExpanded ? "모두 접기" : "모두 펼치기"}
-                  </button>
+                  <div>
+                    <h3 id="site-final-report-issues">전체 문제</h3>
+                    <p className="site-final-report__lead">KWCAG 검사 항목별로 묶었습니다. 항목을 펼쳐 문제별 위치와 코드를 확인하세요.</p>
+                  </div>
                 </div>
                 <ReportFilterControls
                   filters={filters}
                   locationReady={locatorCheckState === "ready"}
                   onChange={updateFilters}
                 />
-                <p className="site-final-report__result-count" role="status">
-                  {filtersActive
-                    ? `전체 ${formatCount(summary.total)} 중 ${formatCount(filteredRows.length)}이 조건에 맞습니다.`
-                    : `검사 항목 ${groups.length.toLocaleString("ko-KR")}개, 문제 ${formatCount(summary.total)}`}
-                </p>
+                <div className="site-final-report__list-bar">
+                  <p className="site-final-report__result-count" role="status">
+                    {filtersActive
+                      ? `전체 ${formatCount(summary.total)} 중 ${formatCount(filteredRows.length)}이 조건에 맞습니다.`
+                      : `검사 항목 ${groups.length.toLocaleString("ko-KR")}개, 문제 ${formatCount(summary.total)}`}
+                  </p>
+                  <button type="button" className="site-final-report__button site-final-report__link"
+                    onClick={() => setExpandedCodes(allExpanded ? new Set() : new Set(groups.map((group) => group.code)))}
+                    disabled={groups.length === 0}>
+                    <ChevronsUpDown size={16} aria-hidden="true" />
+                    {allExpanded ? "모두 접기" : "모두 펼치기"}
+                  </button>
+                </div>
                 {groups.length === 0 ? (
                   <p className="site-final-report__state">조건에 맞는 문제가 없습니다.</p>
                 ) : (
@@ -383,9 +410,10 @@ export function FinalReportPanel({
             <ExcludedIssues rows={excludedRows} expanded={isPrinting || excludedExpanded}
               onToggle={() => setExcludedExpanded((current) => !current)} />
           )}
-          <p className="site-final-report__footnote">
-            자동 검사 결과이며 분석 당시 페이지를 기준으로 합니다. 표준 적합성은 전문가 점검과 함께 판단해 주세요.
-          </p>
+          <footer className="site-final-report__footnote">
+            <Info size={16} aria-hidden="true" />
+            <p>자동 검사 결과이며 분석 당시 페이지를 기준으로 합니다. 표준 적합성은 전문가 점검과 함께 판단해 주세요.</p>
+          </footer>
         </>
       )}
     </article>
@@ -527,20 +555,20 @@ function ExcludedIssues({ rows, expanded, onToggle }: {
   return (
     <section className="site-final-report__section" aria-labelledby="site-final-report-excluded">
       <h3 id="site-final-report-excluded">
-        <button type="button" className="site-final-report__group-toggle" aria-expanded={expanded}
+        <button type="button" className="site-final-report__section-toggle" aria-expanded={expanded}
           aria-controls="site-final-report-excluded-list" onClick={onToggle}>
-          <ChevronDown size={18} aria-hidden="true" className="site-final-report__chevron" />
-          <span className="site-final-report__group-title">점수에서 제외된 문제</span>
-          <span className="site-final-report__group-meta">
+          <span className="site-final-report__section-toggle-title">점수에서 제외된 문제</span>
+          <span className="site-final-report__section-toggle-meta">
             {counts.map(([reason, count]) => `${exclusionLabels[reason]} ${formatCount(count)}`).join(" · ")}
           </span>
+          <ChevronDown size={18} aria-hidden="true" className="site-final-report__chevron" />
         </button>
       </h3>
       <p className="site-final-report__lead">
         광고와 다시 불러올 때마다 내용이 바뀌는 영역(뉴스·상품 추천 등)은 사이트의 고정 콘텐츠가 아니어서
         점수와 문제 수에서 뺐습니다. 고정 배너와 슬라이드 배너는 그대로 검사합니다.
       </p>
-      <div id="site-final-report-excluded-list" hidden={!expanded}>
+      <div id="site-final-report-excluded-list" className="site-final-report__excluded-list" hidden={!expanded}>
         {expanded && (
           <ul className="site-final-report__issues">
             {rows.map((row) => (
@@ -563,7 +591,7 @@ function ReportIssueItem({ row, groupTitle, location, state, onShowOnPage, onSho
   onShowDetails?: (issueId: number) => void;
 }) {
   const { issue } = row;
-  const description = formatIssueDescription(issue.message, row.analyzerType, issue.ruleId);
+  const descriptionSections = splitDescriptionSections(formatIssueDescription(issue.message, row.analyzerType, issue.ruleId));
   const issueLocation = describeIssueLocation(issue);
   const html = issue.locator?.htmlSnippet?.trim() ?? "";
   const htmlPreview = html.length > HTML_PREVIEW_LIMIT ? `${html.slice(0, HTML_PREVIEW_LIMIT)}…` : html;
@@ -572,16 +600,30 @@ function ReportIssueItem({ row, groupTitle, location, state, onShowOnPage, onSho
   return (
     <li className="site-final-report__issue" style={severityStyle(row.severity.color)} data-issue-id={issue.id}
       data-location-status={location}>
-      <p className="site-final-report__tags">
-        <span className="site-final-report__severity">{row.severity.label}</span>
-        {row.analyzerType && <span>{analyzerLabels[row.analyzerType]} 검사</span>}
-        {issue.exclusionReason && <span className="site-final-report__code">{exclusionLabels[issue.exclusionReason]}</span>}
+      <div className="site-final-report__issue-head">
+        <p className="site-final-report__tags">
+          <span className="site-final-report__severity">{row.severity.label}</span>
+          {row.analyzerType && <span>{analyzerLabels[row.analyzerType]} 검사</span>}
+          {issue.exclusionReason && <span className="site-final-report__code">{exclusionLabels[issue.exclusionReason]}</span>}
+        </p>
         {location && (
-          <span className="site-final-report__location" data-location-status={location}>{locationLabel(location, state)}</span>
+          <span className="site-final-report__location" data-location-status={location}>
+            {canShowOnPage(location)
+              ? <LocateFixed size={14} aria-hidden="true" />
+              : location === "unavailable" ? <LocateOff size={14} aria-hidden="true" /> : null}
+            {locationLabel(location, state)}
+          </span>
         )}
-      </p>
+      </div>
       {title !== groupTitle && <p className="site-final-report__issue-title">{title}</p>}
-      <p className="site-final-report__description" data-copyable>{description}</p>
+      <div className="site-final-report__description" data-copyable>
+        {descriptionSections.map((section, index) => section.heading ? (
+          <div key={index} className="site-final-report__description-section">
+            <p className="site-final-report__description-label">{section.heading}</p>
+            <p>{section.body}</p>
+          </div>
+        ) : <p key={index}>{section.body}</p>)}
+      </div>
       <dl className="site-final-report__code-location">
         <div>
           <dt>코드 위치</dt>

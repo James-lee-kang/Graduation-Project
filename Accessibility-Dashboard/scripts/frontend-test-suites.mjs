@@ -39,6 +39,7 @@ const quickRecovery = viteTest("verify-quick-rescan-recovery-guards.mjs", {
 const routeResilienceAccessibility = viteTest("verify-route-resilience-accessibility.mjs");
 const sidebarSelection = nodeTest("verify-sidebar-selection.mjs");
 const sidebarRouteSelection = viteTest("verify-sidebar-route-selection.mjs");
+const sidebarCollapse = viteTest("verify-sidebar-collapse.mjs");
 const siteCreateRequestRetry = viteTest("verify-site-create-request-retry.mjs");
 const siteCreateAccessibilityGuards = viteTest("verify-site-create-accessibility-guards.mjs");
 const pageEvidenceCore = viteTest("verify-page-evidence.mjs", {
@@ -99,6 +100,7 @@ const ci = [
   routeResilienceAccessibility,
   sidebarSelection,
   sidebarRouteSelection,
+  sidebarCollapse,
   siteCreateRequestRetry,
   siteCreateAccessibilityGuards,
   pageEvidenceCore,

@@ -1,5 +1,13 @@
 import { SidebarBody, SidebarLink } from "@/components/ui/sidebar";
-import { ChevronDown, ChevronRight, CircleAlert, LogOut, RotateCcw, Settings } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  CircleAlert,
+  LogOut,
+  PanelLeft,
+  RotateCcw,
+  Settings
+} from "lucide-react";
 import { Suspense, lazy, useCallback, useEffect, useId, useRef, useState } from "react";
 
 import {
@@ -25,6 +33,15 @@ const AccountSettingsModal = lazy(() =>
   import("./modals/account-settings-modal").then((module) => ({ default: module.AccountSettingsModal }))
 );
 const ACCOUNT_MENU_ITEM_COUNT = 2;
+const SIDEBAR_COLLAPSED_STORAGE_KEY = "dashboard-sidebar-collapsed";
+
+function readStoredSidebarCollapsed() {
+  try {
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
 
 export function DashboardSurface(props: DashboardSurfaceProps) {
   const { dashboard, userName } = props;
@@ -54,6 +71,28 @@ export function DashboardSurface(props: DashboardSurfaceProps) {
   const accountMenuInitialFocusIndexRef = useRef(0);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const [isAccountSettingsOpen, setIsAccountSettingsOpen] = useState(false);
+  const sidebarContentId = useId();
+  // The embedded landing preview always starts expanded and never writes the
+  // viewer's dashboard preference.
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => !isPreview && readStoredSidebarCollapsed());
+
+  useEffect(() => {
+    if (isPreview) {
+      return;
+    }
+    try {
+      window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(isSidebarCollapsed));
+    } catch {
+      // Collapsing must keep working for this session without storage.
+    }
+  }, [isPreview, isSidebarCollapsed]);
+
+  const sidebarToggleLabel = isSidebarCollapsed ? "사이드바 펼치기" : "사이드바 접기";
+
+  const toggleSidebar = useCallback(() => {
+    setIsAccountMenuOpen(false);
+    setIsSidebarCollapsed((collapsed) => !collapsed);
+  }, []);
 
   useEffect(() => {
     if (isPreview) {
@@ -191,23 +230,27 @@ export function DashboardSurface(props: DashboardSurfaceProps) {
         isProjectDetailView ? "dashboard-project-detail" : ""
       } ${
         isSiteDetailView ? "dashboard-site-detail" : ""
-      } min-h-[100dvh] w-full overflow-x-hidden p-0 ${
+      } min-h-[100dvh] w-full overflow-x-clip p-0 ${
         dashboard.isDarkMode ? "" : "bg-white"
       } ${dashboard.isDarkMode ? "theme-dark" : "theme-light"} ${
         isPreview ? "dashboard-embedded-preview" : ""
-      }`}
+      } ${isSidebarCollapsed ? "dashboard-sidebar-is-collapsed" : ""}`}
       data-dashboard-product-preview={isPreview ? "true" : undefined}
     >
       <a className="dashboard-skip-link" href={`#${mainContentId}`}>
         본문으로 바로가기
       </a>
       <div className="dashboard-shell flex min-h-[100dvh] w-full flex-col bg-transparent md:flex-row">
-        <SidebarBody className="reference-sidebar-body justify-start gap-0">
-          <div className="dashboard-header-account reference-sidebar-account relative z-30 shrink-0 p-0">
+        <SidebarBody
+          className={`reference-sidebar-body justify-start gap-0 ${
+            isSidebarCollapsed ? "dashboard-sidebar-collapsed" : ""
+          }`}
+        >
+          <div className="dashboard-header-account reference-sidebar-account relative z-30 flex shrink-0 items-center justify-between gap-1 p-0">
             <button
               ref={accountTriggerRef}
               type="button"
-              className="dashboard-account-menu-trigger w-fit max-w-full rounded-lg text-left outline-none transition-colors hover:bg-slate-100 focus-visible:ring-2 focus-visible:ring-[var(--dashboard-accent)]/60 focus-visible:ring-offset-2"
+              className="dashboard-account-menu-trigger w-fit min-w-0 max-w-full rounded-lg text-left outline-none transition-colors hover:bg-slate-100 focus-visible:ring-2 focus-visible:ring-[var(--dashboard-accent)]/60 focus-visible:ring-offset-2"
               aria-expanded={isAccountMenuOpen}
               aria-controls={accountMenuId}
               aria-haspopup="menu"
@@ -280,12 +323,27 @@ export function DashboardSurface(props: DashboardSurfaceProps) {
                 </button>
               </div>
             ) : null}
+
+            <button
+              type="button"
+              className="dashboard-sidebar-toggle inline-flex shrink-0 items-center justify-center"
+              aria-label={sidebarToggleLabel}
+              title={sidebarToggleLabel}
+              aria-expanded={!isSidebarCollapsed}
+              aria-controls={sidebarContentId}
+              onClick={toggleSidebar}
+            >
+              <PanelLeft size={18} strokeWidth={2} aria-hidden="true" />
+            </button>
           </div>
 
-          <div className="reference-sidebar-content flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
+          <div
+            id={sidebarContentId}
+            className="reference-sidebar-content flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden"
+          >
             <div className="reference-sidebar-primary flex flex-col gap-1">
               {dashboard.sidebarLinks.map((link) => (
-                <SidebarLink key={link.label} link={link} />
+                <SidebarLink key={link.label} link={link} title={isSidebarCollapsed ? link.label : undefined} />
               ))}
             </div>
 

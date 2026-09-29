@@ -62,9 +62,19 @@ export type IssueLocatorCarouselContext = {
   slideCount: number;
 };
 
+/**
+ * What the element under a visual-engine finding showed when it was analysed:
+ * its text without whitespace and the path and query of its image.
+ */
+export type IssueLocatorContent = {
+  text: string;
+  image: string | null;
+};
+
 export type IssueLocator = {
   pathSteps: IssueLocatorPathStep[];
   carouselContext?: IssueLocatorCarouselContext | null;
+  content?: IssueLocatorContent | null;
   htmlSnippet?: string | null;
   x?: number | null;
   y?: number | null;
