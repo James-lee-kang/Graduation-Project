@@ -84,3 +84,7 @@ artifacts/
 **/.artifacts/
 **/*build_out.txt
 **/*tsc_out.txt
+
+# Agent instruction files stay local
+AGENTS.md
+**/AGENTS.md
