@@ -73,6 +73,40 @@ Verification" 차단 페이지가 정상 페이지처럼 채점되어 96점(A+)�
 `run_all.py`는 이 필드를 읽어서 `result_final.json` 최상위의
 `data_quality_warnings` 배열에도 전파한다.
 
+### 외부(서드파티) 광고 제외 (`metadata.excluded_third_party_ads`)
+
+네이버 같은 대형 플랫폼에는 구글 애드센스, 카카오 애드핏, 자체 광고 서버가 끼워 넣는
+광고가 있다. 이런 광고는 사이트 운영자가 마크업을 통제할 수 없는 서드파티 콘텐츠라서
+사이트 자체의 접근성 점수에 섞이지 않도록 `hideThirdPartyAds()`가 검사 전에 DOM에서 뺀다.
+
+| 제외하는 것 | 기준 |
+|---|---|
+| 광고 서버 iframe | `src`의 호스트가 `AD_HOSTS`(doubleclick, googlesyndication, 카카오 애드핏, 네이버 veta 등)에 속하는 iframe |
+| 광고 슬롯 마크업 | `AD_SELECTORS`(`ins.adsbygoogle`, `div-gpt-ad*`, `google_ads*`, `ins.kakao_ad_area` 등)에 맞는 요소 |
+
+**기관이 직접 만든 배너·슬라이드·공지 이미지는 제외하지 않는다.** 그것은 사이트 자신의
+콘텐츠이고 대체 텍스트 누락 같은 진짜 위반이 나오는 곳이다. class에 `banner`나 `ad`가
+들어간다는 이유만으로는 제외하지 않는다.
+
+광고 요소는 같은 크기의 빈 `div`로 바뀌므로 HTML 텍스트 추출(모듈 2), 스크린샷(모듈 3),
+axe 검사가 한 번에 같은 상태를 보고, 나머지 레이아웃은 그대로다. 스크롤하면 늦게 뜨는
+광고가 있어서 HTML 저장 전과 스크롤 후, 두 번 실행한다. 무엇을 뺐는지는 콘솔과 `result_api.json`에 남는다.
+
+```json
+"metadata": {
+  "excluded_third_party_ads": {
+    "count": 2,
+    "items": [
+      { "tag": "iframe", "id": "ad1", "host": "googleads.g.doubleclick.net", "width": 304, "height": 254 },
+      { "tag": "ins", "id": null, "host": null, "width": 320, "height": 100 }
+    ]
+  }
+}
+```
+
+`AD_HOSTS`에 없는 광고 서버는 제외되지 않는다. 새 광고가 발견되면 `run.js` 위쪽의
+`AD_HOSTS` 또는 `AD_SELECTORS`에 추가하면 된다.
+
 > 실제 서비스에서는 `run_all.py`가 이 파일을 호출하여 결과를 `output/` 폴더에 저장한다.  
 > 단독 실행 시에는 `rule-based-analyzer/` 폴더 안에 결과 파일이 생성된다.
 

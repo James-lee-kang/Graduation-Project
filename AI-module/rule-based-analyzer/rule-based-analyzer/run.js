@@ -363,6 +363,115 @@ async function detectBotBlock(page, renderedHtml) {
 
 /**
  * ─────────────────────────────────────────────────────────────────────────
+ *  hideThirdPartyAds(page)  — 외부(서드파티) 광고 제외
+ * ─────────────────────────────────────────────────────────────────────────
+ *  [왜 추가했는가 — 2026-09-29]
+ *    네이버 같은 대형 플랫폼에는 구글 애드센스·카카오 애드핏·자체 광고 서버가
+ *    끼워 넣는 광고가 있다. 이 광고는 사이트 운영자가 마크업을 통제하지 못하는
+ *    서드파티 콘텐츠라서(WCAG도 적합성 평가에서 통제 불가능한 서드파티 콘텐츠는
+ *    범위에서 밝히고 제외할 수 있게 함), 사이트 자체의 접근성 점수에 섞이면
+ *    안 된다.
+ *
+ *  [무엇을 제외하는가 — 좁게, 확실한 것만]
+ *    1) src의 호스트가 AD_HOSTS(알려진 광고 서버 도메인)인 iframe
+ *    2) AD_SELECTORS(애드센스 ins, GPT 슬롯 등 광고 슬롯 마크업)에 맞는 요소
+ *  [무엇을 제외하지 않는가]
+ *    기관이 직접 만든 배너·슬라이드·공지 이미지는 절대 건드리지 않는다.
+ *    그건 사이트 자신의 콘텐츠이고, 대체 텍스트 누락이나 자동 슬라이드 정지
+ *    버튼 부재 같은 진짜 접근성 위반이 나오는 곳이다. class에 banner/ad가
+ *    들어간다는 이유만으로는 제외하지 않는다.
+ *
+ *  [방식]
+ *    광고 요소를 같은 크기의 빈 div로 바꿔치기한다. DOM에서 광고가 사라지므로
+ *    HTML 텍스트 추출·스크린샷(CV)·axe 세 곳 모두에 한 번에 반영되고, 크기를
+ *    유지하므로 나머지 레이아웃은 그대로다. 스크롤하면 늦게 뜨는 광고 슬롯이
+ *    있어서, 캡처 전과 스크롤 후에 두 번 호출한다.
+ *
+ *  [투명성] 제외한 항목은 result_api.json의 metadata.excluded_third_party_ads에
+ *  개수와 목록을 남긴다. AD_HOSTS에 없는 광고 서버는 제외되지 않으니, 새 광고가
+ *  발견되면 이 목록에 도메인을 추가하면 된다.
+ * ─────────────────────────────────────────────────────────────────────────
+ */
+const AD_HOSTS = [
+  // 글로벌 광고 네트워크
+  'doubleclick.net', 'googlesyndication.com', 'googleadservices.com',
+  'adservice.google.com', 'adservice.google.co.kr', 'amazon-adsystem.com',
+  'criteo.com', 'criteo.net', 'taboola.com', 'outbrain.com',
+  'adnxs.com', 'pubmatic.com', 'rubiconproject.com', 'openx.net',
+  // 국내 광고 네트워크
+  'ad.daum.net', 'adfit.kakao.com', 'dable.io', 'mobon.net',
+  // 네이버 광고 서버 (실제 naver.com에서의 확인은 로컬 실행 로그로 검증 필요)
+  'veta.naver.com', 'tivan.naver.com', 'adcr.naver.com', 'ad.naver.com',
+];
+
+const AD_SELECTORS = [
+  'ins.adsbygoogle', '[data-ad-client]', '[data-ad-slot]',   // 구글 애드센스
+  '[id^="div-gpt-ad"]', '[id^="google_ads"]', 'iframe[id^="aswift_"]',  // GPT / 애드센스 슬롯
+  'ins.kakao_ad_area',                                        // 카카오 애드핏
+  '[id^="taboola-"]', '.OUTBRAIN', '[id^="dablewidget"]',     // 추천 광고 위젯
+];
+
+async function hideThirdPartyAds(page) {
+  try {
+    return await page.evaluate(({ hosts, selectors }) => {
+      const isAdHost = (h) => hosts.some((d) => h === d || h.endsWith('.' + d));
+      const cands = new Set();
+
+      document.querySelectorAll('iframe').forEach((f) => {
+        let host = '';
+        try { host = new URL(f.getAttribute('src') || '', location.href).hostname.toLowerCase(); } catch { /* 잘못된 src는 무시 */ }
+        if (host && isAdHost(host)) cands.add(f);
+      });
+      selectors.forEach((sel) => {
+        try { document.querySelectorAll(sel).forEach((e) => cands.add(e)); } catch { /* 선택자 오류 무시 */ }
+      });
+
+      const items = [];
+      for (const el of cands) {
+        // 광고 컨테이너 안에 광고 iframe이 또 있는 경우 바깥 것만 처리
+        let a = el.parentElement;
+        let nested = false;
+        while (a) { if (cands.has(a)) { nested = true; break; } a = a.parentElement; }
+        if (nested) continue;
+
+        const rect = el.getBoundingClientRect();
+        const cs = window.getComputedStyle(el);
+        let host = null;
+        if (el.tagName === 'IFRAME') {
+          try { host = new URL(el.getAttribute('src') || '', location.href).hostname; } catch { /* 무시 */ }
+        }
+        items.push({
+          tag: el.tagName.toLowerCase(),
+          id: el.id || null,
+          host,
+          width: Math.round(rect.width),
+          height: Math.round(rect.height),
+        });
+
+        // 크기가 없거나(추적 픽셀 등) 문서 흐름 밖(fixed/absolute)이면 그냥 제거,
+        // 아니면 같은 크기의 빈 div로 바꿔 레이아웃을 유지
+        if (rect.width < 1 || rect.height < 1 || cs.display === 'none'
+            || cs.position === 'fixed' || cs.position === 'absolute') {
+          el.remove();
+        } else {
+          const spacer = document.createElement('div');
+          spacer.setAttribute('data-ad-excluded', 'true');
+          spacer.style.cssText = `width:${rect.width}px;height:${rect.height}px;`
+            + `display:${cs.display === 'inline' || cs.display === 'inline-block' ? 'inline-block' : 'block'};`;
+          el.replaceWith(spacer);
+        }
+      }
+      return items;
+    }, { hosts: AD_HOSTS, selectors: AD_SELECTORS });
+  } catch (e) {
+    // 광고 제외가 실패해도 파이프라인은 계속 진행 (best-effort)
+    console.log(`   [광고 제외 중 오류 — 무시하고 진행] ${e.message}`);
+    return [];
+  }
+}
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────
  *  dismissPopups(page)
  * ─────────────────────────────────────────────────────────────────────────
  *  [왜 추가했는가 — 2026-09-16 테스트 중 발견]
@@ -572,6 +681,9 @@ async function run(url, outputPath) {
     //   해야, 팝업이 본문을 가려서 생기는 "본문 짧음" 오탐도 줄어든다.
     await dismissPopups(page);
 
+    // ── 1.6) 외부(서드파티) 광고 제외 ── (HTML 저장·스크린샷·axe 전에 DOM에서 제거)
+    const excludedAds = await hideThirdPartyAds(page);
+
     // ── 2) 렌더링된 HTML 저장 (AI 모듈용) ──
     //   page.content()는 현재 DOM의 outerHTML을 반환 — JavaScript가 실행된
     //   "최종 상태"의 HTML. text_extractor.py가 이 파일을 읽어서 분석 대상
@@ -624,6 +736,14 @@ async function run(url, outputPath) {
       window.scrollTo(0, 0);
     }).catch(() => {});
     await page.waitForTimeout(500);
+
+    // 스크롤하면서 늦게 뜬 광고 슬롯이 있을 수 있어 한 번 더 제외 (스크린샷·axe 대비)
+    excludedAds.push(...(await hideThirdPartyAds(page)));
+    if (excludedAds.length > 0) {
+      const brief = excludedAds.slice(0, 5)
+        .map((x) => `${x.tag}${x.host ? '@' + x.host : ''}${x.id ? '#' + x.id : ''}(${x.width}x${x.height})`).join(', ');
+      console.log(`   외부 광고 ${excludedAds.length}개를 검사 대상에서 제외: ${brief}${excludedAds.length > 5 ? ' ...' : ''}`);
+    }
 
     const screenshotOutput = (outputPath || `result_${new Date().toISOString().slice(0, 10)}`).replace('.json', '.png');
     await page.screenshot({ path: screenshotOutput, fullPage: true, timeout: 60000 });
@@ -699,6 +819,11 @@ async function run(url, outputPath) {
     console.log('8. API 형태로 변환 중...');
     const apiData = toApiFormat(kwcagResult, scoreResult);
     apiData.metadata.scan_duration_ms = scanDuration;  // placeholder를 실측값으로 덮어쓰기
+    // 검사에서 제외한 외부 광고 기록 (투명성용 — 무엇을 뺐는지 결과에서 확인 가능)
+    apiData.metadata.excluded_third_party_ads = {
+      count: excludedAds.length,
+      items: excludedAds.slice(0, 20),
+    };
 
     // 봇 차단 의심 결과를 최상위 warnings 필드로 포함.
     // run_all.py가 이 필드를 읽어서 최종 result_final.json에도 경고를 전파함.
