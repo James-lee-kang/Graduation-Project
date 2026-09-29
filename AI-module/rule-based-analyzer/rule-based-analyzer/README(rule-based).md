@@ -32,9 +32,46 @@ node run.js https://www.mohw.go.kr result.json
 | 출력 파일 | 용도 |
 |---|---|
 | `result.json` | 규칙기반모듈 최종 결과(내부 형식) (디버깅용, camelCase) |
-| `result_api.json` | result.json을 백엔드 스펙 형식으로 변환한 결과 (run_all.py가 읽어서 통합에 사용) |
+| `result_api.json` | result.json을 백엔드 스펙 형식으로 변환한 결과 (run_all.py가 읽어서 통합에 사용). `warnings` 필드 포함 (아래 참고) |
 | `result.html` | 렌더링된 DOM (문장난이도 모듈 입력용) |
 | `result.png` | 풀페이지 스크린샷 (CV 모듈 입력용) |
+
+### 봇 차단/빈 페이지 감지 (`warnings` 필드)
+
+`page.goto()`가 타임아웃되거나 오류가 나도 run.js는 이를 조용히 넘기고
+그 시점의 페이지 상태를 그대로 저장한다(재현성·데모 안정성을 위한 설계).
+문제는 이 "그 시점의 페이지"가 실제 콘텐츠가 아니라 사이트의 봇 차단
+안내 페이지일 수 있다는 것 — 실제로 hongik.ac.kr에서 "Security
+Verification" 차단 페이지가 정상 페이지처럼 채점되어 96점(A+)이 나온
+사례가 있었다.
+
+이를 잡기 위해 `detectBotBlock()` 함수가 HTML 저장 직후 아래 3가지를 확인한다.
+
+| 신호 | 판단 기준 |
+|---|---|
+| 페이지 제목 | "Security Verification", "Access Denied", "Just a moment" 등 차단·캡차 관련 문구 포함 여부 |
+| HTML 시그니처 | botmanager, Cloudflare challenge(`__cf_chl`), reCAPTCHA, PerimeterX, DataDome 등 알려진 봇 차단 스크립트 포함 여부 |
+| 본문 텍스트 길이 | `document.body.innerText`가 300자 미만인지 |
+
+셋 중 하나라도 해당하면 `result_api.json`에 아래처럼 기록되고, 콘솔에도
+경고가 출력된다. **파이프라인을 중단시키지는 않는다** — 콘텐츠가 정말
+적은 정상 페이지를 오탐할 수 있으므로, 최종 판단은 사람이 내린다.
+
+```json
+"warnings": {
+  "bot_block_suspected": true,
+  "reasons": [
+    "페이지 제목에 차단 관련 문구 감지: \"Security Verification\"",
+    "알려진 봇 차단/캡차 스크립트 시그니처 감지: botmanager-challenge",
+    "렌더링된 본문 텍스트가 0자로 너무 짧음 (임계값 300자)"
+  ],
+  "page_title": "Security Verification",
+  "body_text_length": 0
+}
+```
+
+`run_all.py`는 이 필드를 읽어서 `result_final.json` 최상위의
+`data_quality_warnings` 배열에도 전파한다.
 
 > 실제 서비스에서는 `run_all.py`가 이 파일을 호출하여 결과를 `output/` 폴더에 저장한다.  
 > 단독 실행 시에는 `rule-based-analyzer/` 폴더 안에 결과 파일이 생성된다.
@@ -89,10 +126,11 @@ axe-core는 국제 표준인 WCAG 기준으로 결과를 출력하지만, 본 �
 | 단계 | 방법 | 예시 |
 |---|---|---|
 | 1단계 (직접 매핑) | axe-core 규칙 ID → KWCAG 번호 직접 조회 | `image-alt` → `5.1.1` |
-| 2단계 (fallback) | WCAG 태그 번호 추출 → KWCAG 번호 조회 | `wcag412` → WCAG `4.1.2` → `8.1.1`, `8.2.1` |
+| 2단계 (fallback) | WCAG 태그 번호 추출 → KWCAG 번호 조회 | `wcag244` → WCAG `2.4.4` → `6.4.3` |
 | 실패 (unmapped) | 두 단계 모두 실패 시 unmapped 목록에 보존 | 정보 유실 방지 |
 
 1단계가 더 정확하고, 2단계는 1단계 실패 시 안전망 역할을 한다.  
+한 WCAG 번호가 KWCAG 여러 항목에 걸리는 경우(WCAG 4.1.2 → 8.1.1, 8.2.1)에는 폴백에서 대표 항목 하나(8.2.1)만 쓴다. 예전에는 두 항목에서 동시에 감점되어, 서울시에서 `aria-hidden-focus` 39개 요소가 이중으로 깎였다. 이런 4.1.2 규칙 16개는 2026-09-28에 `mapping.js`의 `axeRules`에 하나씩 직접 배정했다.  
 매핑 실패 항목(unmapped)도 버리지 않고 별도 보존하여 WCAG 참조 정보를 유지한다.
 
 ---
@@ -157,15 +195,7 @@ adapter.js의 변환 결과를 받아 100점 감점제 점수를 계산한다.
 
 KWCAG에 매핑되지 않은 unmapped 위반은 minor × medium (건당 1점)으로 감점한다.
 
-**등급 기준:**
-
-| 점수 | 등급 | 의미 |
-|---|---|---|
-| 95점 이상 | A | 우수 |
-| 85점 이상 | B | 양호 |
-| 70점 이상 | C | 보통 |
-| 50점 이상 | D | 미흡 |
-| 50점 미만 | F | 심각 |
+**등급:** 이 모듈은 점수(0~100)만 낸다. 예전에 있던 모듈 등급(A~F 5단계)은 `run_all.py`의 최종 등급(A+~F 7단계)과 헷갈려서 2026-09-27에 없앴다. 등급은 `result_final.json`의 `grade` 하나만 쓴다.
 
 ---
 

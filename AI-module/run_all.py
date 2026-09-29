@@ -75,7 +75,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 # Google Vision API 서비스 계정 키 경로
 # .gitignore에 포함되어 있으므로 각 개발자가 로컬에 설정해야 함
-VISION_CREDENTIALS = PROJECT_ROOT / "cv-analyzer" / "uniaccess-495010-08a5c6701cd7.json"
+VISION_CREDENTIALS = CV_ANALYZER_DIR / "uniaccess-495010-08a5c6701cd7.json"
 
 # 백엔드 서버 주소 (Spring Boot 서버)
 API_BASE_URL = "http://localhost:8080/api/v1"
@@ -83,7 +83,7 @@ API_BASE_URL = "http://localhost:8080/api/v1"
 # 총점 가중치
 # 규칙 기반 50%: KWCAG 33개 항목 대부분을 커버하므로 가장 높은 비중
 # 난이도 30%: 기존 도구에 없는 독창적 기능이므로 의미 있는 비중
-# CV 20%: KWCAG 5.3.3 한 항목만 검사하므로 상대적으로 낮은 비중
+# CV 20%: KWCAG 5.4.3(텍스트 콘텐츠의 명도 대비) 한 항목만 검사하므로 상대적으로 낮은 비중
 WEIGHT_RULE_BASED = 0.50
 WEIGHT_DIFFICULTY = 0.30
 WEIGHT_CV = 0.20
@@ -161,6 +161,39 @@ def load_json(filepath: Path) -> Optional[Dict]:
 
     with open(filepath, 'r', encoding='utf-8') as f:
         return json.load(f)
+
+
+# ── 이전 실행 결과 정리 ─────────────────────────────────────────────────────
+# [실제로 발견된 문제]
+#   2026-06-22 hongik.ac.kr 실행에서, CV 모듈(Step 5)이 실패했음에도
+#   result_final.json에는 3일 전(6/19) 다른 사이트를 분석했을 때 남은
+#   result_cv.json이 그대로 섞여 들어간 사례가 있었다. 각 Step은 "출력
+#   파일이 존재하는가"만으로 다음 단계 진행 여부를 판단하기 때문에,
+#   이번 실행에서 파일을 새로 만들지 못해도 어제 파일이 남아있으면
+#   "성공한 것처럼" 읽혀버린다.
+STALE_OUTPUT_FILES = [
+    "result.json", "result_api.json", "result.html", "result.png",
+    "result_text.json", "result_text_difficulty.json",
+    "result_text_suggestions.json", "result_cv.json",
+]
+
+
+def clear_previous_outputs():
+    """
+    파이프라인 시작 전에 output/ 폴더의 이전 결과 파일을 전부 삭제한다.
+    이번 실행에서 어떤 Step이 파일을 만들지 못하면, 그 파일은 더 이상
+    존재하지 않으므로 다음 Step의 "파일 존재 확인" 로직이 정확히
+    실패로 판정한다 — 어제 실행한 결과가 오늘 결과에 섞이는 것을 막는다.
+    """
+    removed = []
+    for name in STALE_OUTPUT_FILES:
+        p = OUTPUT_DIR / name
+        if p.exists():
+            p.unlink()
+            removed.append(name)
+    if removed:
+        print(f"[사전 정리] 이전 실행 결과 파일 {len(removed)}개 삭제: {', '.join(removed)}")
+        print()
 
 
 # ── 총점 계산 ────────────────────────────────────────────────────────────────
@@ -277,7 +310,6 @@ def build_final_result(url, rule_result, difficulty_result,
         "url": url,
         "analyzed_at": datetime.now().isoformat(),
         "elapsed_seconds": elapsed,
-        "platform_version": "1.0.0",
 
         "total_score": total_score["total_score"],
         "grade": total_score["grade"],
@@ -404,6 +436,9 @@ def main():
 
     total_steps = 7
 
+    # 이전 실행에서 남은 결과 파일이 이번 실행 실패를 가려버리는 것을 방지
+    clear_previous_outputs()
+
     # ── Step 1: 규칙 기반 평가 ──
     # run.js를 실행하여 Playwright로 페이지를 열고 axe-core 검사를 수행함.
     # 결과: result.json(axe-core 결과), result.html(렌더링 HTML), result.png(스크린샷)
@@ -499,6 +534,36 @@ def main():
     suggestion_result = load_json(OUTPUT_DIR / "result_text_suggestions.json") if step4_ok else None
     cv_result = load_json(OUTPUT_DIR / "result_cv.json") if step5_ok else None
 
+    # ── 데이터 품질 경고 수집 ──
+    # [배경] 2026-06-22 hongik.ac.kr 실행에서 실제로 발생한 문제:
+    #   대상 사이트의 봇 차단(Security Verification 페이지)에 걸려 실제
+    #   콘텐츠를 전혀 받지 못했는데도, 규칙 기반 100점 + 난이도 100점으로
+    #   집계되어 총점 96점(A+)이라는 "가짜 만점"이 나온 적이 있다.
+    #   여기서 그런 상황을 감지해 result_final.json 최상위에 명시적으로
+    #   경고를 남긴다 — 총점 계산식 자체는 바꾸지 않는다(섣부른 점수 조작
+    #   보다, "이 점수를 믿지 말라"는 신호를 명확히 남기는 쪽이 더 안전함).
+    data_quality_warnings = []
+
+    if rule_result and rule_result.get("warnings", {}).get("bot_block_suspected"):
+        reasons = rule_result["warnings"].get("reasons", [])
+        msg = "규칙 기반 분석(run.js) 단계에서 봇 차단/빈 페이지가 의심됩니다: " + "; ".join(reasons)
+        data_quality_warnings.append(msg)
+
+    text_meta = load_json(OUTPUT_DIR / "result_text.json") if step2_ok else None
+    if text_meta is not None and text_meta.get("meta", {}).get("total_blocks", 0) == 0:
+        data_quality_warnings.append(
+            "텍스트 추출 결과 블록이 0개입니다. 본문이 실제로 없거나 추출이 실패했을 수 있습니다."
+        )
+
+    if data_quality_warnings:
+        print()
+        print("  " + "!" * 50)
+        print("  [데이터 품질 경고] 아래 점수는 신뢰할 수 없을 수 있습니다:")
+        for w in data_quality_warnings:
+            print(f"    - {w}")
+        print("  " + "!" * 50)
+        print()
+
     total_score = calculate_total_score(rule_result, difficulty_result, cv_result)
 
     elapsed = round(time.time() - start_time, 2)
@@ -513,6 +578,7 @@ def main():
         elapsed=elapsed,
         request_id=request_id,
     )
+    final_result["data_quality_warnings"] = data_quality_warnings
 
     # 최종 통합 결과를 JSON 파일로 저장함
     final_path = OUTPUT_DIR / "result_final.json"
@@ -538,6 +604,9 @@ def main():
 
     print(f"  ★ 총점: {total_score['total_score']}점 / 100점"
           f" (등급: {total_score['grade']})")
+    if data_quality_warnings:
+        print(f"    ⚠ 데이터 품질 경고 {len(data_quality_warnings)}건 — 위 점수를 그대로 신뢰하지 마세요.")
+        print(f"      자세한 내용은 result_final.json의 data_quality_warnings 필드 참고.")
     print()
 
     module_names = {

@@ -89,7 +89,7 @@ const API_BASE_URL = 'http://localhost:8080/api/v1';
  *      - meta: { url, timestamp, engine, engineVersion, adapterVersion }
  *
  *    scoreResult (from scorer.js):
- *      - score, maxScore, totalDeduction, grade
+ *      - score, maxScore, totalDeduction  (모듈 등급은 2026-09-27 제거)
  *      - severityBreakdown: { critical, major, minor } — 심각도별 감점 집계
  *      - items: KWCAG 항목별 점수 상세 (weight, weightMultiplier 포함)
  *
@@ -169,7 +169,6 @@ function toApiFormat(kwcagResult, scoreResult) {
     score: scoreResult.score,
     max_score: scoreResult.maxScore,
     total_deduction: scoreResult.totalDeduction,
-    grade: scoreResult.grade,
     severity_breakdown: {
       critical: {
         count: scoreResult.severityBreakdown.critical.count,
@@ -254,6 +253,201 @@ function toApiFormat(kwcagResult, scoreResult) {
  *       구성한다.
  * ─────────────────────────────────────────────────────────────────────────
  */
+/**
+ * ─────────────────────────────────────────────────────────────────────────
+ *  detectBotBlock(page, renderedHtml)
+ * ─────────────────────────────────────────────────────────────────────────
+ *  [왜 추가했는가 — 실제로 발견된 문제]
+ *    2026-06-22 hongik.ac.kr 실행 결과를 점검하다가, 저장된 result.html이
+ *    실제 대학 홈페이지가 아니라 "Security Verification"이라는 봇 차단
+ *    안내 페이지(botmanager-challenge.js 로드)였다는 사실을 발견함.
+ *    page.goto()는 타임아웃/오류를 try/catch로 조용히 삼키고 있고(아래 run()
+ *    참조), 그 뒤로는 "페이지를 성공적으로 받았다"고 가정하고 그대로
+ *    axe-core를 돌려버림. 그 결과 빈 페이지가 위반 0건 통과 7건으로
+ *    처리되어 rule_based 점수가 100점이 나왔고, text_extractor.py도
+ *    블록 0개를 "완벽한 페이지"처럼 조용히 통과시켜서 난이도 점수도
+ *    100점이 나왔음. 즉 "분석 실패"가 "만점"으로 둔갑하는 심각한 버그.
+ *
+ *  [탐지 방법 — 4가지 신호. 텍스트 길이만 단독으로는 더 이상 의심 판정하지 않음]
+ *    1) 페이지 제목에 차단/캡차 관련 문구가 있는가
+ *    2) 렌더링된 HTML에 알려진 봇 차단 스크립트 시그니처가 있는가
+ *       (botmanager, cloudflare challenge, recaptcha, perimeterx, datadome 등)
+ *    3) 최종 URL에 알려진 봇 차단/리다이렉트 서비스 시그니처가 있는가
+ *       (예: 정부24 → plus.gov.kr/mbuster 리다이렉트 — 2026-09-16 추가)
+ *    4) 렌더링된 본문 텍스트가 지나치게 짧고 (300자 미만) *동시에* 인터랙티브
+ *       요소(a/button/input/img 등)도 적은가 (8개 미만)
+ *
+ *  [2026-09-16 개선 — 오탐 사례]
+ *    기존에는 "본문 300자 미만"이면 그것만으로 OR 조건에 걸려 의심 판정이었음.
+ *    그런데 jeongseon.go.kr처럼 버튼/이미지 위주라 실제 글자 수는 적지만 정상인
+ *    페이지도 같은 방식으로 걸려버려 오탐(false positive)이 발생함
+ *    (site_test_tracker.csv 9/14 기록). 텍스트가 짧아도 인터랙티브 요소가
+ *    충분히 있으면 "콘텐츠가 원래 그런 페이지"로 보고 의심에서 제외하도록
+ *    이중 조건(thinAndSparse)으로 변경. 대신 진짜 빈 페이지/차단 페이지를
+ *    놓치지 않도록 URL 시그니처(3번)를 새로 추가해 텍스트 길이에 의존하지
+ *    않는 탐지 경로를 하나 더 확보함.
+ *
+ *  [주의: 이 함수는 "확정 판정"이 아니라 "의심 신호"임]
+ *    실제로 콘텐츠가 거의 없는 정상 페이지(예: 단순 안내 페이지)도 있을 수
+ *    있으므로, 이 함수는 파이프라인을 중단시키지 않고 결과 JSON에 경고만
+ *    남긴다. 최종 판단은 사람이 result_api.json의 warnings를 보고 내린다.
+ * ─────────────────────────────────────────────────────────────────────────
+ */
+const BOT_TITLE_KEYWORDS = [
+  'security verification', 'access denied', 'attention required',
+  'just a moment', 'checking your browser', 'are you a robot',
+  'unusual traffic', 'bot detection', '잠시만 기다려', '보안 확인',
+  '접근이 거부', '비정상적인 접근',
+];
+const BOT_HTML_SIGNATURES = [
+  'botmanager-challenge', '__cf_chl', 'cf-chl', 'g-recaptcha',
+  'perimeterx', 'datadome', 'px-captcha', 'hcaptcha', '/deny/index.html',
+];
+// 2026-09-16 추가: URL 자체에 남는 봇 차단/리다이렉트 서비스 시그니처.
+//   HTML 시그니처와 달리 렌더링된 페이지가 거의 비어 있어도(스크립트 자체가
+//   안 잡혀도) 최종 URL만 보면 판별 가능한 경우를 커버.
+const BOT_URL_SIGNATURES = [
+  'mbuster', '/deny/', 'bot-check', 'bot_check', 'captcha',
+];
+const MIN_EXPECTED_BODY_TEXT_LENGTH = 300; // 실제 공공 웹페이지치고 이보다 짧으면 의심
+// 2026-09-16 추가: 본문 텍스트가 짧아도 이 개수 이상의 인터랙티브 요소가 있으면
+//   "버튼/이미지 위주라 글자가 적은 정상 페이지"로 보고 의심에서 제외.
+const MIN_INTERACTIVE_ELEMENTS = 8;
+
+async function detectBotBlock(page, renderedHtml) {
+  const title = await page.title().catch(() => '');
+  const currentUrl = page.url();
+  const bodyText = await page
+    .evaluate(() => (document.body ? document.body.innerText : ''))
+    .catch(() => '');
+  // 2026-09-16 추가: 인터랙티브 요소 수 — 텍스트가 짧아도 이게 많으면
+  // "버튼 위주라 글자가 적은 정상 페이지"로 구분하기 위한 보조 신호.
+  const interactiveCount = await page
+    .evaluate(() => document.querySelectorAll('a, button, input, select, textarea, img').length)
+    .catch(() => 0);
+
+  const titleLower = title.toLowerCase();
+  const htmlLower = renderedHtml.toLowerCase();
+  const urlLower = currentUrl.toLowerCase();
+  const bodyTextLength = bodyText.trim().length;
+
+  const titleHit = BOT_TITLE_KEYWORDS.find((k) => titleLower.includes(k));
+  const sigHit = BOT_HTML_SIGNATURES.find((k) => htmlLower.includes(k));
+  const urlHit = BOT_URL_SIGNATURES.find((k) => urlLower.includes(k));
+  const tooThin = bodyTextLength < MIN_EXPECTED_BODY_TEXT_LENGTH;
+  const alsoSparse = interactiveCount < MIN_INTERACTIVE_ELEMENTS;
+  // 본문이 짧다는 것만으로는 판정하지 않고, 인터랙티브 요소까지 적어야
+  // ("진짜로 텅 빈 페이지") 의심 신호로 반영 — jeongseon.go.kr 오탐 방지.
+  const thinAndSparse = tooThin && alsoSparse;
+
+  const reasons = [];
+  if (titleHit) reasons.push(`페이지 제목에 차단 관련 문구 감지: "${title}"`);
+  if (sigHit) reasons.push(`알려진 봇 차단/캡차 스크립트 시그니처 감지: ${sigHit}`);
+  if (urlHit) reasons.push(`최종 URL에 봇 차단/리다이렉트 서비스 시그니처 감지: "${urlHit}" (URL: ${currentUrl})`);
+  if (thinAndSparse) {
+    reasons.push(`렌더링된 본문 텍스트가 ${bodyTextLength}자로 짧고 인터랙티브 요소도 ${interactiveCount}개뿐 (임계값 텍스트 ${MIN_EXPECTED_BODY_TEXT_LENGTH}자/요소 ${MIN_INTERACTIVE_ELEMENTS}개) — 빈 페이지로 의심됨`);
+  } else if (tooThin) {
+    // 오탐 방지: 텍스트는 짧지만 인터랙티브 요소가 충분해 정상 UI로 판단.
+    // 의심 판정에는 반영하지 않되, 참고용으로만 기록해 사람이 확인할 수 있게 함.
+    reasons.push(`(참고) 본문 텍스트는 ${bodyTextLength}자로 짧지만 인터랙티브 요소가 ${interactiveCount}개 있어 정상 UI(버튼/이미지 위주 페이지)로 판단 — 차단 의심에서 제외`);
+  }
+
+  return {
+    suspected: Boolean(titleHit || sigHit || urlHit || thinAndSparse),
+    reasons,
+    page_title: title,
+    body_text_length: bodyTextLength,
+    interactive_element_count: interactiveCount,
+  };
+}
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────
+ *  dismissPopups(page)
+ * ─────────────────────────────────────────────────────────────────────────
+ *  [왜 추가했는가 — 2026-09-16 테스트 중 발견]
+ *    공공기관 사이트에 흔한 "레이어 팝업"(공지/이벤트 안내용 fixed/absolute
+ *    오버레이 div)이 뜬 채로 스크린샷·렌더링 HTML을 그대로 캡처해버리는
+ *    문제. 팝업이 화면을 가리면 CV 명암비 분석이 팝업 자체를 분석 대상으로
+ *    삼아버리고, 텍스트 추출도 실제 본문 대신 팝업 문구를 가져가서
+ *    data_quality_warning 오탐(본문 짧음 판정)의 숨은 원인이 되기도 함.
+ *
+ *  [전략 — 사이트마다 팝업 마크업이 전부 달라서 완벽한 해결은 불가능.
+ *   범용 휴리스틱으로 최선의 노력만 함]
+ *    1) 뷰포트의 20% 이상을 덮는 fixed/absolute, 고z-index(≥100) 요소를
+ *       "팝업 후보"로 탐지
+ *    2) 후보 내부에서 "닫기"류 텍스트/aria-label/class를 가진 자식을 찾아
+ *       클릭 시도 (실제 팝업의 닫기 로직을 타는 게 가장 안전 — "오늘 하루
+ *       보지 않기" 같은 세션/쿠키 처리까지 정상적으로 실행됨)
+ *    3) 닫기 버튼을 못 찾으면 후보 자체를 display:none으로 강제 숨김
+ *       (최후 수단 — 팝업 내부 로직은 안 타지만 화면에서는 사라짐)
+ *    4) Escape 키 입력도 한 번 시도 (키보드로만 닫히는 모달 대응)
+ *
+ *  [주의] 오탐 가능성이 있음(예: 실제로 화면 대부분을 차지하는 게 정상인
+ *  레이아웃). 하지만 실패 시 최악의 경우에도 "원래 있던 팝업이 그대로
+ *  남아있는" 기존 상태와 같으므로 파이프라인에 해가 되지 않음(best-effort).
+ * ─────────────────────────────────────────────────────────────────────────
+ */
+async function dismissPopups(page) {
+  let closedCount = 0;
+  try {
+    closedCount = await page.evaluate(() => {
+      const CLOSE_PATTERN = /(닫기|close|오늘\s*하루|다시\s*보지|안\s*보기|그만\s*보기|×|✕)/i;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const viewportArea = vw * vh;
+      let closed = 0;
+
+      const all = Array.from(document.querySelectorAll('body *'));
+      for (const el of all) {
+        const style = window.getComputedStyle(el);
+        if (style.position !== 'fixed' && style.position !== 'absolute') continue;
+        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') continue;
+
+        const zIndex = parseInt(style.zIndex, 10);
+        if (!zIndex || zIndex < 100) continue; // 낮은 z-index는 헤더 등 팝업이 아닐 가능성이 높음
+
+        const rect = el.getBoundingClientRect();
+        const area = Math.max(0, rect.width) * Math.max(0, rect.height);
+        if (area < viewportArea * 0.2) continue; // 화면의 20% 미만이면 작은 배너/툴팁으로 보고 건너뜀
+        if (rect.bottom < 0 || rect.top > vh) continue; // 현재 화면 밖에 있으면 건너뜀
+
+        // 팝업 후보 발견 — 내부에 "닫기"류 버튼이 있으면 클릭 시도(사이트 자체
+        // 닫기 로직을 최대한 타게 하기 위함 — 있으면 클릭, 없어도 무방)
+        const candidates = el.querySelectorAll('a, button, span, div, img, i');
+        for (const c of candidates) {
+          const label = `${c.textContent || ''} ${c.getAttribute('aria-label') || ''} ${c.className || ''} ${c.id || ''}`;
+          if (CLOSE_PATTERN.test(label)) {
+            c.click();
+            break;
+          }
+        }
+        // 닫기 버튼을 찾아 클릭은 해서 사이트 자체 로직(세션/쿠키 등)을
+        // 최대한 타게 하되, 애니메이션 지연이나 핸들러 미동작으로 여전히
+        // 화면에 남아있을 수 있으므로 클릭 여부와 무관하게 항상 강제로도
+        // 숨긴다 — 스크린샷/HTML 캡처 시점엔 반드시 사라져 있어야 하므로.
+        el.style.setProperty('display', 'none', 'important');
+        closed += 1;
+      }
+      return closed;
+    });
+  } catch (e) {
+    // 탐지 자체가 실패해도 파이프라인은 계속 진행 (best-effort이므로)
+    console.log(`   [팝업 탐지 중 오류 — 무시하고 진행] ${e.message}`);
+  }
+
+  // 키보드 Escape도 한 번 시도 (일부 모달은 이 방식으로만 닫힘)
+  await page.keyboard.press('Escape').catch(() => {});
+
+  if (closedCount > 0) {
+    console.log(`   팝업/오버레이 ${closedCount}개 닫음(또는 강제 숨김)`);
+    // 클릭으로 인한 애니메이션/리렌더링이 끝날 시간을 잠깐 줌
+    await page.waitForTimeout(500);
+  }
+
+  return closedCount;
+}
+
 async function sendToBackend(requestId, apiData) {
   const url = `${API_BASE_URL}/evaluations/${requestId}/analysis/rule-based`;
 
@@ -337,6 +531,29 @@ async function run(url, outputPath) {
   });
   const page = await context.newPage();
 
+  // ── 새 탭/창(window.open)으로 뜨는 팝업 자동 닫기 ──
+  //   2026-09-16 추가: 구형 공공기관 사이트에 흔한 "오늘 하루 그만 보기"류
+  //   이벤트/공지 팝업이 별도 브라우저 탭·창으로 열리는 경우 대응.
+  //   메인 page가 아닌 새 Page가 열리면 즉시 닫아서 분석 대상에서 배제한다.
+  //   (같은 페이지 안의 레이어 팝업은 dismissPopups()에서 별도 처리)
+  //
+  //   [2026-09-20 수정] 이 리스너는 캡처(HTML·스크린샷) 단계까지만 살아 있어야 한다.
+  //   @axe-core/playwright의 analyze()가 결과 취합용으로 같은 context에 about:blank
+  //   페이지를 내부적으로 새로 여는데, 리스너가 그걸 팝업으로 오인해 닫아버려
+  //   "Target page, context or browser has been closed" 오류가 났음.
+  //   → 핸들러를 변수로 빼서, axe 실행 직전에 context.off()로 해제한다.
+  const popupHandler = async (newPage) => {
+    if (newPage === page) return;
+    try {
+      await newPage.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
+      console.log(`   [팝업창 감지] 새 탭/창이 열려서 자동으로 닫음: ${newPage.url()}`);
+      await newPage.close();
+    } catch {
+      // 이미 닫혔거나 접근 불가 — 무시하고 진행
+    }
+  };
+  context.on('page', popupHandler);
+
   try {
     console.log('2. 페이지 로딩 중...');
     // waitUntil: 'networkidle' — 네트워크 요청이 500ms 이상 없을 때까지 대기
@@ -348,6 +565,12 @@ async function run(url, outputPath) {
     await page.waitForTimeout(5000);
     
     await page.waitForFunction(() => document.readyState === 'complete', { timeout: 10000 }).catch(() => {});
+
+    // ── 1.5) 같은 페이지 안의 레이어 팝업 닫기/숨기기 ──
+    //   2026-09-16 추가: HTML/스크린샷을 캡처하기 *전에* 실행해야 의미가
+    //   있음(캡처 후에 닫아봐야 이미 늦음). detectBotBlock()보다도 먼저
+    //   해야, 팝업이 본문을 가려서 생기는 "본문 짧음" 오탐도 줄어든다.
+    await dismissPopups(page);
 
     // ── 2) 렌더링된 HTML 저장 (AI 모듈용) ──
     //   page.content()는 현재 DOM의 outerHTML을 반환 — JavaScript가 실행된
@@ -361,10 +584,51 @@ async function run(url, outputPath) {
     fs.writeFileSync(htmlOutput, renderedHtml, 'utf-8');
     console.log(`3. 렌더링된 HTML 저장: ${htmlOutput}`);
 
+    // ── 2.5) 봇 차단/빈 페이지 의심 여부 확인 ──
+    //   page.goto()의 오류가 위에서 조용히 삼켜지므로, 여기서 별도로
+    //   "우리가 실제로 받은 페이지가 진짜 콘텐츠인지"를 점검한다.
+    const botCheck = await detectBotBlock(page, renderedHtml);
+    if (botCheck.suspected) {
+      console.log('   [경고] 봇 차단/빈 페이지 의심됨:');
+      for (const reason of botCheck.reasons) {
+        console.log(`     - ${reason}`);
+      }
+      console.log('     → result_api.json의 warnings 필드에 기록됩니다. 점수를 그대로 신뢰하지 마세요.');
+    } else if (botCheck.reasons.length > 0) {
+      // 2026-09-16 추가: 의심 판정은 아니지만 참고할 만한 신호(예: 텍스트는
+      // 짧지만 정상 UI로 판단됨)가 있으면 정보성으로만 출력.
+      console.log('   [참고] 본문이 짧지만 정상 페이지로 판단됨:');
+      for (const reason of botCheck.reasons) {
+        console.log(`     - ${reason}`);
+      }
+    }
+
     // ── 3) 스크린샷 저장 (Python CV 모듈용) ──
+    //   [2026-09-27 수정] fullPage: false → true.
+    //   기존에는 뷰포트(1280x720) 첫 화면만 찍혀서, 스크롤해야 보이는 하단 배너·
+    //   안내문의 명암비는 CV 모듈 검사 대상에서 빠져 있었음(README의 "풀페이지
+    //   스크린샷" 설명과도 불일치). 이제 페이지 전체를 한 장으로 찍는다.
+    //
+    //   찍기 전에 페이지를 끝까지 한 번 스크롤했다가 맨 위로 돌아온다.
+    //   지연 로딩(lazy-load) 이미지는 화면에 들어와야 불러오는 경우가 많아서,
+    //   스크롤 없이 fullPage로 찍으면 하단 이미지가 빈 칸으로 찍힐 수 있기 때문.
+    //   무한 스크롤 페이지에서 끝없이 내려가지 않도록 최대 30회(약 21,600px)로 제한.
+    await page.evaluate(async () => {
+      const step = window.innerHeight;
+      for (let i = 0; i < 30; i++) {
+        const before = window.scrollY;
+        window.scrollBy(0, step);
+        await new Promise((r) => setTimeout(r, 150));
+        if (window.scrollY === before) break;   // 더 내려갈 곳이 없으면 종료
+      }
+      window.scrollTo(0, 0);
+    }).catch(() => {});
+    await page.waitForTimeout(500);
+
     const screenshotOutput = (outputPath || `result_${new Date().toISOString().slice(0, 10)}`).replace('.json', '.png');
-    await page.screenshot({ path: screenshotOutput, fullPage: false, timeout: 60000 });
-    console.log(`4. 스크린샷 저장: ${screenshotOutput}`);
+    await page.screenshot({ path: screenshotOutput, fullPage: true, timeout: 60000 });
+    const pageHeight = await page.evaluate(() => document.documentElement.scrollHeight).catch(() => null);
+    console.log(`4. 스크린샷 저장(전체 페이지${pageHeight ? `, 높이 ${pageHeight}px` : ''}): ${screenshotOutput}`);
 
     // ── 4) axe-core 실행 ──
     //   withTags로 검사 범위를 명시적으로 제한
@@ -373,10 +637,46 @@ async function run(url, outputPath) {
     //     wcag22aa          : WCAG 2.2 AA (국제 최신 기준 — 추가 참고용)
     //   → KWCAG 2.2와 매핑되는 핵심 규칙을 모두 커버하되, AAA(최상위) 등급은
     //      공공 서비스의 현실적 준수 수준을 고려해 제외함.
+    //
+    //   [규칙기반 1차 개선 — 2026-09-16]
+    //   3단계 WAVE/Lighthouse 교차검증(`규칙기반_WAVE_Lighthouse_교차검증.md`)에서
+    //   5개 사이트 중 3곳에서 Lighthouse만 잡아낸 위반이 있었고, `landmark-one-main`
+    //   (3건)·`meta-viewport`(1건)였음.
+    //
+    //   실제 원인 확인 결과(로컬 axe-core 4.13 기준, axe.getRules()로 태그 직접 조회):
+    //     - landmark-one-main: tags = ['cat.semantics', 'best-practice'] — WCAG 등급
+    //       태그가 전혀 없어서 위 withTags() 필터에 실제로 걸러지고 있었음. ← 진짜 원인.
+    //     - meta-viewport: tags에 'wcag2aa'·'wcag144'가 포함돼 있어 원래도 withTags()
+    //       범위 안에 있었음. 즉 스코프/설정 문제가 아니었고, 왜 그 1개 사이트에서만
+    //       놓쳤는지는 별도 원인(렌더링 시점, axe-core 버전 차이 등)을 확인해야 함 —
+    //       이번 1차 개선의 스코프 밖으로 두고 아래는 방어적으로만 명시.
+    //   → 이번에는 확인된 원인인 landmark-one-main만 실질적으로 고치는 것이 목표.
+    //     best-practice 태그를 통째로 켜면 재검증 범위가 커지므로(문서의 권고),
+    //     이 규칙만 옵션으로 개별 강제 활성화한다.
+    //
+    //   [주의 — AxeBuilder#options()는 병합이 아니라 교체]
+    //   @axe-core/playwright의 options()는 `this.option = options`로 기존 설정을
+    //   통째로 덮어쓴다. withTags(tags).options({rules: {...}}) 순서로 체이닝하면
+    //   withTags()가 세팅한 runOnly가 options() 호출 시 통째로 사라져서, 태그 제한
+    //   자체가 풀리고 best-practice 규칙들이 대거 새로 실행돼버리는 걸 실제로
+    //   재현해서 확인함(예: region, page-has-heading-one까지 같이 켜짐).
+    //   그래서 runOnly와 rules를 하나의 options() 호출에 함께 넣어야 한다.
+    // 캡처가 끝났으므로 새 탭 팝업 리스너 해제 — axe가 내부적으로 여는
+    // about:blank 페이지를 닫아버리지 않도록 반드시 analyze() 전에 해제할 것.
+    context.off('page', popupHandler);
+
     console.log('5. axe-core 접근성 검사 실행 중...');
     const scanStart = Date.now();
     const axeResults = await new AxeBuilder({ page })
-      .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
+      .options({
+        runOnly: {
+          type: 'tag',
+          values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'],
+        },
+        rules: {
+          'landmark-one-main': { enabled: true },
+        },
+      })
       .analyze();
     const scanDuration = Date.now() - scanStart;  // 성능 측정용 (API metadata에 기록)
 
@@ -399,6 +699,15 @@ async function run(url, outputPath) {
     console.log('8. API 형태로 변환 중...');
     const apiData = toApiFormat(kwcagResult, scoreResult);
     apiData.metadata.scan_duration_ms = scanDuration;  // placeholder를 실측값으로 덮어쓰기
+
+    // 봇 차단 의심 결과를 최상위 warnings 필드로 포함.
+    // run_all.py가 이 필드를 읽어서 최종 result_final.json에도 경고를 전파함.
+    apiData.warnings = {
+      bot_block_suspected: botCheck.suspected,
+      reasons: botCheck.reasons,
+      page_title: botCheck.page_title,
+      body_text_length: botCheck.body_text_length,
+    };
 
     // ── 8) 로컬 JSON 저장 ──
     //   두 종류를 모두 저장:
@@ -426,13 +735,19 @@ async function run(url, outputPath) {
     console.log('─'.repeat(50));
     console.log('검사 결과 요약');
     console.log('─'.repeat(50));
+    if (botCheck.suspected) {
+      console.log('  ⚠ 경고: 이 결과는 봇 차단/빈 페이지일 가능성이 있습니다.');
+      console.log(`     사유: ${botCheck.reasons.join(' / ')}`);
+      console.log('     아래 점수는 실제 사이트 콘텐츠를 반영하지 않을 수 있습니다.');
+      console.log('');
+    }
     console.log(`  URL: ${kwcagResult.meta.url}`);
     console.log(`  엔진: ${kwcagResult.meta.engine} v${kwcagResult.meta.engineVersion}`);
     console.log(`  스캔 소요: ${scanDuration}ms`);
     console.log('');
 
-    // 점수 & 등급 출력
-    console.log(`   접근성 점수: ${scoreResult.score} / ${scoreResult.maxScore}점 (등급: ${scoreResult.grade})`);
+    // 점수 출력 (등급은 run_all.py의 최종 등급으로 통일 — 2026-09-27)
+    console.log(`   접근성 점수: ${scoreResult.score} / ${scoreResult.maxScore}점`);
     console.log(`    총 감점: -${scoreResult.totalDeduction}점`);
     console.log('');
 

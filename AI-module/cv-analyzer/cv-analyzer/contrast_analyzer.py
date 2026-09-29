@@ -13,7 +13,7 @@ ai-analysis/cv/contrast_analyzer.py
   - AA 큰 텍스트(18pt 이상):     3.0:1 이상
   - AAA 일반 텍스트:             7.0:1 이상
   - AAA 큰 텍스트:               4.5:1 이상
-  KWCAG 5.3.3(콘텐츠의 명도 대비)은 WCAG AA 수준을 요구하므로,
+  KWCAG 5.4.3(텍스트 콘텐츠의 명도 대비)은 WCAG AA 수준을 요구하므로,
   이 모듈의 기본 판정 기준은 AA(4.5:1 / 3.0:1)
 
 [사용법]
@@ -138,7 +138,7 @@ def check_wcag_compliance(ratio: float) -> Dict[str, bool]:
     AAA 일반 텍스트:             7.0:1 이상 → 가장 엄격한 기준
     AAA 큰 텍스트:               4.5:1 이상
     
-    KWCAG 5.3.3은 AA 수준을 요구하므로,
+    KWCAG 5.4.3은 AA 수준을 요구하므로,
     이 프로젝트에서는 aa_normal_text(4.5:1)를 주요 판정 기준으로 사용
     """
     return {
@@ -154,7 +154,8 @@ def check_wcag_compliance(ratio: float) -> Dict[str, bool]:
 
 def extract_dominant_color(image: Image.Image, 
                            bbox: Tuple[int, int, int, int],
-                           sample_type: str = "foreground") -> Tuple[int, int, int]:
+                           sample_type: str = "foreground",
+                           reference_bg: Optional[Tuple[int, int, int]] = None) -> Tuple[int, int, int]:
     """
     스크린샷 이미지의 특정 영역에서 대표 색상을 추출
     
@@ -164,9 +165,17 @@ def extract_dominant_color(image: Image.Image,
     예: 흰 배경에 검은 글씨 → 평균은 회색 → 실제 명암비와 전혀 다른 결과
     그래서 전경색과 배경색을 분리 추출하는 전략을 사용
     
-    [전경색(글자색) 추출 전략]
-    바운딩박스 내부 픽셀에서 가장 어두운 색상 클러스터를 추출
-    텍스트는 보통 배경보다 어두우므로, 어두운 쪽이 글자색일 가능성이 높음.
+    [전경색(글자색) 추출 전략 — 2026-09-27 수정]
+    바운딩박스 내부 색을 밝기순으로 줄 세운 뒤, 어두운 쪽 1/3의 최빈색과
+    밝은 쪽 1/3의 최빈색을 둘 다 후보로 뽑는다. 그중 배경색(reference_bg)과
+    명암비가 더 큰 쪽을 글자색으로 고른다.
+      - 밝은 배경 + 어두운 글자: 어두운 후보가 배경과 더 달라서 선택됨 (기존과 동일)
+      - 어두운 배경 + 흰 글자(다크 테마 배너 등): 어두운 후보는 배경 자체라
+        명암비가 1에 가깝고, 밝은 후보가 선택됨
+    예전에는 "글자는 항상 배경보다 어둡다"고 가정해서 어두운 쪽만 봤기 때문에,
+    어두운 배경 위의 흰 글자는 배경을 글자로 착각해 명암비가 1:1 근처로 잘못
+    나와 위반으로 오판되는 문제가 있었다.
+    reference_bg를 안 넘기면 예전 방식(어두운 쪽)으로 동작한다(하위 호환).
     
     [배경색 추출 전략]
     바운딩박스를 상하좌우 20% 확장한 영역에서 가장 빈번한(최빈) 색상을 추출
@@ -182,6 +191,8 @@ def extract_dominant_color(image: Image.Image,
     - image: PIL Image 객체 (스크린샷 전체 이미지)
     - bbox: (x, y, width, height) — vision_ocr.py가 찾은 텍스트의 바운딩박스
     - sample_type: "foreground"(글자색) 또는 "background"(배경색)
+    - reference_bg: 전경색을 고를 때 비교할 배경색. analyze_screenshot()이
+      배경색을 먼저 뽑아서 넘겨준다.
     """
     x, y, w, h = bbox
     img_w, img_h = image.size
@@ -234,13 +245,23 @@ def extract_dominant_color(image: Image.Image,
             # 배경: 가장 많이 나타나는 색상 = 배경색
             dominant = color_counts.most_common(1)[0][0]
         else:
-            # 전경(글자색): 어두운 색상들 중에서 가장 빈번한 것을 선택
-            # 밝기순으로 정렬한 뒤, 하위 30%(어두운 쪽)에서 최빈 색상을 추출
+            # 전경(글자색): 밝기순으로 정렬한 뒤 어두운 쪽 1/3, 밝은 쪽 1/3에서
+            # 각각 최빈 색상을 뽑아 후보로 둔다.
             sorted_colors = sorted(color_counts.items(), 
-                                   key=lambda x: sum(x[0]))  # R+G+B 합 = 밝기 근사
-            dark_cutoff = max(1, len(sorted_colors) // 3)
-            dark_colors = sorted_colors[:dark_cutoff]
-            dominant = max(dark_colors, key=lambda x: x[1])[0]
+                                   key=lambda x: relative_luminance(x[0]))
+            cutoff = max(1, len(sorted_colors) // 3)
+            dark_candidate = max(sorted_colors[:cutoff], key=lambda x: x[1])[0]
+            light_candidate = max(sorted_colors[-cutoff:], key=lambda x: x[1])[0]
+
+            if reference_bg is None:
+                # 배경 정보가 없으면 예전 방식(어두운 쪽 = 글자)으로 처리
+                dominant = dark_candidate
+            else:
+                # 배경과 더 크게 대비되는 후보가 글자색.
+                # 어두운 배경 위 흰 글자도 올바르게 잡힌다.
+                dark_contrast = contrast_ratio(dark_candidate, reference_bg)
+                light_contrast = contrast_ratio(light_candidate, reference_bg)
+                dominant = dark_candidate if dark_contrast >= light_contrast else light_candidate
         
         return dominant
         
@@ -260,7 +281,7 @@ class ContrastAnalyzer:
     1. vision_ocr.py로부터 텍스트 내용 + 바운딩박스(위치) 목록을 받음
     2. 각 바운딩박스 위치에서 전경색(글자색)과 배경색을 픽셀 분석으로 추출
     3. WCAG 명암비 공식으로 두 색상의 대비율을 계산
-    4. KWCAG 5.3.3 기준(AA: 4.5:1 / 큰 텍스트: 3.0:1)으로 통과/위반을 판정
+    4. KWCAG 5.4.3 기준(AA: 4.5:1 / 큰 텍스트: 3.0:1)으로 통과/위반을 판정
     5. 위반 항목에 대해서는 기준을 충족하는 대체 색상을 추천
     
     [이 모듈에서 AI가 사용되는 부분]
@@ -269,7 +290,7 @@ class ContrastAnalyzer:
     텍스트 위치 인식에만 사용됨.
     """
     
-    # KWCAG 5.3.3 (콘텐츠의 명도 대비) 기준값
+    # KWCAG 5.4.3 (텍스트 콘텐츠의 명도 대비) 기준값
     # KWCAG는 WCAG AA 수준을 요구함
     KWCAG_NORMAL_THRESHOLD = 4.5   # 일반 텍스트: 4.5:1 이상
     KWCAG_LARGE_THRESHOLD = 3.0    # 큰 텍스트(18pt 이상): 3.0:1 이상
@@ -297,7 +318,7 @@ class ContrastAnalyzer:
             "aa_large_text": true,         ← AA 큰 텍스트 통과 여부
             "aaa_normal_text": true,       ← AAA 일반 텍스트 통과 여부
             "aaa_large_text": true,        ← AAA 큰 텍스트 통과 여부
-            "kwcag_pass": true             ← KWCAG 5.3.3 기준 통과 여부
+            "kwcag_pass": true             ← KWCAG 5.4.3 기준 통과 여부
           }
         """
         ratio = contrast_ratio(fg, bg)
@@ -384,8 +405,10 @@ class ContrastAnalyzer:
                 continue
             
             # 해당 바운딩박스 위치에서 전경색/배경색을 픽셀 분석으로 추출함
-            fg_color = extract_dominant_color(image, bbox, "foreground")
+            # (2026-09-27: 배경색을 먼저 뽑고, 그 배경과 더 대비되는 쪽을 글자색으로
+            #  고르도록 순서를 바꿈 — 어두운 배경 위 흰 글자 대응)
             bg_color = extract_dominant_color(image, bbox, "background")
+            fg_color = extract_dominant_color(image, bbox, "foreground", reference_bg=bg_color)
             
             # 추출된 두 색상의 명암비를 WCAG 공식으로 계산함
             result = self.calculate_ratio(fg_color, bg_color)
@@ -453,8 +476,12 @@ class ContrastAnalyzer:
         색상 변화가 더 적은 쪽이 실용적
         
         [추천 전략]
-        - 방안 1: 전경색(글자)을 단계적으로 더 어둡게 조정
-        - 방안 2: 배경색을 단계적으로 더 밝게 조정
+        - 방안 1: 전경색(글자)을 배경에서 더 멀어지는 쪽으로 조정
+        - 방안 2: 배경색을 글자에서 더 멀어지는 쪽으로 조정
+        밝은 배경 + 어두운 글자면 "글자를 더 어둡게 / 배경을 더 밝게",
+        어두운 배경 + 밝은 글자(다크 테마)면 "글자를 더 밝게 / 배경을 더 어둡게"로
+        방향이 자동으로 바뀐다(2026-09-27 수정. 예전에는 항상 앞의 방향이라,
+        다크 테마에서는 글자를 어둡게 해서 오히려 대비가 더 나빠지는 제안이 나왔음).
         
         매개변수:
           fg, bg: 현재 전경/배경 RGB 색상
@@ -486,25 +513,34 @@ class ContrastAnalyzer:
                 "message": "이미 기준을 충족합니다."
             }
         
-        # 방안 1: 전경색을 단계적으로 어둡게 해서 목표 도달
-        adjusted_fg = self._darken_to_target(fg, bg, target_ratio)
+        # 글자가 배경보다 밝은지(다크 테마) 판단해서 조정 방향을 정함
+        text_is_lighter = relative_luminance(fg) > relative_luminance(bg)
         
-        # 방안 2: 배경색을 단계적으로 밝게 해서 목표 도달
-        adjusted_bg = self._lighten_to_target(fg, bg, target_ratio)
+        if not text_is_lighter:
+            # 일반적인 경우: 글자를 어둡게 / 배경을 밝게
+            adjusted_fg = self._darken_to_target(fg, bg, target_ratio)
+            adjusted_bg = self._lighten_to_target(fg, bg, target_ratio)
+            fg_desc, bg_desc = "전경색(글자)을 더 어둡게", "배경색을 더 밝게"
+        else:
+            # 어두운 배경 + 밝은 글자: 글자를 밝게 / 배경을 어둡게
+            adjusted_fg = self._shift_until(fg, bg, target_ratio, +1)
+            adjusted_bg = self._shift_until(bg, fg, target_ratio, -1)
+            fg_desc, bg_desc = "전경색(글자)을 더 밝게", "배경색을 더 어둡게"
         
         return {
             "needed": True,
             "current_ratio": round(current_ratio, 2),
             "target_ratio": target_ratio,
+            "text_is_lighter": text_is_lighter,
             "option_1": {
-                "description": "전경색(글자)을 더 어둡게",
+                "description": fg_desc,
                 "original_fg": list(fg),
                 "suggested_fg": list(adjusted_fg),
                 "suggested_fg_hex": self._rgb_to_hex(adjusted_fg),
                 "new_ratio": round(contrast_ratio(adjusted_fg, bg), 2),
             },
             "option_2": {
-                "description": "배경색을 더 밝게",
+                "description": bg_desc,
                 "original_bg": list(bg),
                 "suggested_bg": list(adjusted_bg),
                 "suggested_bg_hex": self._rgb_to_hex(adjusted_bg),
@@ -543,6 +579,24 @@ class ContrastAnalyzer:
             if contrast_ratio(fg, candidate) >= target:
                 return candidate
         return (255, 255, 255)
+    
+    @staticmethod
+    def _shift_until(color: Tuple[int, int, int],
+                     other: Tuple[int, int, int],
+                     target: float,
+                     direction: int) -> Tuple[int, int, int]:
+        """
+        color를 RGB 각 채널에서 1씩(direction=+1이면 밝게, -1이면 어둡게) 옮겨가며
+        other와의 명암비가 target 이상이 되는 색을 찾음.
+        못 찾으면 끝값(흰색 또는 검정)을 반환. 다크 테마용 suggest_fix에서 사용.
+        """
+        r, g, b = color
+        for step in range(256):
+            d = step * direction
+            candidate = (min(255, max(0, r + d)), min(255, max(0, g + d)), min(255, max(0, b + d)))
+            if contrast_ratio(candidate, other) >= target:
+                return candidate
+        return (255, 255, 255) if direction > 0 else (0, 0, 0)
     
     @staticmethod
     def _rgb_to_hex(rgb: Tuple[int, int, int]) -> str:

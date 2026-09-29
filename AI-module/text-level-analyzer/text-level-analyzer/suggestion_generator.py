@@ -25,7 +25,8 @@
 
 [비용 관리 전략]
   - MAX_LLM_CALLS = 20: 한 번 실행에 최대 20건만 LLM 호출
-  - 대상 제한: paragraph 중 난이도 점수 50 이상, 또는 40글자 이상 link/form_guide만
+  - 대상 제한: paragraph 중 난이도 점수 50 이상(2026-09-27 원래 값으로 복원, 사유는
+    아래 LLM 호출 대상 판별 주석 참고), 또는 40글자 이상 link/form_guide만
   - 모델: gpt-4o-mini (gpt-4 대비 비용 대폭 절감, 수정 제안 품질은 충분)
   - 향후 개선: 배치 처리(여러 문장을 한 번에 묶어 호출)로 추가 절감 가능
 
@@ -46,12 +47,14 @@
   입력: result_text_difficulty.json (difficulty_engine.py 출력)
   출력: 각 위반 블록에 수정 제안(suggestions)과 LLM 수정문(llm_revision)이 추가된 JSON
 
-[difficulty_engine.py 플래그 문자열 기준 — 2026.06 기준]
-  '문장 길이 과다'   : paragraph/table/list/alert/other에서 avg_sent_len >= 25어절
-  '어려운 어휘 과다' : paragraph에서 easy_word_ratio < 0.60 (C등급+미등재 기준)
-  '위치 참조'        : 위/아래/옆/오른쪽/왼쪽 등 위치 의존 표현
-  '모호한 참조'      : 해당 버튼/여기 클릭 등 모호한 참조 표현
-  '텍스트 길이 과다' : button/link/label/form_guide/heading 글자수 초과
+[difficulty_engine.py 플래그 문자열 기준 — 2026-09-23 갱신]
+  '문장 길이 과다'         : paragraph/table/list/alert/other에서 avg_sent_len >= 25어절
+  '어려운 어휘 과다'       : paragraph(명사 5개 이상)에서 easy_word_ratio < 0.60
+  '어려운 어휘 포함(표본 부족)' : paragraph(명사 5개 미만)에서 C/D등급 명사가
+                            SHORT_TEXT_MIN_HARD_NOUNS개 이상 (비율 대신 개별 단어 기준)
+  '위치 참조'              : 위/아래/옆/오른쪽/왼쪽 등 위치 의존 표현
+  '모호한 참조'            : 해당 버튼/여기 클릭 등 모호한 참조 표현
+  '텍스트 길이 과다'       : button/link/label/form_guide/heading 글자수 초과
 """
 
 import json
@@ -85,6 +88,18 @@ MAX_LLM_CALLS = 20       # 한 번 실행 시 최대 LLM 호출 수 (비용 상�
                           # 전부 LLM에 보내면 비용이 폭발함 → 20건으로 제한
 LLM_RETRY_COUNT = 2      # API 실패 시 재시도 횟수 (일시적 오류 대비)
 LLM_RETRY_DELAY = 2      # 재시도 간 대기 시간 (초) — Rate Limit 해소를 위한 간격
+
+# ── 사람 평가(휴먼 스터디)용 모드 ──
+# 기존 로직은 paragraph 중 난이도 점수 50 이상(2026-09-27 복원), link/form_guide
+# 중 40자 이상만 LLM을 호출한다. 이러면 needs_suggestion=True인 블록(40~49점
+# 경계 구간, 또는 명사 5개 미만이라 difficulty_score가 None인 블록)
+# 상당수가 실제 "수정문(revised_text)" 없이 규칙 기반 가이드만 갖게 되어,
+# "원문 vs 수정문"을 사람에게 보여주는 비교 실험에 쓸 표본이 부족해진다.
+# STUDY_MODE=1로 실행하면 needs_suggestion=True인 블록은 점수/글자수 조건 없이
+# 전부 LLM을 호출해서 실험에 쓸 원문-수정문 쌍을 최대한 확보한다.
+# 사용법(Windows PowerShell): $env:STUDY_MODE="1"; python suggestion_generator.py ...
+STUDY_MODE = os.environ.get('STUDY_MODE', '').strip().lower() in ('1', 'true', 'yes')
+STUDY_MODE_MAX_LLM_CALLS = 60  # 실험용은 표본이 더 필요하므로 상한을 올림 (비용 계산: 60건 × gpt-4o-mini ≈ 소액)
 
 # API 키가 없으면 오프라인 모드로 자동 전환
 # 오프라인 모드: 규칙 기반 템플릿 제안만 생성 (LLM 호출 안 함)
@@ -189,6 +204,30 @@ def generate_rule_based_suggestion(block):
                 'guide': '고급 어휘나 전문 용어를 쉬운 단어로 바꾸세요. '
                          '예: "이행" → "지키기", "제반 사항" → "모든 내용", '
                          '"의거하여" → "따라서", "시행" → "실시/시작"',
+                'kwcag_ref': '3.1.1 읽기 쉬운 콘텐츠',
+                'priority': 'medium',
+            })
+
+        # ── 어려운 어휘 포함 (표본 부족 — 명사 5개 미만인 짧은 paragraph) ──
+        # difficulty_engine: f'어려운 어휘 포함(표본 부족): 명사 {n}개 중 어려운 단어 {k}개(...) — ...'
+        # 발생 조건: paragraph에서 명사가 5개 미만이라 비율/GL 계산은 생략됐지만,
+        # 있는 명사 중 어려운 단어(C/D등급)가 SHORT_TEXT_MIN_HARD_NOUNS개 이상 있는 경우
+        # (2026-09-23 추가: 짧다는 이유만으로 검사망을 빠져나가던 문제 보완)
+        elif '어려운 어휘 포함(표본 부족)' in flag:
+            grade_detail = metrics.get('grade_detail', {})
+            hard_nouns = grade_detail.get('C', [])[:3] + grade_detail.get('D', [])[:3]
+            hard_nouns = hard_nouns[:5]
+            examples = ', '.join(hard_nouns) if hard_nouns else ''
+            issue_text = ('텍스트가 짧아 어휘 비율 계산은 생략했지만, 포함된 단어 중 '
+                          '어려운 단어가 있습니다.')
+            if examples:
+                issue_text += f' 어려운 어휘: {examples}'
+            suggestions.append({
+                'type': 'short_text_hard_vocab',
+                'issue': issue_text,
+                'guide': '짧은 문구라도 전문 용어·행정 용어·약어가 있으면 쉬운 말로 '
+                         '바꾸거나 풀어 쓰세요. 예: "제반" → "모든", "미거출" → '
+                         '"내지 않은"처럼 일상어로 대체하세요.',
                 'kwcag_ref': '3.1.1 읽기 쉬운 콘텐츠',
                 'priority': 'medium',
             })
@@ -604,7 +643,8 @@ def generate_suggestions(input_path, output_path=None):
       1) 전체 블록에서 needs_suggestion == true인 블록만 처리 대상
       2) 모든 대상 블록에 규칙 기반 템플릿 제안 생성 (항상 동작)
       3) LLM 호출 대상 판별:
-         - paragraph: 난이도 점수 50 이상인 경우만
+         - paragraph: 난이도 점수 50 이상인 경우만(2026-09-27 원래 값으로 복원; 명사 5개
+           미만이라 difficulty_score가 None인 블록은 규칙 기반 가이드만 제공)
          - link/form_guide: 텍스트 40글자 이상인 경우만
          - 최대 20건까지 (MAX_LLM_CALLS)
       4) LLM 호출 성공 시: llm_revision에 수정문과 수정 이유 저장
@@ -641,14 +681,21 @@ def generate_suggestions(input_path, output_path=None):
     # results: difficulty_engine.py가 분석한 텍스트 블록 목록
     # 각 블록에는 text, category, flags, metrics, difficulty_score, needs_suggestion 등이 있음
     results = data.get('results', [])
-    llm_call_count = 0     # LLM 호출 횟수 추적 (MAX_LLM_CALLS 상한 체크용)
+    llm_call_count = 0     # LLM 호출 횟수 추적 (effective_max_calls 상한 체크용)
     suggestion_total = 0   # 생성된 규칙 기반 제안 총 개수 (통계용)
+
+    effective_max_calls = STUDY_MODE_MAX_LLM_CALLS if STUDY_MODE else MAX_LLM_CALLS
 
     # 오프라인 모드 안내 출력 (API 키 없이 실행하는 경우)
     if OFFLINE_MODE:
         print('[오프라인 모드] OPENAI_API_KEY가 설정되지 않아 LLM 호출을 건너뜁니다.')
         print('  → 규칙 기반 템플릿 제안만 생성합니다.')
         print(f'  → API 키 설정: set OPENAI_API_KEY=sk-xxxx (Windows)')
+        print()
+
+    if STUDY_MODE and not OFFLINE_MODE:
+        print(f'[STUDY_MODE] 사람 평가용 원문-수정문 쌍을 최대한 확보합니다 '
+              f'(점수/글자수 조건 무시, 최대 {effective_max_calls}건).')
         print()
 
     for i, block in enumerate(results):
@@ -671,24 +718,37 @@ def generate_suggestions(input_path, output_path=None):
         # 비용 관리를 위해 모든 블록에 호출하지 않고, 아래 조건을 충족하는 경우만 호출
         block['llm_revision'] = None  # 기본값: LLM 호출 안 함
 
-        if not OFFLINE_MODE and llm_call_count < MAX_LLM_CALLS:
+        if not OFFLINE_MODE and llm_call_count < effective_max_calls:
             # ── LLM 호출 대상 판별 ──
             # paragraph: 정말 어려운 문장(난이도 점수 50+)만 → 비용 대비 효과가 큰 경우만
             # link/form_guide: 사용자에게 직접 보이는 긴 텍스트(40글자+) → UX 영향이 큼
             # 그 외(heading, button 등): LLM 없이 규칙 기반 가이드만으로 충분
-            should_call_llm = False
+            #
+            # STUDY_MODE: 사람 평가 실험에서는 "명백히 어려운 문장"만 보여주면
+            # 실험 결과가 과대평가될 수 있으므로, needs_suggestion=True인 블록은
+            # 경계 구간(점수 40~49 등, 또는 difficulty_score가 None인 블록)도
+            # 포함해서 전부 LLM을 호출한다.
+            should_call_llm = STUDY_MODE
 
-            if block.get('category') == 'paragraph':
-                # paragraph는 난이도 점수가 50 이상인 것만 LLM 호출
-                # (50 미만은 규칙 기반 가이드로 충분한 수준)
-                score = block.get('difficulty_score')
-                if score is not None and score >= 50:
-                    should_call_llm = True
-            elif block.get('category') in ('link', 'form_guide'):
-                # link와 form_guide는 텍스트가 40글자 이상인 경우만 LLM 호출
-                # (짧은 링크/안내문구는 규칙 기반 가이드로 수정 방향이 명확함)
-                if len(block.get('text', '')) > 40:
-                    should_call_llm = True
+            if not STUDY_MODE:
+                if block.get('category') == 'paragraph':
+                    # paragraph는 난이도 점수가 50 이상인 것만 LLM 호출
+                    # (2026-09-23에 15점으로 내렸던 것을 2026-09-27에 원래 설계값 50점으로
+                    #  복원. 15점으로 내린 이유는 당시 GL 공식의 A 항 부호가 뒤집혀
+                    #  난이도 점수 상한이 약 35.2점이었기 때문인데, difficulty_engine.py에서
+                    #  공식을 원 논문대로 고치면서 그 제약이 사라짐. 15점을 그대로 두면
+                    #  고친 공식에서는 대부분의 문단이 LLM 호출 대상이 됨.)
+                    # 명사 5개 미만이라 difficulty_score가 None인 블록(어려운 어휘
+                    # 포함 보조 규칙으로 flagged된 것 포함)은 이 조건에서 자동 제외됨
+                    # → 규칙 기반 가이드만 제공, LLM은 호출 안 함(비용 관리 취지 유지)
+                    score = block.get('difficulty_score')
+                    if score is not None and score >= 50:
+                        should_call_llm = True
+                elif block.get('category') in ('link', 'form_guide'):
+                    # link와 form_guide는 텍스트가 40글자 이상인 경우만 LLM 호출
+                    # (짧은 링크/안내문구는 규칙 기반 가이드로 수정 방향이 명확함)
+                    if len(block.get('text', '')) > 40:
+                        should_call_llm = True
 
             if should_call_llm:
                 print(f'  [{i}] LLM 호출 중... (카테고리: {block["category"]})')
@@ -718,7 +778,7 @@ def generate_suggestions(input_path, output_path=None):
         'total_suggestions': suggestion_total,   # 생성된 규칙 기반 제안 총 수
         'llm_calls': llm_call_count,             # 실제 LLM 호출 횟수 (비용 추적)
         'llm_model': LLM_MODEL if not OFFLINE_MODE else None,
-        'mode': 'offline' if OFFLINE_MODE else 'online',
+        'mode': 'offline' if OFFLINE_MODE else ('study' if STUDY_MODE else 'online'),
     }
 
     # ── 저장 ──

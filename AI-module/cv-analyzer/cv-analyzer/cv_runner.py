@@ -153,7 +153,9 @@ class CVRunner:
         
         # ── Step 4: 수정 추천 생성 ──
         # 명암비 미달인 각 텍스트에 대해, 기준을 충족하는 대체 색상을 추천함.
-        # 방안 1(글자를 더 어둡게)과 방안 2(배경을 더 밝게) 두 가지를 모두 생성함.
+        # 방안 1(글자색 변경)과 방안 2(배경색 변경) 두 가지를 모두 생성함.
+        # 보통은 "글자를 더 어둡게 / 배경을 더 밝게"지만, 어두운 배경 위 밝은 글자면
+        # "글자를 더 밝게 / 배경을 더 어둡게"로 방향이 바뀜(2026-09-27).
         print(f"\n[Step 4/4] 위반 항목 수정 추천 생성")
         
         violations_with_fix = []
@@ -211,7 +213,7 @@ class CVRunner:
         [포맷 설계 원칙]
         - snake_case 통일: run.js의 toApiFormat()과 동일한 네이밍 규칙
         - 요약(summary)과 상세(violations) 분리: 대시보드 렌더링 편의
-        - KWCAG 항목 번호 포함: 5.3.3 콘텐츠의 명도 대비
+        - KWCAG 항목 번호 포함: 5.4.3 텍스트 콘텐츠의 명도 대비
         """
         summary = contrast_result["summary"]
         
@@ -227,10 +229,10 @@ class CVRunner:
             # ── KWCAG 매핑 ──
             # 이 CV 모듈이 검사하는 KWCAG 항목 정보.
             # 규칙 기반 모듈의 mapping.js와 같은 역할이지만,
-            # CV 모듈은 5.3.3 한 항목만 검사하므로 여기에 직접 기술함.
+            # CV 모듈은 5.4.3 한 항목만 검사하므로 여기에 직접 기술함.
             "kwcag_item": {
-                "id": "5.3.3",
-                "name": "콘텐츠의 명도 대비",
+                "id": "5.4.3",
+                "name": "텍스트 콘텐츠의 명도 대비",
                 "description": "텍스트와 배경 간의 명도 대비는 4.5:1 이상이어야 한다",
                 "level": "AA",
                 "wcag_ref": "1.4.3",               # ← 대응하는 WCAG 항목 번호
@@ -268,12 +270,16 @@ class CVRunner:
                     "foreground_color": v["foreground"],    # ← 추출된 전경색 RGB
                     "background_color": v["background"],    # ← 추출된 배경색 RGB
                     "fix_suggestion": {
-                        "darken_text": {                    # ← 방안 1: 글자를 더 어둡게
+                        # 키 이름(darken_text/lighten_background)은 대시보드 호환을 위해
+                        # 그대로 두고, 실제 방향은 description에 적는다(다크 테마면 반대 방향).
+                        "darken_text": {                    # ← 방안 1: 글자색 변경
+                            "description": v["fix_suggestion"].get("option_1", {}).get("description", ""),
                             "suggested_color": v["fix_suggestion"].get("option_1", {}).get("suggested_fg", []),
                             "suggested_hex": v["fix_suggestion"].get("option_1", {}).get("suggested_fg_hex", ""),
                             "new_ratio": v["fix_suggestion"].get("option_1", {}).get("new_ratio", 0),
                         },
-                        "lighten_background": {             # ← 방안 2: 배경을 더 밝게
+                        "lighten_background": {             # ← 방안 2: 배경색 변경
+                            "description": v["fix_suggestion"].get("option_2", {}).get("description", ""),
                             "suggested_color": v["fix_suggestion"].get("option_2", {}).get("suggested_bg", []),
                             "suggested_hex": v["fix_suggestion"].get("option_2", {}).get("suggested_bg_hex", ""),
                             "new_ratio": v["fix_suggestion"].get("option_2", {}).get("new_ratio", 0),
@@ -309,8 +315,8 @@ class CVRunner:
             "image_path": image_path,
             "ocr_backend": ocr_result.get("backend", "unknown"),
             "kwcag_item": {
-                "id": "5.3.3",
-                "name": "콘텐츠의 명도 대비",
+                "id": "5.4.3",
+                "name": "텍스트 콘텐츠의 명도 대비",
                 "description": "텍스트와 배경 간의 명도 대비는 4.5:1 이상이어야 한다",
                 "level": "AA",
                 "wcag_ref": "1.4.3",

@@ -2,10 +2,9 @@
   "name": "kwcag-adapter",
   "version": "2.0.0",
   "description": "axe-core 결과를 KWCAG 2.2 기준으로 변환하는 어댑터",
-  "main": "src/adapter.js",
+  "main": "adapter.js",
   "scripts": {
-    "scan": "node src/run.js",
-    "test": "node src/test.js"
+    "scan": "node run.js"
   },
   "dependencies": {
     "@axe-core/playwright": "^4.9.0",
