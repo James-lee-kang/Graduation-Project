@@ -67,7 +67,9 @@ const {
   markExcludedRegions,
   partitionAxeResultsByRegion,
 } = require('./excluded-regions');
-const { POPUP_ATTRIBUTE, findPopupLayers, hidePopupLayers } = require('./popup-layers');
+const {
+  POPUP_ATTRIBUTE, capturePopupLayers, findPopupLayers, hidePopupLayers,
+} = require('./popup-layers');
 const fs = require('fs');
 const path = require('path');
 
@@ -865,11 +867,17 @@ async function run(url, outputPath, options = {}) {
           console.warn(`   레이어 팝업 검사 실패: ${error.message}`);
           return null;
         });
+      await capturePopupLayers(page, popupLayers, {
+        htmlPath: siblingOutputPath(output, '_popup.html'),
+        cvScreenshotPath,
+        popupAxeResults,
+        fs,
+      });
       const closed = await hidePopupLayers(page);
       for (const layer of popupLayers) {
         layer.clicked_close = closed.find((entry) => entry.index === layer.index)?.clicked_close ?? false;
       }
-      console.log(`   레이어 팝업 ${popupLayers.length}개: 따로 검사한 뒤 닫고 본문을 분석합니다.`);
+      console.log(`   레이어 팝업 ${popupLayers.length}개: 규칙·텍스트·CV용으로 따로 저장·검사한 뒤 닫고 본문을 분석합니다.`);
     }
 
     // A second load reveals content that differs between visits (news,

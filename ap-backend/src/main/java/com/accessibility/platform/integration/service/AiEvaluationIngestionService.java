@@ -436,6 +436,8 @@ public class AiEvaluationIngestionService {
                         message
                 );
                 issue.applyLocator(issueLocatorParser.fromTextBlock(block));
+                // Layer-popup text is checked like page text but reported outside the score.
+                issue.applyExclusion(text(block, "exclusion_reason", null));
                 issues.add(issue);
             }
         }

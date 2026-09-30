@@ -256,6 +256,14 @@ class AiEvaluationIngestionLocatorIntegrationTest {
                         }]}
                       ]
                     },
+                    "text_difficulty":{
+                      "meta":{"page_score":100,"flagged_count":0,"suggestion_needed":0},
+                      "results":[{
+                        "text":"아래 버튼을 눌러 신청하세요","category":"paragraph",
+                        "flags":["위치 참조"],"needs_suggestion":true,"exclusion_reason":"POPUP"
+                      }]
+                    },
+                    "text_suggestions":{"status":"failed"},
                     "cv_visual":{
                       "summary":{"pass_rate":90,"fail_count":0},
                       "kwcag_item":{"id":"5.4.3","name":"텍스트 콘텐츠의 명도 대비"},
@@ -264,7 +272,9 @@ class AiEvaluationIngestionLocatorIntegrationTest {
                         {"text":"1,215,000","contrast_ratio":2.1,"required_ratio":4.5,"reason":"AD",
                          "location":{"x":10,"y":20,"width":60,"height":18}},
                         {"text":"no reason","contrast_ratio":2.1,"required_ratio":4.5,
-                         "location":{"x":10,"y":50,"width":60,"height":18}}
+                         "location":{"x":10,"y":50,"width":60,"height":18}},
+                        {"text":"추석 연휴 안내","contrast_ratio":2.5,"required_ratio":4.5,"reason":"POPUP",
+                         "location":{"x":5,"y":6,"width":7,"height":8}}
                       ]
                     }
                   }
@@ -283,6 +293,8 @@ class AiEvaluationIngestionLocatorIntegrationTest {
                         tuple("#ad-image", "AD"),
                         tuple("#news li", "DYNAMIC"),
                         tuple("#pop-x", "POPUP"),
+                        tuple(null, "POPUP"),
+                        tuple("x=5, y=6, width=7, height=8", "POPUP"),
                         tuple("x=10, y=20, width=60, height=18", "AD")
                 );
 

@@ -69,17 +69,21 @@ selector·HTML·locator를 보존하고 백엔드 이슈로 저장한다. 실제
 |---|---|
 | `AD` | 광고 표식(`ins.adsbygoogle`, `data-ad-slot`, `aria-label="광고"` 등)이나 광고 서버 주소의 iframe. 두 번 모두 같은 광고가 나와도 제외한다 |
 | `DYNAMIC` | 같은 브라우저 컨텍스트에서 페이지를 한 번 더 불러와 비교했을 때 글자·이미지 주소·iframe 주소가 달라진 요소. 하위 내용의 절반 이상이 바뀐 부모까지(페이지 면적의 25% 이하) 넓혀 목록 전체를 묶는다 |
-| `POPUP` | 접속 직후 화면의 20% 이상을 덮는 fixed/absolute, z-index 100 이상 레이어(공지·이벤트 팝업). 열린 상태로 팝업만 따로 axe 검사해 그 위반을 이 사유로 보고한 뒤, 팝업의 닫기 버튼("닫기", "오늘 하루 보지 않기" 등)을 누르고 항상 `display:none`으로 숨긴다. 그다음 두 번째 로딩 비교, 본문 axe 검사, DOM snapshot, CV 이미지가 팝업이 닫힌 화면을 본다 |
+| `POPUP` | 접속 직후 화면의 20% 이상을 덮는 fixed/absolute, z-index 100 이상 레이어(공지·이벤트 팝업). 팝업이 열린 상태에서 **세 모듈 모두** 팝업을 따로 검사한다: 규칙 기반은 팝업만 axe 검사, 텍스트는 팝업 내용을 `result_popup.html`로 저장해 같은 추출기(`--popup-layer`)·난이도 엔진으로 검사, CV는 팝업 부분만 캡처해 같은 CV 분석기로 검사(규칙 엔진이 이미 찾은 명도 대비 요소와 겹치면 뺌). 결과는 모두 `POPUP` 사유로 따로 보고하고 점수(규칙 점수, 난이도 page_score, CV 통과율)에는 넣지 않는다. 그다음 팝업의 닫기 버튼("닫기", "오늘 하루 보지 않기" 등)을 누르고 항상 `display:none`으로 숨긴 뒤 두 번째 로딩 비교, 본문 axe 검사, DOM snapshot, CV 이미지가 팝업이 닫힌 화면을 본다 |
 
 사이트 캐러셀과 슬라이드 배너는 `carousel-audit.js`가 모든 슬라이드를 검사하므로 `DYNAMIC`으로 보지 않는다.
 바뀌지 않는 배너와 광고 신호가 없는 자체 커머스 영역도 두 번 불러와 같으면 그대로 검사한다.
 정적 fallback(`INITIAL_RESPONSE_STATIC`)은 비교할 두 번째 응답이 없어 `AD`만 적용한다.
 
+팝업을 점수에서 빼는 이유: 팝업은 행사·공지 기간에만 떠서 점수에 넣으면 같은 사이트 점수가 측정일마다 흔들린다(동적 영역과 같은 논리). 그래도 기관이 만든 콘텐츠이고 키보드로 닫을 수 없는 팝업처럼 실제 장벽이 될 수 있어 세 모듈 모두 검사해 리포트에 따로 보여준다. 광고·동적 영역은 사이트 콘텐츠가 아니라서 검사 자체를 하지 않는다는 점이 다르다.
+
 표시한 요소에는 `data-ua-excluded-region` 속성을 남기고, `result_api.json`에 다음을 기록한다.
 
 - `metadata.excluded_regions`: 최상위 제외 영역의 사유와 문서 좌표(CSS px)
 - `excluded_violations`: 사유별 `{reason, violations, unmapped_violations}`. 형식은 점수 대상 위반과 같다
-- `metadata.popup_layers`: 찾아서 닫은 레이어 팝업의 id·문서 좌표와 닫기 버튼 클릭 여부. 팝업은 `data-ua-popup` 속성으로 표시한다
+- `metadata.popup_layers`: 찾아서 닫은 레이어 팝업의 id·문서 좌표, 닫기 버튼 클릭 여부, 팝업 안 명도 대비 위반 요소 좌표(`color_contrast_boxes`, CV 중복 제거용). 팝업은 `data-ua-popup` 속성으로 표시한다
+- 팝업 텍스트 블록: `text_difficulty`·`text_suggestions`의 `results` 뒤에 `exclusion_reason: "POPUP"`으로 붙는다(`meta.page_score`는 본문만으로 계산)
+- 팝업 CV 위반: `cv_visual.excluded_violations`에 `reason: "POPUP"`으로 붙는다(좌표는 본문 CV와 같은 스크린샷 px)
 
 텍스트 추출기는 이 속성이 붙은 요소를 읽지 않고, CV 분석기는 텍스트 상자 중심이 제외 영역 안에 있으면
 통과율 표본에서 빼고 위반만 `excluded_violations`(사유 포함)에 남긴다. 백엔드는 제외 위반을
