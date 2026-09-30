@@ -108,7 +108,11 @@ function challengeSignals({
   const signals = [];
   const urlPatterns = [
     ['AUTOMATION_REASON', /[?&](?:atn|reason)=(?:selenium|webdriver|automation|bot)(?:[&#]|$)/i],
-    ['CHALLENGE_URL', /(?:captcha|botmanager|stclab|security[-_/]?check|browser[-_/]?check|challenge)/i],
+    ['CHALLENGE_URL', /(?:captcha|botmanager|stclab|security[-_/]?check|browser[-_/]?check|challenge|bot[-_]?check|\/deny\/)/i],
+    // 정부24(gov.kr)가 자동 접근을 차단할 때 넘기는 MBuster 안내 주소
+    // (plus.gov.kr/mbuster). 2026-09-14 동작검증에서 실제로 확인된 차단 경로라
+    // 이 주소로 넘어간 것만으로 차단으로 본다.
+    ['MBUSTER', /\/mbuster(?:[/?#]|$)/i],
   ];
   for (const [name, pattern] of urlPatterns) {
     if (pattern.test(decodedUrl)) signals.push(name);
@@ -120,6 +124,9 @@ function challengeSignals({
     ['CAPTCHA', /hcaptcha|recaptcha|turnstile|captcha/i],
     ['WEBDRIVER', /navigator\.webdriver|atn\s*[=:]\s*["']?selenium|webdriver detected/i],
     ['SECURITY_CHECK', /verify (?:that )?you are human|security (?:verification|check)|automated (?:access|browser|traffic)/i],
+    // Cloudflare 대기·차단 화면. challenge-platform 스크립트는 정상 페이지에도
+    // 심기므로 쓰지 않고, 대기 화면에만 있는 표식과 문구만 본다.
+    ['CLOUDFLARE', /_cf_chl_|cf-chl-|just a moment\.\.\.|checking (?:if the site connection is secure|your browser)|attention required! \| cloudflare/i],
   ];
   for (const [name, pattern] of documentPatterns) {
     if (pattern.test(documentText)) signals.push(name);
@@ -206,7 +213,7 @@ async function detectCrossOriginBotChallenge(page, initialUrl) {
     })(),
   })).catch(() => ({ title: '', text: '', html: '' }));
   const signals = challengeSignals({ url: currentUrl, ...state });
-  const strongSignals = new Set(['AUTOMATION_REASON', 'STCLAB', 'CAPTCHA', 'WEBDRIVER']);
+  const strongSignals = new Set(['AUTOMATION_REASON', 'STCLAB', 'CAPTCHA', 'WEBDRIVER', 'MBUSTER', 'CLOUDFLARE']);
   const sameDocumentChallenge = signals.includes('BOT_MANAGER_WAIT_OVERLAY');
   return {
     detected: sameDocumentChallenge || (crossOrigin && (
@@ -606,6 +613,10 @@ const CHALLENGE_TEXT_PATTERN = new RegExp([
   'verify (?:that )?you are (?:a )?human', 'are you a robot', 'security (?:verification|check)',
   'automated (?:access|browser|traffic)', 'webdriver detected', 'access denied',
   '자동화된 (?:접근|요청|프로그램)', '비정상적인 (?:접근|요청|트래픽)', '로봇이 아닙니다', '보안 확인',
+  // Cloudflare 대기·차단 화면과 흔한 차단 안내 문구 (2026-09-30 추가).
+  // 짧은 본문·링크 4개 이하 조건과 함께만 쓰이므로 정상 페이지 오탐 위험이 낮다.
+  'just a moment\\.\\.\\.', 'checking (?:if the site connection is secure|your browser)',
+  'attention required', 'unusual traffic', '접근이 (?:거부|차단)(?:되었|됐)',
 ].join('|'), 'i');
 const DOCUMENT_CONTENT_SELECTOR = 'img, svg, picture, video, canvas, iframe, object, embed, [role="img"], '
   + 'a[href], button, input:not([type="hidden"]), select, textarea, [role="button"]';
