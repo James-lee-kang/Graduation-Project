@@ -20,6 +20,10 @@ const AD_ELEMENT_SELECTORS = [
   'ins.adsbygoogle', '[data-ad-slot]', '[data-ad-client]', '[data-google-query-id]',
   '[id^="google_ads_iframe"]', '[id$="_tgtLREC"]', '[aria-label="광고"]', '[aria-label="Advertisement" i]',
 ];
+// Ads drawn in the page itself (not in an iframe) that announce themselves in
+// their accessible name, like Naver's headline ad image alt="[광고]멤버십 …".
+// The link around such an image is the ad, so the link is marked.
+const AD_LABEL_SELECTOR = 'img[alt^="[광고]"], [aria-label^="[광고]"]';
 const AD_FRAME_SOURCE = [
   'doubleclick\\.net', 'googlesyndication\\.com', 'googleadservices\\.com', 'adservice\\.google',
   'adnxs\\.com', 'criteo\\.', 'taboola\\.com', 'outbrain\\.com',
@@ -43,8 +47,8 @@ const STABLE_CONTROL_SELECTOR = [
 // regions and returns their document rectangles. Both modes share one key
 // function so the two loads are compared with the same identity.
 function inspectRegions({
-  mode, attribute, popupAttribute, adSelectors, adFrameSource, changedKeys, minChangedShare, maxPageShare,
-  stableControlSelector,
+  mode, attribute, popupAttribute, adSelectors, adLabelSelector, adFrameSource, changedKeys, minChangedShare,
+  maxPageShare, stableControlSelector,
 }) {
   const body = document.body;
   if (!body) return mode === 'collect' ? {} : [];
@@ -97,6 +101,7 @@ function inspectRegions({
   };
   const adFrame = new RegExp(adFrameSource, 'i');
   for (const element of body.querySelectorAll(adSelectors.join(','))) mark(element, 'AD');
+  for (const element of body.querySelectorAll(adLabelSelector)) mark(element.closest('a[href]') || element, 'AD');
   for (const frame of body.querySelectorAll('iframe')) {
     if (adFrame.test(`${frame.getAttribute('src') || ''} ${frame.getAttribute('name') || ''}`)) mark(frame, 'AD');
   }
@@ -177,6 +182,7 @@ const inspectionOptions = (mode, changedKeys = []) => ({
   attribute: EXCLUDED_REGION_ATTRIBUTE,
   popupAttribute: POPUP_ATTRIBUTE,
   adSelectors: AD_ELEMENT_SELECTORS,
+  adLabelSelector: AD_LABEL_SELECTOR,
   adFrameSource: AD_FRAME_SOURCE,
   changedKeys,
   minChangedShare: DYNAMIC_CONTAINER_MIN_CHANGED_SHARE,
