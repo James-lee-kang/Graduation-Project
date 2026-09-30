@@ -245,6 +245,11 @@ class AiEvaluationIngestionLocatorIntegrationTest {
                           "axe_rule_id":"region","help":"Content in landmarks","impact":"moderate",
                           "nodes":[{"selector":"#news li","html":"<li>뉴스</li>","failure_summary":"Not in landmark"}]
                         }]},
+                        {"reason":"POPUP","violations":[{
+                          "kwcag_id":"8.2.1","kwcag_name":"사용자 인터페이스 요소의 이름·역할·상태 제공","severity":"critical",
+                          "rules":[{"axe_rule_id":"button-name","help":"Buttons must have discernible text",
+                            "nodes":[{"selector":"#pop-x","html":"<button id=pop-x></button>","failure_summary":"No name"}]}]
+                        }],"unmapped_violations":[]},
                         {"reason":"UNKNOWN","violations":[{
                           "kwcag_id":"5.1.1","kwcag_name":"적절한 대체 텍스트 제공","severity":"critical",
                           "rules":[{"axe_rule_id":"image-alt","nodes":[{"selector":"#ignored"}]}]
@@ -277,6 +282,7 @@ class AiEvaluationIngestionLocatorIntegrationTest {
                         tuple("#logo", null),
                         tuple("#ad-image", "AD"),
                         tuple("#news li", "DYNAMIC"),
+                        tuple("#pop-x", "POPUP"),
                         tuple("x=10, y=20, width=60, height=18", "AD")
                 );
 

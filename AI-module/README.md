@@ -44,6 +44,7 @@ AI-module/
 | run.js | Playwright로 페이지를 열어 axe-core 검사 + 내부 분석용 DOM snapshot 저장. 통합 실행 시에만 CV 전용 임시 PNG 생성 |
 | carousel-audit.js | Swiper/Slick/Splide/generic 캐러셀의 숨은 논리 슬라이드를 제한적으로 검사하고 결과 중복 제거 |
 | excluded-regions.js | 광고와 두 번 불러올 때 내용이 바뀐 영역을 표시하고, 그 안의 위반을 점수 대상과 분리 |
+| popup-layers.js | 접속 직후 본문을 가리는 레이어 팝업을 찾아 따로 검사한 뒤 닫음 |
 | artifact.js | typed locator를 만들고 annotation을 포함한 내부 분석용 DOM snapshot 직렬화 |
 | adapter.js | axe-core 결과를 KWCAG 항목으로 매핑하는 어댑터 |
 | mapping.js | KWCAG 33개 항목의 매핑 데이터 (axe 규칙 ID, 심각도, 가중치) |
@@ -68,6 +69,7 @@ selector·HTML·locator를 보존하고 백엔드 이슈로 저장한다. 실제
 |---|---|
 | `AD` | 광고 표식(`ins.adsbygoogle`, `data-ad-slot`, `aria-label="광고"` 등)이나 광고 서버 주소의 iframe. 두 번 모두 같은 광고가 나와도 제외한다 |
 | `DYNAMIC` | 같은 브라우저 컨텍스트에서 페이지를 한 번 더 불러와 비교했을 때 글자·이미지 주소·iframe 주소가 달라진 요소. 하위 내용의 절반 이상이 바뀐 부모까지(페이지 면적의 25% 이하) 넓혀 목록 전체를 묶는다 |
+| `POPUP` | 접속 직후 화면의 20% 이상을 덮는 fixed/absolute, z-index 100 이상 레이어(공지·이벤트 팝업). 열린 상태로 팝업만 따로 axe 검사해 그 위반을 이 사유로 보고한 뒤, 팝업의 닫기 버튼("닫기", "오늘 하루 보지 않기" 등)을 누르고 항상 `display:none`으로 숨긴다. 그다음 두 번째 로딩 비교, 본문 axe 검사, DOM snapshot, CV 이미지가 팝업이 닫힌 화면을 본다 |
 
 사이트 캐러셀과 슬라이드 배너는 `carousel-audit.js`가 모든 슬라이드를 검사하므로 `DYNAMIC`으로 보지 않는다.
 바뀌지 않는 배너와 광고 신호가 없는 자체 커머스 영역도 두 번 불러와 같으면 그대로 검사한다.
@@ -77,6 +79,7 @@ selector·HTML·locator를 보존하고 백엔드 이슈로 저장한다. 실제
 
 - `metadata.excluded_regions`: 최상위 제외 영역의 사유와 문서 좌표(CSS px)
 - `excluded_violations`: 사유별 `{reason, violations, unmapped_violations}`. 형식은 점수 대상 위반과 같다
+- `metadata.popup_layers`: 찾아서 닫은 레이어 팝업의 id·문서 좌표와 닫기 버튼 클릭 여부. 팝업은 `data-ua-popup` 속성으로 표시한다
 
 텍스트 추출기는 이 속성이 붙은 요소를 읽지 않고, CV 분석기는 텍스트 상자 중심이 제외 영역 안에 있으면
 통과율 표본에서 빼고 위반만 `excluded_violations`(사유 포함)에 남긴다. 백엔드는 제외 위반을
@@ -298,6 +301,10 @@ BotManager 전용 `#bm-wait-background`와 `#loading-overlay`가 표시되고 �
 스크립트 없이 정적으로 다시 열어 분석한다. 이 제한적 fallback은 로그와 HTML의
 `data-accessibility-replay-source="INITIAL_RESPONSE_STATIC"` 표식으로 드러나며,
 CAPTCHA 우회나 `navigator.webdriver` 위장은 수행하지 않는다.
+
+교차 출처 이동 판정에는 URL(`captcha`, `botmanager`, `challenge`, `/deny/`, `bot-check`), 정부24 MBuster 차단 주소(`/mbuster`),
+Cloudflare 대기 화면 표식(`_cf_chl_`, `cf-chl-`, "Just a moment...", "Checking if the site connection is secure")을 함께 본다.
+MBuster와 Cloudflare 표식은 그것만으로 차단으로 본다. Cloudflare·DataDome 태그가 심긴 정상 페이지는 차단으로 보지 않는다.
 
 ### 프론트엔드에 내려줄 때
 
