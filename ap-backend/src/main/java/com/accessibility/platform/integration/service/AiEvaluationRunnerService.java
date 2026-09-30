@@ -289,9 +289,9 @@ public class AiEvaluationRunnerService {
             int exitCode = process.exitValue();
             log.info("AI evaluation process completed with exit code: {}", exitCode);
 
-            // Allow some time for standard ingestion endpoint to run if exit code is 0
+            // run_all.py exits 0 only after the ingestion endpoint answered, and
+            // that answer follows the ingestion commit, so no wait is needed.
             if (exitCode == 0) {
-                Thread.sleep(2000);
                 Boolean hasSavedScore = transactionTemplate.execute(status ->
                         scoreResultRepository.findByEvaluationRequestId(requestId).isPresent()
                 );

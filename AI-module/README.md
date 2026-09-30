@@ -44,6 +44,8 @@ AI-module/
 | run.js | Playwright로 페이지를 열어 axe-core 검사 + 내부 분석용 DOM snapshot 저장. 통합 실행 시에만 CV 전용 임시 PNG 생성 |
 | carousel-audit.js | Swiper/Slick/Splide/generic 캐러셀의 숨은 논리 슬라이드를 제한적으로 검사하고 결과 중복 제거 |
 | excluded-regions.js | 광고와 두 번 불러올 때 내용이 바뀐 영역을 표시하고, 그 안의 위반을 점수 대상과 분리 |
+| hidden-elements.js | 분석 화면 폭에서 렌더링되지 않는 요소를 스냅샷에 표시해 텍스트 분석이 같은 기준을 쓰게 함 |
+| cv-anchors.js | CV 캡처 시점의 보이는 요소마다 문서 좌표·선택자·내용 서명(글자, 이미지 경로)을 `result_cv_anchors.json`에 기록 |
 | popup-layers.js | 접속 직후 본문을 가리는 레이어 팝업을 찾아 따로 검사한 뒤 닫음 |
 | artifact.js | typed locator를 만들고 annotation을 포함한 내부 분석용 DOM snapshot 직렬화 |
 | adapter.js | axe-core 결과를 KWCAG 항목으로 매핑하는 어댑터 |
@@ -63,12 +65,23 @@ selector·HTML·locator를 보존하고 백엔드 이슈로 저장한다. 실제
 이슈에도 typed locator와 carousel context를 남겨 현재 페이지에서 요소를 다시 찾을
 수 있게 한다. `result.html`의 annotation은 로컬 분석과 진단에만 사용한다.
 
+**숨김 요소:** axe 검사가 끝난 뒤 실제 브라우저의 계산된 스타일로 `display:none`, `hidden` 속성,
+`visibility:hidden`(보이는 자식이 없을 때), `content-visibility:hidden`인 요소에 `data-ua-hidden`을 붙인다.
+분석 화면 폭(PC)에서 어떤 사용자에게도 전달되지 않는 콘텐츠라서 axe와 CV처럼 텍스트 분석도 읽지 않는다.
+PC에서는 숨겨진 모바일 전용 공지 목록이 대표적이며, 같은 문장이 보이는 영역에 있으면 그쪽이 분석된다.
+스크린리더 전용 텍스트(잘려 있거나 화면 밖으로 밀린 요소)와 투명한 요소는 스크린리더가 읽으므로 표시하지 않고,
+캐러셀 슬라이드는 슬라이드별로 검사하므로 제외한다. 표시한 개수는 `metadata.hidden_element_count`에 남는다.
+열어야 보이는 메뉴·탭·팝업은 아직 열린 상태로 검사하지 않는다.
+
+**캐러셀 경로:** 캐러셀 검사가 슬라이드에 붙이는 임시 속성(`data-ua-audit-*`)을 axe가 선택자에 쓰면,
+저장 전에 그 요소의 구조 경로(가장 가까운 고유 id와 `태그:nth-of-type`)로 바꾼다. 실시간 페이지에는 임시 속성이 없기 때문이다.
+
 **제외 영역:** 사이트의 고정 콘텐츠가 아닌 영역은 모든 검사와 점수에서 빼고 따로 보고한다.
 
 | 사유 | 판정 |
 |---|---|
 | `AD` | 광고 표식(`ins.adsbygoogle`, `data-ad-slot`, `aria-label="광고"` 등)이나 광고 서버 주소의 iframe. 두 번 모두 같은 광고가 나와도 제외한다 |
-| `DYNAMIC` | 같은 브라우저 컨텍스트에서 페이지를 한 번 더 불러와 비교했을 때 글자·이미지 주소·iframe 주소가 달라진 요소. 하위 내용의 절반 이상이 바뀐 부모까지(페이지 면적의 25% 이하) 넓혀 목록 전체를 묶는다 |
+| `DYNAMIC` | 같은 브라우저 컨텍스트에서 페이지를 한 번 더 불러와 비교했을 때 글자·이미지 주소·iframe 주소가 달라졌거나 한쪽 로드에만 있는 요소(방문마다 탭·레이아웃이 바뀌는 추천 피드). 하위 내용의 절반 이상이 바뀐 부모까지(페이지 면적의 25% 이하) 넓혀 목록 전체를 묶는다. 두 번째 로드가 분석 페이지 요소의 절반도 공유하지 않으면 오류·차단 화면으로 보고 비교하지 않는다 |
 | `POPUP` | 접속 직후 화면의 20% 이상을 덮는 fixed/absolute, z-index 100 이상 레이어(공지·이벤트 팝업). 팝업이 열린 상태에서 **세 모듈 모두** 팝업을 따로 검사한다: 규칙 기반은 팝업만 axe 검사, 텍스트는 팝업 내용을 `result_popup.html`로 저장해 같은 추출기(`--popup-layer`)·난이도 엔진으로 검사, CV는 팝업 부분만 캡처해 같은 CV 분석기로 검사(규칙 엔진이 이미 찾은 명도 대비 요소와 겹치면 뺌). 결과는 모두 `POPUP` 사유로 따로 보고하고 점수(규칙 점수, 난이도 page_score, CV 통과율)에는 넣지 않는다. 그다음 팝업의 닫기 버튼("닫기", "오늘 하루 보지 않기" 등)을 누르고 항상 `display:none`으로 숨긴 뒤 두 번째 로딩 비교, 본문 axe 검사, DOM snapshot, CV 이미지가 팝업이 닫힌 화면을 본다 |
 
 사이트 캐러셀과 슬라이드 배너는 `carousel-audit.js`가 모든 슬라이드를 검사하므로 `DYNAMIC`으로 보지 않는다.
@@ -85,9 +98,15 @@ selector·HTML·locator를 보존하고 백엔드 이슈로 저장한다. 실제
 - 팝업 텍스트 블록: `text_difficulty`·`text_suggestions`의 `results` 뒤에 `exclusion_reason: "POPUP"`으로 붙는다(`meta.page_score`는 본문만으로 계산)
 - 팝업 CV 위반: `cv_visual.excluded_violations`에 `reason: "POPUP"`으로 붙는다(좌표는 본문 CV와 같은 스크린샷 px)
 
-텍스트 추출기는 이 속성이 붙은 요소를 읽지 않고, CV 분석기는 텍스트 상자 중심이 제외 영역 안에 있으면
+텍스트 추출기는 이 속성(`data-ua-excluded-region`)과 `data-ua-hidden`이 붙은 요소를 읽지 않고, CV 분석기는 텍스트 상자 중심이 제외 영역 안에 있으면
 통과율 표본에서 빼고 위반만 `excluded_violations`(사유 포함)에 남긴다. 백엔드는 제외 위반을
 `exclusion_reason`과 함께 저장하되 점수와 문제 수에는 넣지 않고, 최종 리포트는 별도 항목으로 보여준다.
+
+**CV 위반의 요소 연결:** CV 좌표는 스크린샷 기준이라 위쪽 콘텐츠 높이나 화면 폭이 달라지면 라이브 화면에서
+엉뚱한 곳을 가리킨다. `run_all.py`는 CV 위반 상자 중심을 덮는 가장 작은 요소(`result_cv_anchors.json`)를 찾아
+`locator`(선택자, 문서 좌표, `content: {text, image}`)로 붙인다. 라이브 리포트는 그 요소를 따라가고, 요소의
+글자나 이미지 경로가 분석 때와 다르면 마커를 숨기고 ‘분석 이후 내용이 바뀜’으로 표시한다. 요소를 찾지 못한
+위반은 기존처럼 좌표만 남는다.
 
 ---
 

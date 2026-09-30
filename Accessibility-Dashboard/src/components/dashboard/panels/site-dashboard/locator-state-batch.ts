@@ -4,7 +4,7 @@ type ScheduleFlush = (flush: () => void) => () => void;
 
 function sameLocatorState(left: LocatorIssueState | undefined, right: LocatorIssueState): boolean {
   return left?.status === right.status && left.reason === right.reason
-    && left.recoverable === right.recoverable;
+    && left.recoverable === right.recoverable && left.ownerKind === right.ownerKind;
 }
 
 // Owns pending messages separately from the immutable snapshots React renders.

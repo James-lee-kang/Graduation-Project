@@ -11,6 +11,7 @@ import {
   filterReportRows,
   getReportLocationStatus,
   groupByCriterion,
+  splitDescriptionSections,
   summarizeReport,
   summarizeReportLocations,
   type ReportLocationStatus
@@ -67,6 +68,11 @@ describe("report location status", () => {
     expect(getReportLocationStatus({ status: "HIDDEN_STATE", recoverable: true }, "ready")).toBe("other-state");
     expect(getReportLocationStatus({ status: "HIDDEN_STATE", recoverable: false, reason: "DISPLAY_NONE" }, "ready")).toBe("unavailable");
     expect(getReportLocationStatus({ status: "UNAVAILABLE", reason: "FRAME_UNSUPPORTED" }, "ready")).toBe("unavailable");
+    expect(getReportLocationStatus({ status: "VISIBLE", reason: "SCREEN_READER_ONLY", ownerKind: "BUTTON" }, "ready"))
+      .toBe("on-page");
+    expect(getReportLocationStatus({ status: "UNAVAILABLE", reason: "DOCUMENT_METADATA" }, "ready")).toBe("page-setting");
+    expect(getReportLocationStatus({ status: "UNAVAILABLE", reason: "ELEMENT_CONTENT_CHANGED" }, "ready")).toBe("outdated");
+    expect(getReportLocationStatus({ status: "UNAVAILABLE", reason: "SELECTOR_NOT_FOUND" }, "ready")).toBe("outdated");
   });
 
   it("does not claim a position before the viewer reports one or after it disconnects", () => {
@@ -93,9 +99,11 @@ describe("report summary", () => {
   });
 
   it("counts location outcomes", () => {
-    const statuses: Record<number, ReportLocationStatus> = { 1: "on-page", 2: "unavailable", 3: "unavailable" };
-    expect(summarizeReportLocations([row(1), row(2), row(3)], (item) => statuses[item.issue.id]!)).toEqual({
-      checking: 0, disconnected: 0, "on-page": 1, "other-state": 0, unavailable: 2
+    const statuses: Record<number, ReportLocationStatus> = {
+      1: "on-page", 2: "unavailable", 3: "unavailable", 4: "outdated", 5: "page-setting"
+    };
+    expect(summarizeReportLocations([1, 2, 3, 4, 5].map((id) => row(id)), (item) => statuses[item.issue.id]!)).toEqual({
+      checking: 0, disconnected: 0, "on-page": 1, "other-state": 0, "page-setting": 1, outdated: 1, unavailable: 2
     });
   });
 });
@@ -185,5 +193,28 @@ describe("issue location description", () => {
   it("falls back to the stored text and reports missing locations", () => {
     expect(describeIssueLocation(row(1, { locator: null, path: " main > a " }).issue)).toEqual({ kind: "text", value: "main > a" });
     expect(describeIssueLocation(row(1, { locator: null, path: "" }).issue)).toBeNull();
+  });
+});
+
+describe("issue description sections", () => {
+  it("turns known section labels into headings and keeps the lead paragraph", () => {
+    expect(splitDescriptionSections("대체 텍스트가 없습니다.\n\n개선 안내\nalt를 제공하세요.")).toEqual([
+      { heading: null, body: "대체 텍스트가 없습니다." },
+      { heading: "개선 안내", body: "alt를 제공하세요." }
+    ]);
+    expect(splitDescriptionSections("문장이 어렵습니다.\n\n권장사항: 쉬운 단어로 바꾸세요.")).toEqual([
+      { heading: null, body: "문장이 어렵습니다." },
+      { heading: "권장사항", body: "쉬운 단어로 바꾸세요." }
+    ]);
+  });
+
+  it("leaves unknown first lines and single-line text as body text", () => {
+    expect(splitDescriptionSections("text=다운로드, contrast=2.10:1")).toEqual([
+      { heading: null, body: "text=다운로드, contrast=2.10:1" }
+    ]);
+    expect(splitDescriptionSections("첫 줄\n둘째 줄\n\n\n개선 안내")).toEqual([
+      { heading: null, body: "첫 줄\n둘째 줄" },
+      { heading: null, body: "개선 안내" }
+    ]);
   });
 });

@@ -1,10 +1,16 @@
-import type { AnalyzerType, IssueLocatorCarouselContext, IssueLocatorPathStep } from "@/types/accessibility-domain";
+import type {
+  AnalyzerType,
+  IssueLocatorCarouselContext,
+  IssueLocatorContent,
+  IssueLocatorPathStep
+} from "@/types/accessibility-domain";
 
 import { normalizeIssueCode } from "./constants";
 import { localizeRuleDescription } from "./rule-issue-description";
 import {
   getIssueCoordinateBox,
   getReplayIssueCarouselContext,
+  getReplayIssueContent,
   getReplayIssuePathSteps,
   type IssueCoordinateBox
 } from "./issue-locator";
@@ -116,6 +122,8 @@ export type PageReplayIssue = {
   pathSteps: IssueLocatorPathStep[];
   /** Document CSS px box for findings without a DOM path (visual engine). */
   box: IssueCoordinateBox | null;
+  /** Analysed content of the element under a visual-engine finding. */
+  content: IssueLocatorContent | null;
   carouselContext: IssueLocatorCarouselContext | null;
 };
 
@@ -220,6 +228,7 @@ export type PageReplayToDashboardMessage =
       status: LocatorConnectionStatus;
       reason?: string;
       recoverable?: boolean;
+      ownerKind?: LocatorOwnerKind;
     }
   | {
       source: typeof PAGE_REPLAY_SOURCE;
@@ -233,6 +242,9 @@ export type PageReplayToDashboardMessage =
       documentToken: string;
       method: "GET" | "POST" | "DIALOG";
     };
+
+const locatorOwnerKinds = ["LINK", "BUTTON", "FORM_CONTROL", "TABLE", "REGION", "ELEMENT"] as const;
+export type LocatorOwnerKind = typeof locatorOwnerKinds[number];
 
 export type LiveDocumentHealthMessage = Extract<
   PageReplayToDashboardMessage,
@@ -350,6 +362,7 @@ export function toPageReplayIssue(row: RecentIssueRow, deviceScaleFactor?: numbe
     path: box ? null : toOptionalBoundedReplayText(row.issue.locationPath, REPLAY_TEXT_LIMITS.path),
     pathSteps: getReplayIssuePathSteps(row.issue),
     box,
+    content: getReplayIssueContent(row.issue),
     carouselContext: getReplayIssueCarouselContext(row.issue)
   };
 }
@@ -705,7 +718,8 @@ export function parsePageReplayMessage(value: unknown): PageReplayToDashboardMes
         "issueId",
         "status",
         ...(hasOwnKey(value, "reason") ? ["reason"] : []),
-        ...(hasOwnKey(value, "recoverable") ? ["recoverable"] : [])
+        ...(hasOwnKey(value, "recoverable") ? ["recoverable"] : []),
+        ...(hasOwnKey(value, "ownerKind") ? ["ownerKind"] : [])
       ]
     ) &&
     isDocumentToken(value.documentToken) &&
@@ -719,7 +733,8 @@ export function parsePageReplayMessage(value: unknown): PageReplayToDashboardMes
     ) &&
     (value.reason === undefined || typeof value.reason === "string") &&
     (value.recoverable === undefined || typeof value.recoverable === "boolean") &&
-    (value.recoverable === undefined || value.status === "HIDDEN_STATE")
+    (value.recoverable === undefined || value.status === "HIDDEN_STATE") &&
+    (value.ownerKind === undefined || locatorOwnerKinds.includes(value.ownerKind as LocatorOwnerKind))
   ) {
     return {
       source: PAGE_REPLAY_SOURCE,
@@ -728,7 +743,8 @@ export function parsePageReplayMessage(value: unknown): PageReplayToDashboardMes
       issueId: value.issueId,
       status: value.status,
       ...(typeof value.reason === "string" ? { reason: value.reason } : {}),
-      ...(typeof value.recoverable === "boolean" ? { recoverable: value.recoverable } : {})
+      ...(typeof value.recoverable === "boolean" ? { recoverable: value.recoverable } : {}),
+      ...(typeof value.ownerKind === "string" ? { ownerKind: value.ownerKind as LocatorOwnerKind } : {})
     };
   }
 

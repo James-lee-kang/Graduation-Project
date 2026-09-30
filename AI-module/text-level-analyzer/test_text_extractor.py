@@ -35,6 +35,23 @@ class TextLocatorTest(unittest.TestCase):
         for block in blocks:
             self.assertEqual(1, len(original.select(block['selector'])))
 
+    def test_follows_rendered_hidden_marks_and_reads_screen_reader_only_text(self):
+        html = """<main><div class="pc-hide" data-ua-hidden="true"><ul><li><a>모바일 전용 공지 제목입니다</a></li></ul></div>
+          <ul><li><a>화면에 보이는 공지 제목입니다</a></li></ul>
+          <a class="skip-nav" href="#main">본문 바로가기</a>
+          <p>검색 결과 안내 문장입니다.<span class="sr-only">스크린리더가 읽는 보충 설명입니다.</span></p></main>"""
+        original = BeautifulSoup(html, 'html.parser')
+        blocks = extract_texts(html)['blocks']
+        texts = [block['text'] for block in blocks]
+        # Content not rendered at the analysis viewport reaches no user there.
+        self.assertFalse(any('모바일 전용' in text for text in texts))
+        self.assertTrue(any('화면에 보이는 공지' in text for text in texts))
+        # Screen-reader-only text is read aloud, so it is analyzed.
+        self.assertTrue(any('본문 바로가기' in text for text in texts))
+        self.assertTrue(any('보충 설명' in text for text in texts))
+        for block in blocks:
+            self.assertEqual(1, len(original.select(block['selector'])))
+
     def test_attribute_guides_keep_original_positions(self):
         html = '''<main><div class="modal"><input placeholder="숨긴 안내"></div>
           <div><input style="display:none" placeholder="숨긴 입력">

@@ -31,6 +31,12 @@ const AD_FRAME_SOURCE = [
 // few repeated headlines is therefore excluded as a whole, not item by item.
 const DYNAMIC_CONTAINER_MIN_CHANGED_SHARE = 0.5;
 const DYNAMIC_CONTAINER_MAX_PAGE_SHARE = 0.25;
+// A widened region never swallows the site's own controls that showed the same
+// content on both loads, such as the tab bar above a changing feed.
+const STABLE_CONTROL_SELECTOR = [
+  'a[href]', 'button', 'summary', 'input', 'select', 'textarea',
+  '[role="tab"]', '[role="button"]', '[role="link"]', '[role="menuitem"]',
+].join(',');
 
 // Page-side worker. `collect` returns a content signature per structural key
 // for every element that carries its own content; `mark` marks the excluded
@@ -38,6 +44,7 @@ const DYNAMIC_CONTAINER_MAX_PAGE_SHARE = 0.25;
 // function so the two loads are compared with the same identity.
 function inspectRegions({
   mode, attribute, popupAttribute, adSelectors, adFrameSource, changedKeys, minChangedShare, maxPageShare,
+  stableControlSelector,
 }) {
   const body = document.body;
   if (!body) return mode === 'collect' ? {} : [];
@@ -98,6 +105,8 @@ function inspectRegions({
   const totals = new Map();
   const changes = new Map();
   const changedElements = [];
+  const stableControls = new Set();
+  const holdsStableControl = new Set();
   const countAncestors = (map, element) => {
     for (let parent = element.parentElement; parent && parent !== body; parent = parent.parentElement) {
       map.set(parent, (map.get(parent) || 0) + 1);
@@ -109,8 +118,24 @@ function inspectRegions({
     if (changed.has(keyOf(element))) {
       changedElements.push(element);
       countAncestors(changes, element);
+      continue;
+    }
+    const control = element.closest(stableControlSelector);
+    if (!control || stableControls.has(control)) continue;
+    stableControls.add(control);
+    for (let current = control; current && current !== body; current = current.parentElement) {
+      holdsStableControl.add(current);
     }
   }
+  // Excludes the region except the subtrees that hold a stable control.
+  const markDynamic = (region) => {
+    if (!holdsStableControl.has(region)) {
+      mark(region, 'DYNAMIC');
+      return;
+    }
+    if (stableControls.has(region)) return;
+    for (const child of region.children) markDynamic(child);
+  };
   const pageArea = Math.max(1, document.documentElement.scrollWidth * document.documentElement.scrollHeight);
   const area = (element) => {
     const rect = element.getBoundingClientRect();
@@ -128,7 +153,7 @@ function inspectRegions({
           || area(parent) > pageArea * maxPageShare) break;
       region = parent;
     }
-    mark(region, 'DYNAMIC');
+    markDynamic(region);
   }
 
   const regions = [];
@@ -156,6 +181,7 @@ const inspectionOptions = (mode, changedKeys = []) => ({
   changedKeys,
   minChangedShare: DYNAMIC_CONTAINER_MIN_CHANGED_SHARE,
   maxPageShare: DYNAMIC_CONTAINER_MAX_PAGE_SHARE,
+  stableControlSelector: STABLE_CONTROL_SELECTOR,
 });
 
 async function collectContentSignatures(page) {
@@ -175,10 +201,31 @@ async function loadComparisonSignatures(context, url, { settleMs = 5000 } = {}) 
   }
 }
 
+// A comparison load that shares less than this share of the analysed page's
+// content keys is a different page (error, block or consent screen), not a
+// second visit, and cannot tell stable content from changing content.
+const COMPARISON_MIN_SHARED_KEY_SHARE = 0.5;
+
+// Content that differs, or exists in only one of the loads, is changing
+// content. A feed that switches its layout or tab between visits has no
+// matching keys at all, so absence counts as a change. Content that only moved
+// inside the same id-anchored block is unchanged: a tab bar wraps whichever tab
+// is selected, which shifts the tabs' keys while their labels stay the same.
 function changedContentKeys(current, comparison) {
   if (!current || !comparison) return [];
-  return Object.keys(current).filter((key) =>
-    Object.prototype.hasOwnProperty.call(comparison, key) && comparison[key] !== current[key]);
+  const keys = Object.keys(current);
+  const has = (key) => Object.prototype.hasOwnProperty.call(comparison, key);
+  const shared = keys.filter(has).length;
+  if (keys.length === 0 || shared / keys.length < COMPARISON_MIN_SHARED_KEY_SHARE) return [];
+  const anchorOf = (key) => key.split('>')[0];
+  const comparisonByAnchor = new Map();
+  for (const [key, signature] of Object.entries(comparison)) {
+    const anchor = anchorOf(key);
+    if (!comparisonByAnchor.has(anchor)) comparisonByAnchor.set(anchor, new Set());
+    comparisonByAnchor.get(anchor).add(signature);
+  }
+  return keys.filter((key) => (!has(key) || comparison[key] !== current[key])
+    && !comparisonByAnchor.get(anchorOf(key))?.has(current[key]));
 }
 
 // Marks excluded regions in the analysed document and returns their document

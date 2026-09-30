@@ -1,6 +1,48 @@
 import { getLocatorExplanationKey, locatorLabels, type LocatorExplanationKey, type LocatorExplanationOptions } from "./locator-labels";
 import type { LocatorIssueState } from "./types";
 
+// A finding shown on another element than itself, and why. The rail lists
+// never contain on-page findings, so these labels live with the details.
+const presentations: Record<string, { label: string; ownedLabel?: string; description: string }> = {
+  SCREEN_READER_ONLY: {
+    label: "스크린리더 전용 텍스트",
+    ownedLabel: "{owner}의 스크린리더 전용 텍스트",
+    description: "화면에는 보이지 않고 스크린리더가 읽는 텍스트입니다. 이 텍스트가 속한 {owner}에 마커를 표시합니다."
+  },
+  INVISIBLE_ELEMENT: {
+    label: "보이지 않는 요소",
+    ownedLabel: "{owner} 안의 보이지 않는 요소",
+    description: "투명하거나 크기가 없어 눈에 보이지 않지만 스크린리더와 키보드로는 접근할 수 있는 요소입니다. 이 요소가 속한 {owner}에 마커를 표시합니다."
+  },
+  FRAME_CONTENT: {
+    label: "프레임 안의 요소",
+    description: "iframe 안에 있는 요소입니다. 프레임 내부의 정확한 위치 대신 프레임 영역에 마커를 표시합니다."
+  },
+  ASSISTIVE_HIDDEN: {
+    label: "보조기기에서 숨김",
+    description: "화면에는 보이지만 aria-hidden이 설정되어 스크린리더가 읽지 않는 요소입니다."
+  },
+  ASSISTIVE_INERT: {
+    label: "조작이 막힌 요소",
+    description: "화면에는 보이지만 inert가 설정되어 선택하거나 입력할 수 없는 요소입니다."
+  }
+};
+
+const ownerLabels: Record<string, string> = {
+  LINK: "링크", BUTTON: "버튼", FORM_CONTROL: "입력 요소", TABLE: "표", REGION: "영역", ELEMENT: "상위 요소"
+};
+
+function presentationFor(state?: LocatorIssueState) {
+  const onPage = state?.status === "VISIBLE" || state?.status === "CONNECTED" || state?.status === "OFFSCREEN";
+  return onPage && state.reason && Object.prototype.hasOwnProperty.call(presentations, state.reason)
+    ? presentations[state.reason]
+    : undefined;
+}
+
+export function hasLocatorPresentation(state?: LocatorIssueState): boolean {
+  return presentationFor(state) !== undefined;
+}
+
 const descriptions: Record<LocatorExplanationKey, string> = {
   checking: "현재 페이지에서 이 문제의 위치를 확인하고 있습니다.",
   coordinate: "요소 경로가 없는 시각 검사 결과입니다. 분석 화면에서 측정한 좌표에 표시하므로, 분석 이후 페이지 배치가 바뀌었다면 실제 글자와 어긋날 수 있습니다.",
@@ -23,7 +65,10 @@ const descriptions: Record<LocatorExplanationKey, string> = {
   carouselFailed: "분석 당시 슬라이드로 전환하지 못했습니다. 저장된 슬라이드 순서와 요소 경로를 확인해 주세요.",
   limitExceeded: "동적 화면은 최대 5,000개 문제의 위치를 확인합니다. 이 문제는 그 범위를 초과했습니다.",
   hiddenUnknown: "현재 화면에서는 보이지 않으며, 자동으로 해당 장면을 복원할 정보가 없습니다.",
-  unknown: "뷰어가 자세한 미표시 이유를 제공하지 않았습니다. 저장된 위치 정보를 참고해 주세요."
+  unknown: "뷰어가 자세한 미표시 이유를 제공하지 않았습니다. 저장된 위치 정보를 참고해 주세요.",
+  pageSetting: "뷰포트, 문서 제목, 언어처럼 화면에 그려지지 않고 페이지 전체에 적용되는 설정입니다. 특정 위치가 없으므로 마커를 표시하지 않습니다.",
+  focusReveal: "키보드로 초점을 옮기면 나타나는 요소입니다(예: 본문 바로가기). ‘문제 위치로 이동’을 누르면 초점을 옮겨 표시합니다.",
+  focusRevealFailed: "초점을 옮겼지만 요소가 화면에 나타나지 않았습니다. 저장된 요소 경로를 확인해 주세요."
 };
 
 // Descriptions are only read in the lazily loaded issue details; the page
@@ -32,6 +77,14 @@ export function getLocatorExplanation(
   state?: LocatorIssueState,
   options?: LocatorExplanationOptions
 ): { label: string; description: string } {
+  const presentation = options?.coordinateOnly ? undefined : presentationFor(state);
+  if (presentation) {
+    const owner = (state?.ownerKind && ownerLabels[state.ownerKind]) || "";
+    return {
+      label: owner && presentation.ownedLabel ? presentation.ownedLabel.replace("{owner}", owner) : presentation.label,
+      description: presentation.description.replace("{owner}", owner || "상위 요소")
+    };
+  }
   const key = getLocatorExplanationKey(state, options);
   return { label: locatorLabels[key], description: descriptions[key] };
 }

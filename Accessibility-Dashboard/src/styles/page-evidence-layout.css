@@ -951,6 +951,18 @@
   padding: 0.125rem 0.25rem;
 }
 
+.bridge-dashboard.dashboard-site-detail .site-page-analysis-actions__stale {
+  margin: 0;
+  padding: 0.125rem 0.375rem;
+  border-radius: 999px;
+  color: #93370d;
+  background: #fef0c7;
+  font-size: var(--site-rail-caption-size);
+  font-weight: 700;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+
 .bridge-dashboard.dashboard-site-detail .site-page-analysis-actions__rescan {
   display: inline-flex;
   align-items: center;

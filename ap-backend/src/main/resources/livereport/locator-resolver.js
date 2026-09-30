@@ -1,4 +1,4 @@
-function createLiveLocatorResolver({document, layer, observeMarkerShadowRoot, isObjectRecord}) {
+function createLiveLocatorResolver({document, layer, observeMarkerShadowRoot, isObjectRecord, carouselDescriptorFor}) {
   const issuePathSteps = item => {
     const storedSteps = Array.isArray(item?.pathSteps) ? item.pathSteps : [];
     return storedSteps.length > 0 ? storedSteps
@@ -41,6 +41,36 @@ function createLiveLocatorResolver({document, layer, observeMarkerShadowRoot, is
   const hasAnalyzedText = issue => issue?.analyzer === 'AI_TEXT'
     && isObjectRecord(issue.textAnalysis) && issue.textAnalysis.kind === 'text-analysis'
     && typeof issue.textAnalysis.sourceText === 'string';
+  // Visual-engine findings follow the element that was under their box and
+  // carry what it showed then: its text without whitespace and the path and
+  // query of its image (the session mirror keeps both). A feed card that now
+  // shows another article must not carry the old finding.
+  const hasAnalyzedContent = issue => issue?.analyzer === 'CV_VISION'
+    && isObjectRecord(issue.content) && typeof issue.content.text === 'string';
+  const analyzedContentTextLength = 160;
+  const imageSourcesOf = element => {
+    const sources = ['data-src', 'data-original', 'src', 'poster']
+      .map(name => element.getAttribute(name)).filter(Boolean);
+    if (typeof element.currentSrc === 'string' && element.currentSrc) sources.push(element.currentSrc);
+    const background = /url\(\s*(['"]?)([^'")]+)\1\s*\)/.exec(getComputedStyle(element).backgroundImage || '');
+    if (background) sources.push(background[2]);
+    return sources;
+  };
+  const matchesAnalyzedContent = (element, issue) => {
+    if (!hasAnalyzedContent(issue)) return true;
+    const expected = issue.content.text;
+    const text = String(element.textContent || '').normalize('NFKC').replace(/\s+/g, '');
+    // The analyzer keeps a bounded prefix of long container text.
+    if (expected.length >= analyzedContentTextLength ? !text.startsWith(expected) : text !== expected) return false;
+    const image = issue.content.image;
+    if (typeof image !== 'string' || !image) return true;
+    return imageSourcesOf(element).some(source => {
+      try {
+        const url = new URL(source, document.baseURI);
+        return `${url.pathname}${url.search}`.endsWith(image);
+      } catch (_) { return false; }
+    });
+  };
   const createLocatorQueryCache = () => ({single:new WeakMap(), all:new WeakMap(), shadowRoots:new Set()});
   const queryLocator = (root, selector, queries, all = false) => {
     const roots = all ? queries.all : queries.single;
@@ -103,6 +133,18 @@ function createLiveLocatorResolver({document, layer, observeMarkerShadowRoot, is
     }
     return match;
   };
+  // Older analyses stored selectors that include the carousel audit's
+  // temporary slide attributes. The live page never has them, so search
+  // without them and keep only the element on the recorded logical slide.
+  const auditAttribute = /\[data-ua-audit-[\w-]+(?:=(?:"[^"]*"|'[^']*'|[^\]]*))?\]/g;
+  const queryAuditedSlideLocator = (root, selector, item, queries) => {
+    const stripped = selector
+      .replace(new RegExp(`(^|[\\s>+~])${auditAttribute.source}`, 'g'), '$1*')
+      .replace(auditAttribute, '');
+    const candidates = Array.from(queryLocator(root, stripped, queries, true));
+    return candidates.find(candidate => !layer.contains(candidate)
+      && carouselDescriptorFor(candidate, item?.carouselContext)) || null;
+  };
   const resolveIssue = (item, queries = createLocatorQueryCache()) => {
     const steps = issuePathSteps(item);
     if (steps.length === 0) {
@@ -127,9 +169,15 @@ function createLiveLocatorResolver({document, layer, observeMarkerShadowRoot, is
           observeMarkerShadowRoot(root);
           queries.shadowRoots.add(root);
         } else if (context === 'FRAME') {
-          return {element:null, reason:'FRAME_UNSUPPORTED'};
+          // The frame document is not reachable from here. Show the finding on
+          // the frame that contains it instead of dropping its location.
+          return ['IFRAME', 'FRAME'].includes(current?.tagName)
+            ? {element:current, reason:null, presentation:{kind:'FRAME_CONTENT'}}
+            : {element:null, reason:'FRAME_UNSUPPORTED'};
         } else return {element:null, reason:'UNSUPPORTED_CONTEXT'};
-        current = queryLocator(root, step.selector, queries);
+        current = step.selector.includes('[data-ua-audit-')
+          ? queryAuditedSlideLocator(root, step.selector, item, queries)
+          : queryLocator(root, step.selector, queries);
         if (index === steps.length - 1 && (!current || !matchesAnalyzedText(current, item))) {
           const recovered = findReorderedTextTarget(root, step.selector, item, queries);
           if (recovered) { current = recovered; reordered = true; }
@@ -139,8 +187,11 @@ function createLiveLocatorResolver({document, layer, observeMarkerShadowRoot, is
     } catch (_) { return {element:null, reason:'INVALID_SELECTOR'}; }
     // An nth-of-type selector can still resolve after a news card was
     // replaced. Its old analysis must never label the new content.
-    if (!matchesAnalyzedText(current, item)) return {element:null, reason:'ELEMENT_CONTENT_CHANGED'};
+    if (!matchesAnalyzedText(current, item) || !matchesAnalyzedContent(current, item)) {
+      return {element:null, reason:'ELEMENT_CONTENT_CHANGED'};
+    }
     return {element:current, reason:null, recovered:reordered};
   };
-  return {isSimpleDocumentLocator, hasAnalyzedText, createLocatorQueryCache, resolveIssue, releaseCoordinateTargets};
+  return {isSimpleDocumentLocator, hasAnalyzedText, hasAnalyzedContent, createLocatorQueryCache, resolveIssue,
+    releaseCoordinateTargets};
 }

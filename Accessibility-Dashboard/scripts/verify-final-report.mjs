@@ -71,7 +71,8 @@ const locatorStates = {
 async function installReportFixture(page) {
   const fixture = await installDashboardApiFixture(page);
   const session = createTestLiveReportSession(501, "final_report");
-  const viewer = createTestLiveReportViewerHtml({ session, documentToken: "final_report_document" }).replace(
+  // Built per request so a scenario can change the reported locations.
+  const viewer = () => createTestLiveReportViewerHtml({ session, documentToken: "final_report_document" }).replace(
     'if (message.type === "REQUEST_DOCUMENT_STATE") {',
     `if (message.type === "INIT_ISSUES") {
       const states = ${JSON.stringify(locatorStates)};
@@ -90,7 +91,7 @@ async function installReportFixture(page) {
     if (request.method() === "POST" && pathname === "/api/results/requests/501/live-session") return fulfillJson(route, session);
     if (request.method() === "GET" && request.url() === session.runtimeUrl) {
       viewerDocumentRequests += 1;
-      return route.fulfill({ status: 200, contentType: "text/html", body: viewer });
+      return route.fulfill({ status: 200, contentType: "text/html", body: viewer() });
     }
     return route.fallback();
   });
@@ -260,6 +261,49 @@ try {
   assert.match(await report.getByRole("note").first().innerText(), /텍스트 검사가 실패해/);
   delete fixture.score.textStatus;
   console.log("PASS failed text analysis is shown as not checked");
+
+  // Findings shown on their owner, page settings, and findings the page no
+  // longer matches each get their own place and a re-analysis hint.
+  issues.push(
+    {
+      id: 9108, requestId: 501, module: "rule_based", severity: "SERIOUS", ruleId: "meta-viewport", wcagCode: "meta-viewport",
+      title: "Zooming and scaling must not be disabled", description: "Ensure <meta name=\"viewport\"> does not disable zooming",
+      recommendation: null, selector: 'meta[name="viewport"]',
+      locator: domLocator([{ context: "DOCUMENT", selector: 'meta[name="viewport"]', frameUrl: null }], '<meta name="viewport">'), createdAt
+    },
+    {
+      id: 9109, requestId: 501, module: "text_difficulty", severity: "MODERATE", ruleId: null, wcagCode: "WCAG 3.1.5",
+      title: "읽기 수준", description: "문장이 어렵습니다.", recommendation: null, selector: "#news li:nth-of-type(3)",
+      locator: domLocator([{ context: "DOCUMENT", selector: "#news li:nth-of-type(3)", frameUrl: null }], "<li>지난 뉴스</li>"), createdAt
+    }
+  );
+  Object.assign(locatorStates, {
+    9101: { status: "VISIBLE", reason: "SCREEN_READER_ONLY", ownerKind: "BUTTON" },
+    9108: { status: "UNAVAILABLE", reason: "DOCUMENT_METADATA" },
+    9109: { status: "UNAVAILABLE", reason: "ELEMENT_CONTENT_CHANGED" }
+  });
+  await page.goto(`${baseUrl}/projects/1/pages/101`);
+  await waitForLocatorStates(page);
+  const outdatedList = page.getByRole("region", { name: "분석 이후 바뀐 문제" });
+  await outdatedList.waitFor();
+  assert.match(await outdatedList.innerText(), /1건[\s\S]*분석 이후 내용이 바뀜/);
+  assert.match(await page.getByRole("region", { name: "페이지 전체 설정" }).innerText(), /1건[\s\S]*페이지 전체 설정/);
+  assert.equal(await page.locator(".site-page-analysis-actions__stale").isVisible(), true, "the header suggests re-analysis");
+  console.log("PASS rail separates page settings and findings the page no longer matches");
+
+  await reportTab.click();
+  await report.waitFor();
+  assert.equal(await metricText("위치 표시 불가"), "4건", "page settings and changed findings have no position either");
+  assert.match(await report.getByRole("note").filter({ hasText: "분석 이후 페이지 내용이 바뀌어" }).innerText(), /문제 1건/);
+  await report.getByRole("button", { name: "모두 펼치기" }).click();
+  assert.match(await report.locator('.site-final-report__issue[data-issue-id="9101"] .site-final-report__location').innerText(),
+    /페이지에서 확인 가능 · 버튼의 스크린리더 전용 텍스트/);
+  assert.match(await report.locator('.site-final-report__issue[data-issue-id="9108"] .site-final-report__location').innerText(),
+    /페이지 전체 설정 · 화면 위치 없음/);
+  await report.getByLabel("위치 상태").selectOption("outdated");
+  assert.match(await report.locator(".site-final-report__result-count").innerText(), /전체 7건 중 1건/);
+  await report.getByLabel("위치 상태").selectOption("ALL");
+  console.log("PASS report labels moved markers, page settings and changed findings");
 
   fixture.assertIsolated();
   assert.deepEqual(errors, []);

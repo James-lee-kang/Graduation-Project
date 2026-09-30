@@ -256,5 +256,57 @@ class CvRuleDeduplicationTests(unittest.TestCase):
         self.assertIs(run_all.drop_cv_violations_covered_by_rules(empty, self.rule_result((0, 0, 9, 9)), None), empty)
 
 
+class CvAnchorLocatorTests(unittest.TestCase):
+    ANCHORS = [
+        {"x": 0, "y": 0, "width": 1000, "height": 500, "selector": "#feed", "text": "추천관심사", "image": None,
+         "htmlSnippet": '<div id="feed"></div>'},
+        {"x": 100, "y": 100, "width": 200, "height": 120, "selector": "#feed > div > a", "text": "기사제목",
+         "image": None, "htmlSnippet": "<a>기사제목</a>"},
+        {"x": 110, "y": 110, "width": 80, "height": 60, "selector": "#feed > div > a > img", "text": "",
+         "image": "/thumb/1.jpg?type=f", "htmlSnippet": '<img src="https://s.example/thumb/1.jpg?type=f">'},
+        {"x": 0, "y": 0, "width": 0, "height": 0, "selector": "#hidden", "text": "", "image": None},
+    ]
+
+    @staticmethod
+    def cv_result(*locations, excluded=()):
+        return {
+            "summary": {"total_texts_analyzed": 5, "pass_rate": 40, "fail_count": len(locations)},
+            "violations": [{"text": str(i), "location": location} for i, location in enumerate(locations)],
+            "excluded_violations": [{"text": "x", "reason": "DYNAMIC", "location": location} for location in excluded],
+        }
+
+    def test_each_finding_follows_the_smallest_element_under_its_box(self):
+        cv = self.cv_result(
+            {"x": 140, "y": 130, "width": 20, "height": 10},   # text burnt into the thumbnail
+            {"x": 200, "y": 190, "width": 60, "height": 20},   # headline outside the image
+            {"x": 2000, "y": 2000, "width": 10, "height": 10},  # nothing there
+            excluded=({"x": 600, "y": 400, "width": 20, "height": 10},),
+        )
+        attached = run_all.attach_cv_locators(cv, self.ANCHORS, {"deviceScaleFactor": 1})
+        thumbnail, headline, orphan = attached["violations"]
+        self.assertEqual(thumbnail["locator"]["pathSteps"], [{"context": "DOCUMENT", "selector": "#feed > div > a > img"}])
+        self.assertEqual(thumbnail["locator"]["content"], {"text": "", "image": "/thumb/1.jpg?type=f"})
+        self.assertEqual(thumbnail["locator"]["coordinateSpace"], "DOCUMENT_CSS_PX")
+        self.assertEqual((thumbnail["locator"]["x"], thumbnail["locator"]["y"]), (140, 130))
+        self.assertEqual(headline["locator"]["pathSteps"][0]["selector"], "#feed > div > a")
+        self.assertEqual(headline["locator"]["content"], {"text": "기사제목", "image": None})
+        self.assertNotIn("locator", orphan, "a box over no element keeps only its coordinates")
+        self.assertEqual(attached["excluded_violations"][0]["locator"]["pathSteps"][0]["selector"], "#feed")
+        self.assertEqual(attached["summary"], cv["summary"], "the score sample is unchanged")
+        self.assertNotIn("locator", cv["violations"][0], "the loaded CV result is not mutated")
+
+    def test_screenshot_pixels_are_scaled_before_matching(self):
+        cv = self.cv_result({"x": 280, "y": 260, "width": 40, "height": 20})
+        attached = run_all.attach_cv_locators(cv, self.ANCHORS, {"deviceScaleFactor": 2})
+        self.assertEqual(attached["violations"][0]["locator"]["pathSteps"][0]["selector"], "#feed > div > a > img")
+        self.assertEqual(attached["violations"][0]["locator"]["width"], 20)
+
+    def test_missing_anchors_leave_the_result_unchanged(self):
+        cv = self.cv_result({"x": 140, "y": 130, "width": 20, "height": 10})
+        for anchors in (None, [], {"not": "a list"}):
+            with self.subTest(anchors=anchors):
+                self.assertIs(run_all.attach_cv_locators(cv, anchors, None), cv)
+
+
 if __name__ == "__main__":
     unittest.main()

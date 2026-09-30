@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { getLocatorExplanation } from "./locator-explanation";
+import { getLocatorExplanation, hasLocatorPresentation } from "./locator-explanation";
 import { getLocatorLabel } from "./locator-labels";
 
 describe("locator labels", () => {
@@ -16,10 +16,27 @@ describe("locator labels", () => {
     [{ status: "UNAVAILABLE", reason: "ISSUE_LIMIT_EXCEEDED" }, "표시 한도 초과"],
     [{ status: "HIDDEN_STATE", reason: "SOMETHING_NEW" }, "현재 숨겨진 요소"],
     [{ status: "UNAVAILABLE", reason: "toString" }, "위치를 확인하지 못함"],
-    [{ status: "UNAVAILABLE" }, "위치를 확인하지 못함"]
+    [{ status: "UNAVAILABLE" }, "위치를 확인하지 못함"],
+    [{ status: "VISIBLE", reason: "SCREEN_READER_ONLY", ownerKind: "BUTTON" }, "버튼의 스크린리더 전용 텍스트"],
+    [{ status: "OFFSCREEN", reason: "INVISIBLE_ELEMENT", ownerKind: "LINK" }, "링크 안의 보이지 않는 요소"],
+    [{ status: "VISIBLE", reason: "SCREEN_READER_ONLY" }, "스크린리더 전용 텍스트"],
+    [{ status: "VISIBLE", reason: "FRAME_CONTENT" }, "프레임 안의 요소"],
+    [{ status: "VISIBLE", reason: "ASSISTIVE_HIDDEN" }, "보조기기에서 숨김"],
+    [{ status: "VISIBLE", reason: "ASSISTIVE_INERT" }, "조작이 막힌 요소"],
+    [{ status: "HIDDEN_STATE", reason: "FOCUS_TO_REVEAL", recoverable: true }, "포커스하면 나타나는 요소"],
+    [{ status: "HIDDEN_STATE", reason: "FOCUS_REVEAL_FAILED", recoverable: false }, "포커스해도 나타나지 않음"],
+    [{ status: "UNAVAILABLE", reason: "DOCUMENT_METADATA" }, "페이지 전체 설정"]
   ] as const)("classifies %o as %s in the rail and the details", (state, label) => {
-    expect(getLocatorLabel(state)).toBe(label);
     expect(getLocatorExplanation(state).label).toBe(label);
     expect(getLocatorExplanation(state).description.length).toBeGreaterThan(0);
+    // The rail lists only contain findings without a marker.
+    if (!hasLocatorPresentation(state)) expect(getLocatorLabel(state)).toBe(label);
+  });
+
+  it("names the element a moved marker belongs to", () => {
+    const { description } = getLocatorExplanation({ status: "VISIBLE", reason: "SCREEN_READER_ONLY", ownerKind: "TABLE" });
+    expect(description).toContain("속한 표에");
+    expect(description).not.toContain("{owner}");
+    expect(getLocatorExplanation({ status: "VISIBLE", reason: "INVISIBLE_ELEMENT" }).description).toContain("상위 요소");
   });
 });

@@ -33,7 +33,6 @@ import { PageAnalysisActions } from "./site-dashboard/page-analysis-actions";
 import { RenderedPageEvidenceCard } from "./site-dashboard/rendered-page-evidence-card";
 import { SeverityDistributionPanel } from "./site-dashboard/severity-distribution-panel";
 import type { LocatorReport, RecentIssueRow } from "./site-dashboard/types";
-import { UnavailableLocatorPanel } from "./site-dashboard/unavailable-locator-panel";
 import { useEvaluationCaptureMetadata } from "./site-dashboard/use-evaluation-capture-metadata";
 import { useEvaluationResultDetails } from "./site-dashboard/use-evaluation-result-details";
 import { useLiveReportSession } from "./site-dashboard/use-live-report-session";
@@ -45,6 +44,9 @@ const IssueLocationDialog = lazy(() => import("./site-dashboard/issue-location-d
   .then(module => ({ default: module.IssueLocationDialog })));
 const FinalReportPanel = lazy(() => import("./site-dashboard/final-report-panel")
   .then(module => ({ default: module.FinalReportPanel })));
+// The location lists fill in only after the live page reports positions.
+const UnavailableLocatorPanel = lazy(() => import("./site-dashboard/unavailable-locator-panel")
+  .then(module => ({ default: module.UnavailableLocatorPanel })));
 
 type SiteDashboardPanelProps = {
   evaluationTarget: EvaluationTargetModel;
@@ -317,6 +319,14 @@ function SiteDashboardResults(props: SiteDashboardPanelProps) {
     const hiddenIssueIds = new Set(currentLocatorReport?.recoverableHiddenIssueIds);
     return replayIssueRows.filter(({ issue }) => hiddenIssueIds.has(issue.id));
   }, [currentLocatorReport, replayIssueRows]);
+  const [pageSettingIssueRows, outdatedIssueRows] = useMemo(() => {
+    const pageSettingIds = new Set(currentLocatorReport?.pageSettingIssueIds);
+    const outdatedIds = new Set(currentLocatorReport?.outdatedIssueIds);
+    return [
+      replayIssueRows.filter(({ issue }) => pageSettingIds.has(issue.id)),
+      replayIssueRows.filter(({ issue }) => outdatedIds.has(issue.id))
+    ];
+  }, [currentLocatorReport, replayIssueRows]);
   const locationRow = replayIssueRows.find(({ issue }) => issue.id === locationIssueId);
   const evidenceLiveSessionLoadState =
     previewEvidence !== undefined
@@ -361,6 +371,7 @@ function SiteDashboardResults(props: SiteDashboardPanelProps) {
               analyzedAt={latestAnalyzedAt}
               isRequestingAnalysis={isRequestingAnalysis}
               analysisRequestError={analysisRequestError}
+              outdatedIssueCount={locatorCheckState === "ready" ? outdatedIssueRows.length : 0}
               onRequestAnalysis={!previewEvidence && onRequestEvaluationTargetAnalysis && onAnalysisAccepted
                 ? handleRequestAnalysis
                 : undefined}
@@ -424,21 +435,40 @@ function SiteDashboardResults(props: SiteDashboardPanelProps) {
                   현재 페이지에 연결하지 못했습니다. 저장된 분석 결과를 표시합니다.
                 </p>}
               </SeverityDistributionPanel>
-              <UnavailableLocatorPanel
-                mode="recoverable"
-                checkState={locatorCheckState}
-                rows={recoverableHiddenLocatorIssueRows}
-                onSelectIssue={revealHiddenIssue}
-                onShowLocation={setLocationIssueId}
-                issueStates={currentLocatorReport?.issueStates}
-              />
-              <UnavailableLocatorPanel
-                checkState={locatorCheckState}
-                hasHiddenIssues={recoverableHiddenLocatorIssueRows.length > 0}
-                rows={unavailableLocatorIssueRows}
-                onShowLocation={setLocationIssueId}
-                issueStates={currentLocatorReport?.issueStates}
-              />
+              <ErrorBoundary resetKey={String(latestResultRequestId)} fallback={() => null}>
+                <Suspense fallback={null}>
+                  <UnavailableLocatorPanel
+                    mode="recoverable"
+                    checkState={locatorCheckState}
+                    rows={recoverableHiddenLocatorIssueRows}
+                    onSelectIssue={revealHiddenIssue}
+                    onShowLocation={setLocationIssueId}
+                    issueStates={currentLocatorReport?.issueStates}
+                  />
+                  <UnavailableLocatorPanel
+                    mode="outdated"
+                    checkState={locatorCheckState}
+                    rows={outdatedIssueRows}
+                    onShowLocation={setLocationIssueId}
+                    issueStates={currentLocatorReport?.issueStates}
+                  />
+                  <UnavailableLocatorPanel
+                    mode="page-settings"
+                    checkState={locatorCheckState}
+                    rows={pageSettingIssueRows}
+                    onShowLocation={setLocationIssueId}
+                    issueStates={currentLocatorReport?.issueStates}
+                  />
+                  <UnavailableLocatorPanel
+                    checkState={locatorCheckState}
+                    hasHiddenIssues={recoverableHiddenLocatorIssueRows.length + outdatedIssueRows.length
+                      + pageSettingIssueRows.length > 0}
+                    rows={unavailableLocatorIssueRows}
+                    onShowLocation={setLocationIssueId}
+                    issueStates={currentLocatorReport?.issueStates}
+                  />
+                </Suspense>
+              </ErrorBoundary>
             </>
           )}
         </div>

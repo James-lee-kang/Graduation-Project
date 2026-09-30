@@ -408,6 +408,19 @@ describe("createEvaluationIssuesResponseParser", () => {
     );
   });
 
+  it("keeps the analysed content of the element under a visual finding", () => {
+    const issue = createEvaluationIssue();
+    const content = { text: "33kg감량풍자", image: "/thumb/1.jpg?type=f" };
+    const parsed = parseIssues([{ ...issue, locator: { ...issue.locator, content } }], "$.data");
+    expect(parsed[0]?.locator?.content).toEqual(content);
+    expect(parseIssues([{ ...issue, locator: { ...issue.locator, content: null } }], "$.data")[0]?.locator?.content)
+      .toBeNull();
+    expectContractError(
+      () => parseIssues([{ ...issue, locator: { ...issue.locator, content: { text: 1, image: null } } }], "$.data"),
+      "$.data[0].locator.content.text"
+    );
+  });
+
   it.each([
     [{ carouselId: 0, slideIndex: 1, slideCount: 4 }, "carouselId"],
     [{ carouselId: 2, slideIndex: -1, slideCount: 4 }, "slideIndex"],

@@ -71,10 +71,16 @@
   const dirtyTextIssueIds = new Set();
   let simpleDocumentLocators = false;
   let textLocatorIssues = [];
+  let contentLocatorIssues = [];
   let focusRequestVersion = 0;
   let pendingFocusIssueId = null;
   let locatorTargetsNeedReconciliation = false;
   let lastFocusedIssueId = null;
+  // Elements whose attributes changed since the last marker pass. A style or
+  // class change can make a target screen-reader-only or visible again, which
+  // moves its marker between the element and the element it belongs to.
+  const presentationMutationTargets = new Set();
+  const locatorPresentationByIssueId = new Map();
   const locatorStateOnlyAttributes = new Set([
     'style', 'hidden', 'inert', 'aria-hidden', 'aria-current',
     'aria-expanded', 'aria-selected', 'tabindex'
@@ -98,6 +104,9 @@
   let openEntry = null;
   let highlightedEntry = null;
   let closeTimer = 0;
+  // Once the reader works inside the popover (paging a cluster, selecting text)
+  // it stays open when the pointer drifts off; outside clicks and Escape close it.
+  let popoverPinned = false;
   let restoringMarkerFocus = false;
   let markerPositionFrame = 0;
   let pendingMarkerPositionMode = 'preserve-root';
@@ -129,6 +138,14 @@
   const markerSearchRingLimit = 12;
   const markerProtectedTextRectBudget = 512;
   const markerProtectedTextPerElementLimit = 32;
+  // 탭 줄·메뉴·달력처럼 한 덩어리로 읽히는 작은 목록/표 안의 칩은 하나로 묶는다
+  const markerGroupContainerSelector = [
+    'ul', 'ol', 'menu', 'nav', 'table',
+    '[role="list"]', '[role="tablist"]', '[role="menubar"]', '[role="menu"]', '[role="listbox"]',
+    '[role="grid"]', '[role="treegrid"]', '[role="table"]', '[role="tree"]', '[role="radiogroup"]',
+    '[role="toolbar"]', '[role="navigation"]'
+  ].join(',');
+  const markerGroupMaxHeight = 360;
   const maxHighlightFragments = 128;
   const popover = document.createElement('section');
   popover.id = 'ap-live-issue-popover';
@@ -248,6 +265,13 @@
       .every(entry => numberIsFinite(entry) && Math.abs(entry) <= 1000000)
     && value.width > 0 && value.height > 0
   );
+  const isBoundedLocatorContent = value => value === undefined || value === null || (
+    isObjectRecord(value)
+    && Object.keys(value).length <= 4
+    && typeof value.text === 'string' && value.text.length <= 200
+    && (value.image === null || value.image === undefined
+      || (typeof value.image === 'string' && value.image.length <= 2048))
+  );
   const isBoundedLiveCommand = payload => {
     if (!isObjectRecord(payload) || payload.source !== parentSource || typeof payload.type !== 'string') return false;
     if (payload.type === 'REQUEST_DOCUMENT_STATE') return true;
@@ -275,6 +299,7 @@
             && (typeof issue.analyzer !== 'string' || issue.analyzer.length > 16))
           || !arrayIsArray(issue.pathSteps) || issue.pathSteps.length > 128
           || !isBoundedCoordinateBox(issue.box)
+          || !isBoundedLocatorContent(issue.content)
           || !isBoundedCarouselContext(issue.carouselContext)) return false;
     }
     return true;
@@ -1381,6 +1406,9 @@ const handleMarkerMutations = records => {
       schedulePosition('preserve-root');
     }
     if (currentIssues.length > 0 && externalRecords.length > 0) {
+      externalRecords.forEach(record => {
+        if (record.type === 'attributes') presentationMutationTargets.add(record.target);
+      });
       // Only the known generated grammar can ignore unrelated attributes.
       // Structural edits, IDs, arbitrary selectors and Shadow DOM paths retain
       // full reconciliation because they can change the first matching target.
@@ -1398,6 +1426,17 @@ const handleMarkerMutations = records => {
           // Missing/reordered text targets can recover somewhere other than
           // their last element, so their text dependencies remain conservative.
           if (!previous?.element || previous.recovered || textRecords.some(record =>
+              previous.element.contains(record.target))) dirtyTextIssueIds.add(issue.id);
+        });
+        // Visual-engine findings compare text and image; a swapped image
+        // source or background class changes what the element shows.
+        const contentRecords = externalRecords.filter(record => record.type === 'characterData'
+          || (record.type === 'attributes'
+            && ['src', 'srcset', 'data-src', 'data-original', 'poster', 'style', 'class']
+              .includes(record.attributeName)));
+        if (contentRecords.length > 0) contentLocatorIssues.forEach(issue => {
+          const previous = resolvedIssueTargets.get(issue.id);
+          if (!previous?.element || contentRecords.some(record =>
               previous.element.contains(record.target))) dirtyTextIssueIds.add(issue.id);
         });
       }
@@ -1492,15 +1531,46 @@ const issueLabel = issue => [
   textValue(issue.severityLabel || issue.severity, 32), textValue(issue.code, 128),
   textValue(issue.title, 300)
 ].filter(Boolean).join(' ');
+// Why a marker sits where it does when that is not the element itself.
+const presentationOwnerLabels = Object.freeze({
+  LINK:'링크', BUTTON:'버튼', FORM_CONTROL:'입력 요소', TABLE:'표', REGION:'영역', ELEMENT:'상위 요소'
+});
+const presentationNoteReasons = new Set([
+  'SCREEN_READER_ONLY', 'INVISIBLE_ELEMENT', 'FRAME_CONTENT', 'ASSISTIVE_HIDDEN', 'ASSISTIVE_INERT'
+]);
+const presentationNoteFor = issue => {
+  const presentation = locatorPresentationByIssueId.get(issue?.id);
+  if (!presentation) return '';
+  const owner = presentationOwnerLabels[presentation.ownerKind] || '상위 요소';
+  switch (presentation.reason) {
+    case 'SCREEN_READER_ONLY':
+      return `화면에 보이지 않는 스크린리더 전용 텍스트입니다. 이 텍스트가 속한 ${owner}에 표시했습니다.`;
+    case 'INVISIBLE_ELEMENT':
+      return `투명하거나 크기가 없어 보이지 않는 요소입니다. 이 요소가 속한 ${owner}에 표시했습니다.`;
+    case 'FRAME_CONTENT':
+      return 'iframe 안에 있는 요소입니다. 프레임 영역에 표시했습니다.';
+    case 'ASSISTIVE_HIDDEN':
+      return '화면에는 보이지만 스크린리더에서는 숨겨진(aria-hidden) 요소입니다.';
+    case 'ASSISTIVE_INERT':
+      return '화면에는 보이지만 선택하거나 입력할 수 없게 막힌(inert) 요소입니다.';
+    default:
+      return '';
+  }
+};
 const reportLocatorState = (issue, state) => {
   if (!issue || !isIssueId(issue.id) || !state?.status) return;
   const recoverable = state.status === 'HIDDEN_STATE' && state.recoverable === true;
-  const signature = `${state.status}:${state.reason || ''}:${state.status === 'HIDDEN_STATE' ? recoverable : ''}`;
+  const ownerKind = typeof state.ownerKind === 'string' ? state.ownerKind : '';
+  const signature = `${state.status}:${state.reason || ''}:${state.status === 'HIDDEN_STATE' ? recoverable : ''}:${ownerKind}`;
+  if (presentationNoteReasons.has(state.reason) && (state.status === 'VISIBLE' || state.status === 'OFFSCREEN')) {
+    locatorPresentationByIssueId.set(issue.id, {reason:state.reason, ownerKind});
+  } else locatorPresentationByIssueId.delete(issue.id);
   if (locatorStatusSignatures.get(issue.id) === signature) return;
   locatorStatusSignatures.set(issue.id, signature);
   const event = {type:'LOCATOR_STATUS', issueId:issue.id, status:state.status};
   if (typeof state.reason === 'string' && state.reason) event.reason = state.reason;
   if (state.status === 'HIDDEN_STATE') event.recoverable = recoverable;
+  if (ownerKind) event.ownerKind = ownerKind;
   post(event);
 };
 const clearCloseTimer = () => {
@@ -1866,6 +1936,7 @@ const setHighlightedEntry = (entry, selected = false) => {
 };
 const closePopover = ({restoreFocus = false} = {}) => {
   clearCloseTimer();
+  popoverPinned = false;
   const previous = openEntry;
   openEntry = null;
   openTargetEntry = null;
@@ -1888,6 +1959,7 @@ const closePopover = ({restoreFocus = false} = {}) => {
 };
 const scheduleClosePopover = () => {
   clearCloseTimer();
+  if (popoverPinned) return;
   closeTimer = setTimeout(() => {
     closeTimer = 0;
     if (!popover.matches(':hover') && !popover.contains(document.activeElement)
@@ -1898,7 +1970,65 @@ const scheduleClosePopover = () => {
 };
 let openSelected = false;
 let openTargetEntry = null;
-  const {renderDetailContent, sizePopoverForCluster, positionPopover} = createLivePopoverView({document, popover, popoverTags, popoverDetail, createSeverityBadge, createCodeBadge, textValue, clusterIssuesFor, getState: () => ({openEntry, openTargetEntry, viewScale, viewTopInset})});
+  const {renderDetailContent, sizePopoverForCluster, positionPopover:placePopoverBesideChip} = createLivePopoverView({document, popover, popoverTags, popoverDetail, createSeverityBadge, createCodeBadge, textValue, clusterIssuesFor, presentationNoteFor, getState: () => ({openEntry, openTargetEntry, viewScale, viewTopInset})});
+// 팝오버가 문제 위치를 덮으면 어디가 문제인지 안 보인다. 칩 옆 자리가 칩이나 칩에
+// 묶인 요소(넘겨 볼 이슈의 하이라이트 자리)를 가리면, 가리지 않는 자리로 옮긴다.
+// 묶인 요소 전체를 피해야 < > 로 넘길 때도 팝오버가 제자리에 있다.
+const positionPopover = (documentLeft = globalThis.scrollX, documentTop = globalThis.scrollY) => {
+  placePopoverBesideChip(documentLeft, documentTop);
+  if (popover.hidden || !openEntry) return;
+  const current = popover.getBoundingClientRect();
+  const width = current.width;
+  const height = current.height;
+  const highlightGap = 4 / viewScale;
+  const gap = 8 / viewScale;
+  const markerVisible = openEntry.marker?.isConnected && !openEntry.marker.hidden;
+  const avoided = markerVisible ? [openEntry.marker.getBoundingClientRect()] : [];
+  [openEntry, ...(openEntry.clusterMembers || [])].forEach(entry => {
+    if (!entry?.element?.isConnected) return;
+    const rect = entry.element.getBoundingClientRect();
+    avoided.push({
+      left:rect.left - highlightGap, top:rect.top - highlightGap,
+      right:rect.right + highlightGap, bottom:rect.bottom + highlightGap
+    });
+  });
+  if (avoided.length === 0) return;
+  const overlapAt = (left, top) => avoided.reduce((sum, rect) => sum
+    + Math.max(0, Math.min(left + width, rect.right) - Math.max(left, rect.left))
+    * Math.max(0, Math.min(top + height, rect.bottom) - Math.max(top, rect.top)), 0);
+  const currentOverlap = overlapAt(current.left, current.top);
+  if (currentOverlap === 0) return;
+  const viewportLeft = 12;
+  const viewportTop = 12 + viewTopInset / viewScale;
+  const viewportRight = innerWidth - 12;
+  const viewportBottom = innerHeight - 12;
+  const clamp = (value, min, max) => Math.max(min, Math.min(value, Math.max(min, max)));
+  const anchor = avoided[0];
+  const covered = avoided.reduce((union, rect) => ({
+    left:Math.min(union.left, rect.left), top:Math.min(union.top, rect.top),
+    right:Math.max(union.right, rect.right), bottom:Math.max(union.bottom, rect.bottom)
+  }), anchor);
+  const alignedLeft = anchor.left + width <= viewportRight ? anchor.left : anchor.right - width;
+  // 칩 위 → 칩 옆 → 묶인 요소 전체의 아래·옆 순서로 가리지 않는 첫 자리를 쓰고,
+  // 모두 가리면 가장 적게 가리는 자리를 쓴다.
+  const best = [
+    {left:alignedLeft, top:anchor.top - gap - height},
+    {left:anchor.right + gap, top:anchor.top},
+    {left:anchor.left - gap - width, top:anchor.top},
+    {left:alignedLeft, top:covered.bottom + gap},
+    {left:covered.right + gap, top:anchor.top},
+    {left:covered.left - gap - width, top:anchor.top}
+  ].reduce((chosen, candidate) => {
+    if (chosen.overlap === 0) return chosen;
+    const left = clamp(candidate.left, viewportLeft, viewportRight - width);
+    const top = clamp(candidate.top, viewportTop, viewportBottom - height);
+    const overlap = overlapAt(left, top);
+    return overlap < chosen.overlap ? {left, top, overlap} : chosen;
+  }, {left:current.left, top:current.top, overlap:currentOverlap});
+  const fixed = popover.style.position === 'fixed';
+  popover.style.left = `${best.left + (fixed ? 0 : documentLeft)}px`;
+  popover.style.top = `${best.top + (fixed ? 0 : documentTop)}px`;
+};
 const renderDetail = (entry, issue, notify = false) => {
   if (!entry || !issue) return;
   entry.selectedIssueId = issue.id;
@@ -1929,7 +2059,14 @@ const navigatePopoverIssue = delta => {
     Math.max(0, (currentIndex < 0 ? 0 : currentIndex) + delta)
   );
   if (nextIndex === currentIndex || nextIndex < 0) return;
+  popoverPinned = true;
+  clearCloseTimer();
+  const focusedPager = [popoverPrevious, popoverNext].find(button => button === document.activeElement);
   renderDetail(openEntry, clusterIssues[nextIndex], true);
+  // The first/last issue disables its pager button; keep keyboard focus in the popover.
+  if (focusedPager?.disabled) {
+    (focusedPager === popoverNext ? popoverPrevious : popoverNext).focus({preventScroll:true});
+  }
 };
 popoverPrevious.addEventListener('click', event => {
   event.preventDefault(); event.stopPropagation(); navigatePopoverIssue(-1);
@@ -1944,6 +2081,7 @@ const openPopover = (entry, preferredIssueId = null, notify = false, selected = 
   }
   if (!entry) return;
   clearCloseTimer();
+  if (entry !== openEntry) popoverPinned = false;
   openEntry = entry;
   openSelected = selected;
   setHighlightedEntry(entry, selected);
@@ -2123,14 +2261,17 @@ const targetVisibleInViewport = (element, rect) => (
     && rect.right > 0 && rect.bottom > 0
     && rect.left < innerWidth && rect.top < innerHeight
   );
+  // Visual hiding is reported first. aria-hidden and inert only remove the
+  // element from assistive technology or interaction; it is still on screen.
   const hiddenStateForElement = element => {
+    let assistive = null;
     for (let current = element; current instanceof Element; current = composedElementParent(current)) {
       const style = getComputedStyle(current);
       const opacity = Number.parseFloat(style.opacity);
       if (current.hidden) return {element:current, reason:'HIDDEN_ATTRIBUTE'};
-      if (current.hasAttribute('inert')) return {element:current, reason:'INERT_STATE'};
-      if (current.getAttribute('aria-hidden') === 'true') {
-        return {element:current, reason:'ARIA_HIDDEN_STATE'};
+      if (!assistive && current.hasAttribute('inert')) assistive = {element:current, reason:'INERT_STATE'};
+      if (!assistive && current.getAttribute('aria-hidden') === 'true') {
+        assistive = {element:current, reason:'ARIA_HIDDEN_STATE'};
       }
       if (style.display === 'none') return {element:current, reason:'DISPLAY_NONE'};
       if (style.visibility === 'hidden' || style.visibility === 'collapse') {
@@ -2143,21 +2284,138 @@ const targetVisibleInViewport = (element, rect) => (
         return {element:current, reason:'ZERO_OPACITY'};
       }
     }
+    return assistive;
+  };
+  const isAssistiveOnlyHidden = hiddenState => hiddenState?.reason === 'ARIA_HIDDEN_STATE'
+    || hiddenState?.reason === 'INERT_STATE';
+  // Screen-reader-only text is clipped to a 1px box or moved off the page. It
+  // is still read aloud, so its finding is shown on the element it belongs to.
+  const clippedToNothing = (style, rect) => (rect.width <= 1 || rect.height <= 1)
+    && ((rect.width <= 1 && rect.height <= 1) || style.overflow !== 'visible'
+      || style.clip !== 'auto' || style.clipPath !== 'none');
+  const screenReaderOnlyAncestor = element => {
+    let depth = 0;
+    for (let current = element; current instanceof Element && depth < 8; current = composedElementParent(current)) {
+      if (current === document.body || current === document.documentElement) break;
+      depth += 1;
+      const style = getComputedStyle(current);
+      if (style.display === 'contents') continue;
+      const rect = current.getBoundingClientRect();
+      if (clippedToNothing(style, rect)) return current;
+      if ((style.position === 'absolute' || style.position === 'fixed')
+          && (rect.right + globalThis.scrollX <= 0 || rect.bottom + globalThis.scrollY <= 0)) return current;
+    }
     return null;
+  };
+  const focusableSelector = 'a[href],area[href],button,input:not([type="hidden"]),select,textarea,summary,'
+    + '[tabindex]:not([tabindex="-1"])';
+  const invisibleExposureOf = element => {
+    if (!(element instanceof Element) || !element.isConnected || layer.contains(element)
+        || element === document.documentElement || element === document.body
+        // Carousel slides are revealed by switching slides instead.
+        || closestComposedMatching(element, carouselSlideSelector)) return null;
+    const hidden = hiddenStateForElement(element);
+    if (hidden?.reason === 'ZERO_OPACITY') return {kind:'INVISIBLE_ELEMENT'};
+    if (hidden && !isAssistiveOnlyHidden(hidden)) return null;
+    if (element.getClientRects().length === 0) return {kind:'INVISIBLE_ELEMENT'};
+    const clipped = screenReaderOnlyAncestor(element);
+    if (!clipped) return null;
+    for (let current = element; current instanceof Element; current = composedElementParent(current)) {
+      // A skip link appears once it has keyboard focus.
+      if (current.matches(focusableSelector) && !current.disabled) {
+        return {kind:'FOCUS_TO_REVEAL', focusTarget:current};
+      }
+      if (current === clipped) break;
+    }
+    return {kind:'SCREEN_READER_ONLY'};
+  };
+  const canCarryMarker = element => element instanceof Element
+    && element !== document.documentElement && element !== document.body
+    && !layer.contains(element) && element.getClientRects().length > 0
+    && (!hiddenStateForElement(element) || isAssistiveOnlyHidden(hiddenStateForElement(element)))
+    && !screenReaderOnlyAncestor(element);
+  const presentationOwnerKinds = [
+    ['LINK', 'a[href],area[href],[role="link"]'],
+    ['BUTTON', 'button,summary,[role="button"],[role="tab"],[role="menuitem"],[role="switch"]'],
+    ['FORM_CONTROL', 'label,input,select,textarea,fieldset,[role="checkbox"],[role="radio"],'
+      + '[role="combobox"],[role="textbox"],[role="searchbox"]'],
+    ['TABLE', 'table,[role="table"],[role="grid"]']
+  ];
+  const presentationRegionSelector = 'section,article,aside,nav,form,main,header,footer,dialog,'
+    + '[role="region"],[role="navigation"],[role="main"],[role="complementary"],[role="search"],'
+    + '[role="form"],[role="banner"],[role="contentinfo"],[role="dialog"]';
+  // The element a screen-reader-only text or invisible element belongs to:
+  // the link, button or form control it names, the table of a caption, the
+  // region of a heading, otherwise the nearest element that is on screen.
+  const presentationOwnerFor = element => {
+    const heading = closestComposedMatching(element, 'h1,h2,h3,h4,h5,h6,[role="heading"],caption,legend');
+    const describedKind = heading?.matches('caption') ? 'TABLE'
+      : heading?.matches('legend') ? 'FORM_CONTROL' : heading ? 'REGION' : null;
+    let nearest = null;
+    for (let current = composedElementParent(element); current instanceof Element; current = composedElementParent(current)) {
+      if (current === document.body || current === document.documentElement) break;
+      if (!canCarryMarker(current)) continue;
+      nearest ||= current;
+      if (describedKind === 'TABLE' && current.matches('table,[role="table"],[role="grid"]')) {
+        return {element:current, kind:'TABLE'};
+      }
+      if (describedKind === 'FORM_CONTROL' && current.matches('fieldset')) return {element:current, kind:'FORM_CONTROL'};
+      if (describedKind === 'REGION' && current.matches(presentationRegionSelector)) {
+        return {element:current, kind:'REGION'};
+      }
+      if (!describedKind) {
+        const owner = presentationOwnerKinds.find(([, selector]) => current.matches(selector));
+        if (owner) return {element:current, kind:owner[0]};
+      }
+    }
+    return nearest ? {element:nearest, kind:'ELEMENT'} : null;
+  };
+  const isDocumentMetadata = element => element === document.documentElement
+    || Boolean(document.head && element.isConnected && document.head.contains(element));
+  // Decide where a resolved finding is shown. Page settings have no place on
+  // screen; invisible but exposed elements are shown on their owner.
+  const presentationTargetFor = resolved => {
+    const element = resolved?.element;
+    if (!element || resolved.presentation || layer.contains(element)) return resolved;
+    if (isDocumentMetadata(element)) return {element:null, reason:'DOCUMENT_METADATA'};
+    const exposure = invisibleExposureOf(element);
+    if (!exposure) return resolved;
+    if (exposure.kind === 'FOCUS_TO_REVEAL') {
+      return {...resolved, element:exposure.focusTarget, source:element, exposure:exposure.kind,
+        presentation:{kind:'FOCUS_TO_REVEAL'}};
+    }
+    const owner = presentationOwnerFor(element);
+    if (!owner) return {...resolved, exposure:exposure.kind};
+    return {...resolved, element:owner.element, source:element, exposure:exposure.kind,
+      presentation:{kind:exposure.kind, ownerKind:owner.kind}};
   };
   const locatorStateForIssue = (element, issue, targetGeometry = null) => {
     if (!(element instanceof Element) || !element.isConnected) {
       return {status:'UNAVAILABLE', reason:'ELEMENT_DETACHED'};
     }
+    const presentation = resolvedIssueTargets.get(issue?.id)?.presentation;
+    if (presentation?.kind === 'FOCUS_TO_REVEAL' && screenReaderOnlyAncestor(element)) {
+      return {status:'HIDDEN_STATE', reason:'FOCUS_TO_REVEAL', recoverable:true};
+    }
     const context = issue?.carouselContext;
     const carousel = carouselDescriptorFor(element, context);
     const hiddenState = hiddenStateForElement(element);
-    if (hiddenState) {
-      return {
-        status:'HIDDEN_STATE', reason:hiddenState.reason,
-        recoverable:Boolean(carousel && hiddenState.element === carousel.slide)
-      };
+    const onSlide = Boolean(carousel && hiddenState?.element === carousel.slide);
+    if (hiddenState && (!isAssistiveOnlyHidden(hiddenState) || onSlide)) {
+      return {status:'HIDDEN_STATE', reason:hiddenState.reason, recoverable:onSlide};
     }
+    const state = baseLocatorState(element, carousel, targetGeometry);
+    if (state.status !== 'VISIBLE' && state.status !== 'OFFSCREEN') return state;
+    if (presentation && presentation.kind !== 'FOCUS_TO_REVEAL') {
+      return {...state, reason:presentation.kind,
+        ...(presentation.ownerKind ? {ownerKind:presentation.ownerKind} : {})};
+    }
+    if (hiddenState) {
+      return {...state, reason:hiddenState.reason === 'INERT_STATE' ? 'ASSISTIVE_INERT' : 'ASSISTIVE_HIDDEN'};
+    }
+    return state;
+  };
+  const baseLocatorState = (element, carousel, targetGeometry) => {
     const rect = element.getBoundingClientRect();
     const hasLayoutBox = element.getClientRects().length > 0
       && numberIsFinite(rect.width) && numberIsFinite(rect.height)
@@ -2197,6 +2455,24 @@ const targetVisibleInViewport = (element, rect) => (
     return element.matches('input,textarea,select,button,[role="button"],[role="textbox"]')
       ? targetGeometry.rects
       : [];
+  };
+  // Nearest compact list/table around the target, so tabs or calendar cells
+  // share one chip. Only items of the same kind join: a header nav holding a
+  // search form and a tab list must not pull the tabs' chip up to the search.
+  // Tall lists keep per-item chips.
+  const markerGroupFor = (element, heights) => {
+    const container = element.closest(markerGroupContainerSelector);
+    if (!container || container === element
+        || container === document.body || container === document.documentElement) return null;
+    let height = heights.get(container);
+    if (height === undefined) {
+      height = container.getBoundingClientRect().height;
+      heights.set(container, height);
+    }
+    if (!(height > 0) || height > markerGroupMaxHeight) return null;
+    let item = element;
+    while (item.parentElement && item.parentElement !== container) item = item.parentElement;
+    return item.parentElement === container ? {container, itemTag:item.localName} : null;
   };
   const markerClearsTarget = (footprint, targetRects) => {
     const gap = markerTargetGap / viewScale;
@@ -2369,7 +2645,20 @@ const targetVisibleInViewport = (element, rect) => (
     }
     return null;
   };
+  const presentationChanged = () => {
+    if (presentationMutationTargets.size === 0) return false;
+    const targets = Array.from(presentationMutationTargets);
+    presentationMutationTargets.clear();
+    return currentIssues.some(issue => {
+      const resolved = resolvedIssueTargets.get(issue?.id);
+      const source = resolved?.source || resolved?.element;
+      if (!(source instanceof Element) || layer.contains(source) || resolved.presentation?.kind === 'FRAME_CONTENT'
+          || !targets.some(target => target instanceof Node && target.contains(source))) return false;
+      return (invisibleExposureOf(source)?.kind || null) !== (resolved.exposure || null);
+    });
+  };
   const position = (mode = 'full') => {
+    if (presentationChanged()) locatorTargetsNeedReconciliation = true;
     if (locatorTargetsNeedReconciliation || dirtyTextIssueIds.size > 0
         || marked.some(entry => !entry.element?.isConnected)) {
       if (reconcileIssueTargets(lastFocusedIssueId)) return;
@@ -2380,6 +2669,7 @@ const targetVisibleInViewport = (element, rect) => (
     const viewportWidth = document.documentElement.clientWidth || innerWidth;
     const viewportHeight = document.documentElement.clientHeight || innerHeight;
     const spatialIndex = createMarkerSpatialIndex();
+    const groupContainerHeights = new Map();
     const measurements = marked.map(entry => {
       if (!preserveRootPlacement) entry.positionAnchor = undefined;
       const targetRect = entry.element.getBoundingClientRect();
@@ -2418,6 +2708,7 @@ const targetVisibleInViewport = (element, rect) => (
         targetGeometry,
         protectedTextRects:[],
         visible:targetGeometry !== null,
+        group:targetGeometry ? markerGroupFor(entry.element, groupContainerHeights) : null,
         viewportAttached,
         preservePlacement:preservePlacement && Boolean(preservedInsideViewport)
       };
@@ -2450,6 +2741,14 @@ const targetVisibleInViewport = (element, rect) => (
     });
     const preferredRowPositions = preferredMarkerRowPositions(orderedMeasurements);
     const contentSpatialIndex = createMarkerSpatialIndex();
+    const groupHosts = new Map();
+    const groupHostFor = group => group ? groupHosts.get(group.container)?.get(group.itemTag) || null : null;
+    const claimGroupHost = measurement => {
+      const group = measurement.group;
+      if (!group || groupHostFor(group)) return;
+      if (!groupHosts.has(group.container)) groupHosts.set(group.container, new Map());
+      groupHosts.get(group.container).set(group.itemTag, measurement.entry);
+    };
     orderedMeasurements.forEach(measurement => {
       measurement.protectedTextRects.forEach(rect => contentSpatialIndex.add(rect));
       const preferred = preferredRowPositions.get(measurement.entry);
@@ -2467,6 +2766,7 @@ const targetVisibleInViewport = (element, rect) => (
       );
       preservedFootprint.entry = measurement.entry;
       spatialIndex.add(preservedFootprint);
+      claimGroupHost(measurement);
     });
     const placements = new Map();
     const placeMeasurement = measurement => {
@@ -2474,6 +2774,12 @@ const targetVisibleInViewport = (element, rect) => (
       if (measurement.preservePlacement) return;
       leaveCluster(entry);
       if (!measurement.visible) return;
+      // 같은 목록·표 안에서 먼저 자리 잡은 칩이 있으면 겹치지 않아도 그 칩에 합류한다
+      const groupHost = groupHostFor(measurement.group);
+      if (groupHost && groupHost !== entry && groupHost.element?.isConnected) {
+        joinCluster(groupHost, entry);
+        return;
+      }
       // 코너 자리가 이미 놓인 칩과 겹치면 옆으로 밀지 않고 그 칩에 합류한다
       const family = markerLeftGutter(entry, measurement.targetGeometry);
       const preferred = preferredRowPositions.get(entry);
@@ -2499,6 +2805,7 @@ const targetVisibleInViewport = (element, rect) => (
       placements.set(measurement.entry, placement);
       placement.footprint.entry = measurement.entry;
       spatialIndex.add(placement.footprint);
+      claimGroupHost(measurement);
     };
     orderedMeasurements.forEach(placeMeasurement);
     let closeOpenPopover = false;
@@ -2602,14 +2909,16 @@ const targetVisibleInViewport = (element, rect) => (
       position(scheduledMode);
     });
   };
-    const {isSimpleDocumentLocator, hasAnalyzedText, createLocatorQueryCache, resolveIssue, releaseCoordinateTargets} = createLiveLocatorResolver({document, layer, observeMarkerShadowRoot, isObjectRecord});
+    const {isSimpleDocumentLocator, hasAnalyzedText, hasAnalyzedContent, createLocatorQueryCache, resolveIssue,
+      releaseCoordinateTargets} = createLiveLocatorResolver({document, layer, observeMarkerShadowRoot, isObjectRecord,
+      carouselDescriptorFor});
 const resolveIssueSnapshot = (issueIds = null) => {
     const queries = createLocatorQueryCache();
     const snapshot = issueIds ? new Map(resolvedIssueTargets) : new Map();
     currentIssues.forEach(issue => {
       if (!issue || !Number.isSafeInteger(issue.id) || issue.id <= 0
           || (issueIds && !issueIds.has(issue.id))) return;
-      snapshot.set(issue.id, resolveIssue(issue, queries));
+      snapshot.set(issue.id, presentationTargetFor(resolveIssue(issue, queries)));
     });
     markerShadowObservers.forEach((observer, root) => {
       if (!root.host.isConnected || (!issueIds && !queries.shadowRoots.has(root))) {
@@ -2777,9 +3086,12 @@ const resolveIssueSnapshot = (issueIds = null) => {
     mount(); clear(); releaseCoordinateTargets();
     focusRequestVersion += 1;
     locatorStatusSignatures.clear();
+    locatorPresentationByIssueId.clear();
+    presentationMutationTargets.clear();
     currentIssues = (Array.isArray(items) ? items : []).slice(0, 5000);
     simpleDocumentLocators = currentIssues.every(isSimpleDocumentLocator);
     textLocatorIssues = currentIssues.filter(hasAnalyzedText);
+    contentLocatorIssues = currentIssues.filter(hasAnalyzedContent);
     locatorTargetsNeedReconciliation = false;
     lastFocusedIssueId = isIssueId(selectedIssueId)
         && currentIssues.some(issue => issue?.id === selectedIssueId)
@@ -2876,7 +3188,15 @@ const resolveIssueSnapshot = (issueIds = null) => {
       let state = measuredLocatorState(entry, issue);
       reportLocatorState(issue, state);
       let attemptedCarouselRecovery = false;
-      if (state.status === 'HIDDEN_STATE' && state.recoverable) {
+      let attemptedFocusReveal = false;
+      if (state.status === 'HIDDEN_STATE' && state.recoverable && state.reason === 'FOCUS_TO_REVEAL') {
+        attemptedFocusReveal = true;
+        try { nativeApply(nativeFocus, entry.element, [{preventScroll:true}]); } catch (_) {}
+        await waitForLocatorLayout();
+        if (requestVersion !== focusRequestVersion) return;
+        state = measuredLocatorState(entry, issue);
+        reportLocatorState(issue, state);
+      } else if (state.status === 'HIDDEN_STATE' && state.recoverable) {
         attemptedCarouselRecovery = true;
         if (!activateCarouselState(entry.element, issue.carouselContext)) {
           reportLocatorState(issue, {
@@ -2911,6 +3231,10 @@ const resolveIssueSnapshot = (issueIds = null) => {
         state = {status:'HIDDEN_STATE', reason:'CAROUSEL_RECOVERY_FAILED', recoverable:false};
         reportLocatorState(issue, state);
       }
+      if (attemptedFocusReveal && state.status === 'HIDDEN_STATE') {
+        state = {status:'HIDDEN_STATE', reason:'FOCUS_REVEAL_FAILED', recoverable:false};
+        reportLocatorState(issue, state);
+      }
       showIssueFallback(issueId);
     } finally {
       if (requestVersion === focusRequestVersion) pendingFocusIssueId = null;
@@ -2923,6 +3247,10 @@ const resolveIssueSnapshot = (issueIds = null) => {
     });
   };
   popover.addEventListener('pointerenter', clearCloseTimer);
+  popover.addEventListener('pointerdown', () => {
+    popoverPinned = true;
+    clearCloseTimer();
+  });
   popover.addEventListener('pointerleave', scheduleClosePopover);
   popover.addEventListener('focusin', clearCloseTimer);
   popover.addEventListener('focusout', scheduleClosePopover);

@@ -66,6 +66,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from text_standard_mapper import classify_text_block
 
@@ -88,8 +89,14 @@ LLM_MODEL = 'gpt-4o-mini'
 MAX_LLM_CALLS = 20       # 한 번 실행 시 최대 LLM 호출 수 (비용 상한)
                           # 공공 사이트 1개 기준 paragraph가 수백 개일 수 있으므로
                           # 전부 LLM에 보내면 비용이 폭발함 → 20건으로 제한
+                          # 실패한 호출도 1건으로 센다 — 네트워크 장애 시 무한정 재호출 방지
 LLM_RETRY_COUNT = 2      # API 실패 시 재시도 횟수 (일시적 오류 대비)
 LLM_RETRY_DELAY = 2      # 재시도 간 대기 시간 (초) — Rate Limit 해소를 위한 간격
+LLM_REQUEST_TIMEOUT = 30  # 요청 1회 제한 시간 (초)
+LLM_CONCURRENCY = 4       # 동시에 보내는 LLM 요청 수
+# run_all.py는 이 단계를 120초 뒤 강제 종료하고, 결과 파일은 마지막에 한 번만
+# 쓴다. LLM 호출 전체를 이 시간 안에 끝내야 규칙 기반 제안까지 함께 저장된다.
+LLM_TIME_BUDGET_SECONDS = 80
 
 # ── 사람 평가(휴먼 스터디)용 모드 ──
 # 기존 로직은 paragraph 중 난이도 점수 50 이상(2026-09-27 복원), link/form_guide
@@ -441,7 +448,7 @@ JSON 형식으로만 응답해주세요:
     return prompt
 
 
-def call_openai_api(prompt):
+def call_openai_api(prompt, deadline=None):
     """
     OpenAI GPT API를 호출하여 수정 제안을 받음.
 
@@ -458,9 +465,22 @@ def call_openai_api(prompt):
 
     Args:
       prompt: build_llm_prompt()이 생성한 프롬프트 문자열
+      deadline: time.monotonic() 기준 마감 시각. 요청 제한 시간과 재시도 대기를
+                이 시각 안으로 줄이고, 지나면 더 시도하지 않음 (None이면 제한 없음)
     Returns:
       {'revised_text': '수정된 문장', 'reason': '수정 이유'} 또는 None (실패 시)
     """
+    def remaining():
+        return None if deadline is None else deadline - time.monotonic()
+
+    def wait_before_retry(seconds):
+        # 마감 전에 다음 시도를 할 수 없으면 기다리지 않고 포기
+        left = remaining()
+        if left is not None and left <= seconds + 1:
+            return False
+        time.sleep(seconds)
+        return True
+
     try:
         import requests
     except ImportError:
@@ -487,15 +507,23 @@ def call_openai_api(prompt):
     # LLM_RETRY_COUNT만큼 재시도 (기본 2회)
     # attempt 0: 첫 번째 시도 / attempt 1, 2: 재시도
     for attempt in range(LLM_RETRY_COUNT + 1):
+        # 응답 본문이 JSON이 아니어도 아래 except에서 안전하게 참조하도록 초기화
+        content = ''
+        left = remaining()
+        if left is not None and left <= 1:
+            print('  [시간 초과] LLM 호출 시간 예산을 모두 사용했습니다.')
+            return None
+        request_timeout = LLM_REQUEST_TIMEOUT if left is None else min(LLM_REQUEST_TIMEOUT, left)
         try:
-            resp = requests.post(url, json=body, headers=headers, timeout=30)
+            resp = requests.post(url, json=body, headers=headers, timeout=request_timeout)
 
             # 429: Rate Limit 초과 — 잠시 대기 후 재시도
             # 시도 횟수가 늘어날수록 대기 시간을 점점 늘림 (2초, 4초)
             if resp.status_code == 429:
                 wait = LLM_RETRY_DELAY * (attempt + 1)
                 print(f'  [Rate limit] {wait}초 대기 후 재시도...')
-                time.sleep(wait)
+                if not wait_before_retry(wait):
+                    return None
                 continue
 
             # 200이 아닌 다른 에러 (401 인증 실패, 500 서버 오류 등)
@@ -505,6 +533,8 @@ def call_openai_api(prompt):
 
             # 정상 응답에서 텍스트 내용만 추출
             # choices[0].message.content: LLM이 실제로 응답한 텍스트
+            # 200이지만 본문이 JSON이 아닌 경우(프록시 오류 페이지 등)도 아래 except에서 처리
+            content = resp.text or ''
             data = resp.json()
             content = data['choices'][0]['message']['content']
 
@@ -523,6 +553,9 @@ def call_openai_api(prompt):
 
             # JSON 파싱: {'revised_text': ..., 'reason': ...} dict로 변환
             result = json.loads(content)
+            if not isinstance(result, dict):
+                print(f'  [파싱 실패] LLM 응답이 JSON 객체가 아님: {content[:100]}')
+                return None
             return result
 
         except json.JSONDecodeError:
@@ -533,8 +566,7 @@ def call_openai_api(prompt):
         except Exception as e:
             # 네트워크 오류, 타임아웃 등 기타 예외
             # 재시도 횟수 내라면 대기 후 재시도, 초과하면 None 반환
-            if attempt < LLM_RETRY_COUNT:
-                time.sleep(LLM_RETRY_DELAY)
+            if attempt < LLM_RETRY_COUNT and wait_before_retry(LLM_RETRY_DELAY):
                 continue
             print(f'  [API 에러] {e}')
             return None
@@ -649,7 +681,8 @@ def generate_suggestions(input_path, output_path=None):
          - paragraph: 난이도 점수 50 이상인 경우만(2026-09-27 원래 값으로 복원; 명사 5개
            미만이라 difficulty_score가 None인 블록은 규칙 기반 가이드만 제공)
          - link/form_guide: 텍스트 40글자 이상인 경우만
-         - 최대 20건까지 (MAX_LLM_CALLS)
+         - 최대 20건까지 (MAX_LLM_CALLS, 실패한 호출 포함)
+         - 대상 블록을 동시에 호출하고, 전체 LLM_TIME_BUDGET_SECONDS 안에서만 시도
       4) LLM 호출 성공 시: llm_revision에 수정문과 수정 이유 저장
          LLM 호출 실패 시: 규칙 기반 템플릿 제안만 유지 (파이프라인 중단 안 됨)
       5) 결과를 원본 JSON에 합쳐서 저장
@@ -685,7 +718,7 @@ def generate_suggestions(input_path, output_path=None):
     # results: difficulty_engine.py가 분석한 텍스트 블록 목록
     # 각 블록에는 text, category, flags, metrics, difficulty_score, needs_suggestion 등이 있음
     results = data.get('results', [])
-    llm_call_count = 0     # LLM 호출 횟수 추적 (effective_max_calls 상한 체크용)
+    llm_targets = []       # LLM 호출 대상 (블록 번호, 블록) — effective_max_calls 상한 체크용
     suggestion_total = 0   # 생성된 규칙 기반 제안 총 개수 (통계용)
 
     effective_max_calls = STUDY_MODE_MAX_LLM_CALLS if STUDY_MODE else MAX_LLM_CALLS
@@ -728,12 +761,12 @@ def generate_suggestions(input_path, output_path=None):
         block['suggestions'] = rule_suggestions
         suggestion_total += len(rule_suggestions)
 
-        # ── Step 2: LLM 수정 제안 (조건부 호출) ──
+        # ── Step 2: LLM 수정 제안 대상 선정 (호출은 루프 뒤에 한꺼번에) ──
         # LLM이 원문을 실제로 쉽게 다시 써주는 단계
         # 비용 관리를 위해 모든 블록에 호출하지 않고, 아래 조건을 충족하는 경우만 호출
         block['llm_revision'] = None  # 기본값: LLM 호출 안 함
 
-        if not OFFLINE_MODE and llm_call_count < effective_max_calls:
+        if not OFFLINE_MODE and len(llm_targets) < effective_max_calls:
             # ── LLM 호출 대상 판별 ──
             # paragraph: 정말 어려운 문장(난이도 점수 50+)만 → 비용 대비 효과가 큰 경우만
             # link/form_guide: 사용자에게 직접 보이는 긴 텍스트(40글자+) → UX 영향이 큼
@@ -766,32 +799,53 @@ def generate_suggestions(input_path, output_path=None):
                         should_call_llm = True
 
             if should_call_llm:
-                print(f'  [{i}] LLM 호출 중... (카테고리: {block["category"]})')
-                # 난이도 수치가 담긴 프롬프트 구성 후 API 호출
-                prompt = build_llm_prompt(block)
-                llm_result = call_openai_api(prompt)
+                # 실패하더라도 호출한 건수로 세어 MAX_LLM_CALLS 상한을 지킴
+                llm_targets.append((i, block))
 
-                if llm_result:
-                    # LLM 응답 성공: 수정문 + 이유 + 사용 모델 정보를 블록에 저장
-                    block['llm_revision'] = {
-                        'revised_text': llm_result.get('revised_text', ''),
-                        'reason': llm_result.get('reason', ''),
-                        'model': LLM_MODEL,   # 어떤 모델이 생성했는지 기록
-                    }
-                    llm_call_count += 1
-                    # 수정문 앞 60글자만 미리보기로 출력 (전체 출력하면 너무 길어짐)
-                    print(f'    → 수정문: {llm_result.get("revised_text", "")[:60]}...')
-                else:
-                    # LLM 호출 실패해도 파이프라인은 계속 진행
-                    # (규칙 기반 제안은 이미 저장되어 있으므로 사용자는 가이드를 받을 수 있음)
-                    print(f'    → LLM 응답 실패, 템플릿 제안만 사용')
+    # ── Step 3: LLM 호출 (동시 실행 + 전체 시간 예산) ──
+    # 20건을 하나씩 부르면 단계 제한 시간(120초)에 가까워지므로 여러 건을 동시에 보냄.
+    # 모든 호출은 같은 마감 시각을 공유하고, 마감이 지나면 남은 호출은 포기함.
+    llm_results = {}
+    if llm_targets:
+        deadline = time.monotonic() + LLM_TIME_BUDGET_SECONDS
+        with ThreadPoolExecutor(max_workers=LLM_CONCURRENCY) as executor:
+            futures = {
+                i: executor.submit(call_openai_api, build_llm_prompt(block), deadline)
+                for i, block in llm_targets
+            }
+            for i, future in futures.items():
+                try:
+                    llm_results[i] = future.result()
+                except Exception as error:
+                    print(f'  [API 에러] {error}')
+                    llm_results[i] = None
+
+    llm_success_count = 0
+    for i, block in llm_targets:
+        llm_result = llm_results.get(i)
+        print(f'  [{i}] LLM 호출 (카테고리: {block["category"]})')
+        if llm_result:
+            # LLM 응답 성공: 수정문 + 이유 + 사용 모델 정보를 블록에 저장
+            block['llm_revision'] = {
+                'revised_text': llm_result.get('revised_text', ''),
+                'reason': llm_result.get('reason', ''),
+                'model': LLM_MODEL,   # 어떤 모델이 생성했는지 기록
+            }
+            llm_success_count += 1
+            # 수정문 앞 60글자만 미리보기로 출력 (전체 출력하면 너무 길어짐)
+            print(f'    → 수정문: {str(llm_result.get("revised_text", ""))[:60]}...')
+        else:
+            # LLM 호출 실패해도 파이프라인은 계속 진행
+            # (규칙 기반 제안은 이미 저장되어 있으므로 사용자는 가이드를 받을 수 있음)
+            print(f'    → LLM 응답 실패, 템플릿 제안만 사용')
 
     # ── 메타데이터 업데이트 ──
     # 최종 JSON의 meta 필드에 이번 실행의 통계 정보를 기록
     # 이후 성능 평가 스프레드시트 작성 시 활용 가능
     data['meta']['suggestion_stats'] = {
         'total_suggestions': suggestion_total,   # 생성된 규칙 기반 제안 총 수
-        'llm_calls': llm_call_count,             # 실제 LLM 호출 횟수 (비용 추적)
+        'llm_calls': len(llm_targets),           # 실제 LLM 호출 건수 (비용 추적, 실패 포함)
+        'llm_succeeded': llm_success_count,      # 수정문을 받은 건수
         'llm_model': LLM_MODEL if not OFFLINE_MODE else None,
         'mode': 'offline' if OFFLINE_MODE else ('study' if STUDY_MODE else 'online'),
     }
@@ -812,7 +866,7 @@ def generate_suggestions(input_path, output_path=None):
     print(f'수정 제안 생성 완료')
     print(f'  대상 블록: {sum(1 for r in results if r.get("needs_suggestion"))}개')
     print(f'  규칙 기반 제안: {suggestion_total}개')
-    print(f'  LLM 호출: {llm_call_count}회')
+    print(f'  LLM 호출: {len(llm_targets)}회 (성공 {llm_success_count}회)')
     print(f'  결과 저장: {output_path}')
 
     return data

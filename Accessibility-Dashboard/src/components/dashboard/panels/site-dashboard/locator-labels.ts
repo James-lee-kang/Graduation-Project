@@ -7,7 +7,7 @@ export type LocatorExplanationKey =
   | "missingPath" | "invalidPath" | "notFound" | "detached" | "contentChanged"
   | "frame" | "shadowRoot" | "unsupportedContext" | "ariaHidden" | "inert"
   | "noLayoutBox" | "zeroOpacity" | "hidden" | "carouselFailed" | "limitExceeded"
-  | "hiddenUnknown" | "unknown";
+  | "hiddenUnknown" | "unknown" | "pageSetting" | "focusReveal" | "focusRevealFailed";
 
 const keysByReason: Record<string, LocatorExplanationKey> = {
   EMPTY_PATH: "missingPath",
@@ -30,8 +30,24 @@ const keysByReason: Record<string, LocatorExplanationKey> = {
   CONTENT_VISIBILITY_HIDDEN: "hidden",
   CAROUSEL_CONTEXT_MISMATCH: "carouselFailed",
   CAROUSEL_RECOVERY_FAILED: "carouselFailed",
-  ISSUE_LIMIT_EXCEEDED: "limitExceeded"
+  ISSUE_LIMIT_EXCEEDED: "limitExceeded",
+  DOCUMENT_METADATA: "pageSetting",
+  FOCUS_REVEAL_FAILED: "focusRevealFailed"
 };
+
+
+export type LocatorCategory = "on-page" | "other-state" | "page-setting" | "outdated" | "unavailable";
+
+// One grouping for the rail lists, the report and the re-analysis notice.
+// A stored path that finds nothing or finds changed text means the page
+// changed after the analysis.
+export function getLocatorCategory(state: LocatorIssueState): LocatorCategory {
+  if (state.status === "VISIBLE" || state.status === "CONNECTED" || state.status === "OFFSCREEN") return "on-page";
+  if (state.status === "HIDDEN_STATE" && state.recoverable === true) return "other-state";
+  if (state.reason === "DOCUMENT_METADATA") return "page-setting";
+  if (state.reason === "ELEMENT_CONTENT_CHANGED" || state.reason === "SELECTOR_NOT_FOUND") return "outdated";
+  return "unavailable";
+}
 
 export type LocatorExplanationOptions = {
   /** The finding has only an analysis-time box; the viewer places it by coordinates. */
@@ -47,7 +63,9 @@ export function getLocatorExplanationKey(
   if (coordinateOnly && (onPage || state.status === "OFFSCREEN")) return "coordinate";
   if (onPage) return "visible";
   if (state.status === "OFFSCREEN") return "offscreen";
-  if (state.status === "HIDDEN_STATE" && state.recoverable) return "otherSlide";
+  if (state.status === "HIDDEN_STATE" && state.recoverable) {
+    return state.reason === "FOCUS_TO_REVEAL" ? "focusReveal" : "otherSlide";
+  }
   const key = state.reason && Object.prototype.hasOwnProperty.call(keysByReason, state.reason)
     ? keysByReason[state.reason]
     : undefined;
@@ -76,7 +94,10 @@ export const locatorLabels: Record<LocatorExplanationKey, string> = {
   carouselFailed: "슬라이드 복원 실패",
   limitExceeded: "표시 한도 초과",
   hiddenUnknown: "현재 숨겨진 요소",
-  unknown: "위치를 확인하지 못함"
+  unknown: "위치를 확인하지 못함",
+  pageSetting: "페이지 전체 설정",
+  focusReveal: "포커스하면 나타나는 요소",
+  focusRevealFailed: "포커스해도 나타나지 않음"
 };
 
 export function getLocatorLabel(state?: LocatorIssueState, options?: LocatorExplanationOptions): string {

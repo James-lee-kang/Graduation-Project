@@ -13,6 +13,46 @@ function asSelectorList(component) {
   return [];
 }
 
+// carousel-audit.js marks slides with these attributes while axe runs, so
+// axe may use them to build unique selectors. The live page never has them.
+const AUDIT_ATTRIBUTE_PATTERN = /\[data-ua-audit-[\w-]+(?:[~|^$*]?=(?:"[^"]*"|'[^']*'|[^\]]*))?\]/;
+
+function hasAuditAttribute(target) {
+  return normalizeAxeTarget(target).some(component => (
+    asSelectorList(component).some(selector => AUDIT_ATTRIBUTE_PATTERN.test(selector))
+  ));
+}
+
+// A structural selector (nearest unique id, then tag:nth-of-type steps) for
+// the element within its own document or shadow root.
+function structuralSelectorWithinRoot(element) {
+  const root = element.getRootNode();
+  const escape = value => (typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(value) : value);
+  const parts = [];
+  for (let current = element; current && current.nodeType === 1; current = current.parentElement) {
+    if (current.id && !/^\d/.test(current.id)) {
+      const idSelector = `#${escape(current.id)}`;
+      try {
+        if (root.querySelectorAll(idSelector).length === 1) {
+          parts.unshift(idSelector);
+          break;
+        }
+      } catch { }
+    }
+    let index = 1;
+    for (let sibling = current.previousElementSibling; sibling; sibling = sibling.previousElementSibling) {
+      if (sibling.localName === current.localName) index += 1;
+    }
+    parts.unshift(`${current.localName}:nth-of-type(${index})`);
+  }
+  const selector = parts.join(' > ');
+  try {
+    return selector && root.querySelector(selector) === element ? selector : null;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeAxeTarget(target) {
   if (!Array.isArray(target)) {
     return [];
@@ -320,6 +360,17 @@ async function resolveAxeNodeLocator(page, node) {
     }
   } catch {
     targetLocator = null;
+  }
+
+  if (targetLocator && hasAuditAttribute(target)) {
+    const structural = await targetLocator.evaluate(structuralSelectorWithinRoot).catch(() => null);
+    if (structural) {
+      const last = target.length - 1;
+      target[last] = Array.isArray(target[last])
+        ? [...target[last].slice(0, -1), structural]
+        : structural;
+      node.target = target.map(component => (Array.isArray(component) ? [...component] : component));
+    }
   }
 
   const locator = {
@@ -732,6 +783,7 @@ module.exports = {
   clipRectToFrameViewports,
   clipRectToOverflowAncestors,
   enrichAxeResultsWithLocators,
+  hasAuditAttribute,
   measurePage,
   localDateTimeIso,
   normalizeAxeTarget,

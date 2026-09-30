@@ -367,6 +367,21 @@ try {
     return [Math.round(rect.left) - 4, Math.round(rect.top) - 4, Math.round(rect.right) + 4, Math.round(rect.bottom) + 4];
   });
   assert.deepEqual(await highlightRectFor(), await targetRectFor("#nested-target"), "cluster highlight must start on the first issue's element");
+  const popoverRectFor = () => clusterPopover.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+  });
+  // The popover opens right beside the hovered chip, not past the far edge of its element.
+  const clusterChipRect = await clusterMarker.evaluate((marker) => {
+    const rect = marker.getBoundingClientRect();
+    return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom };
+  });
+  const clusterPopoverRectBefore = await popoverRectFor();
+  const chipGap = clusterPopoverRectBefore.top >= clusterChipRect.bottom
+    ? clusterPopoverRectBefore.top - clusterChipRect.bottom
+    : clusterChipRect.top - clusterPopoverRectBefore.bottom;
+  assert.ok(chipGap >= 0 && chipGap <= 12,
+    `the popover must sit next to its chip: ${JSON.stringify({ clusterChipRect, clusterPopoverRectBefore })}`);
   const clusterPopoverHeightBefore = await clusterPopover.evaluate((element) => element.getBoundingClientRect().height);
   await clusterPopover.getByRole("button", { name: "다음 문제" }).click();
   assert.equal(
@@ -379,7 +394,15 @@ try {
     `popover height must stay fixed while paging a cluster: ${clusterPopoverHeightBefore} → ${clusterPopoverHeightAfter}`
   );
   assert.deepEqual(await highlightRectFor(), await targetRectFor("#nested-link"), "paging must move the highlight to the next issue's element");
+  const clusterPopoverRectAfter = await popoverRectFor();
+  assert.ok(Math.abs(clusterPopoverRectAfter.left - clusterPopoverRectBefore.left) <= 0.5
+      && Math.abs(clusterPopoverRectAfter.top - clusterPopoverRectBefore.top) <= 0.5,
+    `paging must keep the popover under the pointer: ${JSON.stringify({ clusterPopoverRectBefore, clusterPopoverRectAfter })}`);
+  // After paging, the popover stays open when the pointer drifts off it.
   await page.mouse.move(5, 5);
+  await page.waitForTimeout(500);
+  assert.equal(await clusterPopover.isVisible(), true, "a popover the reader worked in must not close on pointer leave");
+  await page.keyboard.press("Escape");
   await clusterPopover.waitFor({ state: "hidden" });
   assert.match(await visualMarker.getAttribute("aria-label"), /색상 대비/);
 
@@ -621,6 +644,9 @@ try {
   if (process.env.AP_LIVE_REPORT_SCREENSHOT) {
     await popover.screenshot({ path: process.env.AP_LIVE_REPORT_SCREENSHOT });
   }
+  // Paging pinned the popover beside its chip; close it before reading another marker.
+  await page.keyboard.press("Escape");
+  await popover.waitFor({ state: "hidden" });
 
   await visualMarker.hover();
   await popover.locator(".ap-live-popover__title").filter({ hasText: "색상 대비" }).waitFor();
@@ -1077,13 +1103,14 @@ try {
 
   // Short controls at the document/viewport top cannot fit a chip above them.
   // Keep each label tied to its own corner, including in a scaled, scrolled viewer.
+  // A plain bar keeps the controls independent; a nav or list would share one chip.
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => window.__liveConnected === true && window.__liveEvents.some(
     event => event?.type === "EVENT" && event.payload?.type === "READY"
   ));
   await frame.locator("body").evaluate(() => {
     window.scrollTo(0, 0);
-    const header = document.createElement("nav");
+    const header = document.createElement("div");
     header.id = "edge-marker-nav";
     header.style.cssText = "position:fixed;inset:3px 0 auto;height:44px;background:#f5f5f7;z-index:1000";
     for (let index = 0; index < 6; index += 1) {
@@ -1386,6 +1413,131 @@ try {
     }
   }
 
+  // A tab strip and a calendar read as one component. Their chips merge into a
+  // single cluster even when the items are far enough apart not to collide,
+  // while a tall list keeps a chip per item. The header nav around the tabs
+  // also holds a search button; it must not absorb the tab strip's chip.
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => window.__liveConnected === true && window.__liveEvents.some(
+    event => event?.type === "EVENT" && event.payload?.type === "READY"
+  ));
+  await page.locator("#viewer").evaluate(iframe => { iframe.style.transform = "scale(1)"; });
+  await frame.locator("body").evaluate(() => {
+    window.scrollTo(0, 0);
+    const main = document.querySelector("main");
+    main.replaceChildren();
+    main.style.cssText = "position:relative;width:900px;height:2200px;padding:0";
+    const tabs = document.createElement("nav");
+    tabs.innerHTML = "<button id='group-search' style='display:block;margin:0 0 40px 520px;width:200px;height:36px'>검색</button>"
+      + "<ul id='group-tabs' style='display:flex;gap:64px;margin:0;padding:0;list-style:none'>"
+      + ["추천", "카테고리", "웹툰", "패션뷰티", "리빙푸드", "책방"].map((label, index) =>
+        `<li><a id="group-tab-${index}" href="#">${label}</a></li>`).join("") + "</ul>";
+    tabs.style.cssText = "position:absolute;left:60px;top:60px;width:800px";
+    const calendar = document.createElement("table");
+    calendar.id = "group-calendar";
+    calendar.style.cssText = "position:absolute;left:60px;top:260px;border-spacing:8px";
+    calendar.innerHTML = Array.from({ length: 5 }, (_, row) => "<tr>" + Array.from({ length: 7 }, (_, column) =>
+      `<td id="group-day-${row * 7 + column + 1}" style="width:32px;height:28px">${row * 7 + column + 1}</td>`).join("") + "</tr>").join("");
+    const tall = document.createElement("ul");
+    tall.id = "group-tall-list";
+    tall.style.cssText = "position:absolute;left:520px;top:260px;width:300px;margin:0;padding:0;list-style:none";
+    tall.innerHTML = Array.from({ length: 6 }, (_, index) =>
+      `<li id="group-tall-${index}" style="height:80px">긴 목록 ${index + 1}</li>`).join("");
+    main.append(tabs, calendar, tall);
+  });
+  const groupIssues = [
+    createIssue(700, "#group-search", "검색 버튼 이름", "HIGH", "interaction", "6.1.3"),
+    createIssue(701, "#group-tab-0", "추천 탭 이름", "MEDIUM", "interaction", "6.1.3"),
+    createIssue(702, "#group-tab-2", "웹툰 탭 이름", "HIGH", "interaction", "6.1.3"),
+    createIssue(703, "#group-tab-4", "리빙푸드 탭 이름", "LOW", "interaction", "6.1.3"),
+    createIssue(704, "#group-tab-5", "책방 탭 이름", "LOW", "text", "6.4.3"),
+    createIssue(705, "#group-tab-5", "책방 탭 문장", "LOW", "text", "3.1.5"),
+    createIssue(711, "#group-day-1", "1일 버튼", "LOW", "interaction", "6.1.3"),
+    createIssue(712, "#group-day-10", "10일 버튼", "MEDIUM", "interaction", "6.1.3"),
+    createIssue(713, "#group-day-20", "20일 버튼", "LOW", "interaction", "6.1.3"),
+    createIssue(714, "#group-day-33", "33일 대비", "HIGH", "visual", "5.4.3"),
+    createIssue(721, "#group-tall-0", "긴 목록 첫 항목", "LOW", "interaction", "6.1.3"),
+    createIssue(722, "#group-tall-4", "긴 목록 다섯째 항목", "LOW", "interaction", "6.1.3")
+  ];
+  await page.evaluate(issues => {
+    window.__sendLiveCommand({ source: "accessibility-dashboard", type: "SET_VIEW_SCALE",
+      documentToken: window.__liveEvents.find(event => event?.type === "ACK").documentToken,
+      scale: 1, visualWidth: 900 });
+    window.__sendLiveCommand({ source: "accessibility-dashboard", type: "INIT_ISSUES", issues,
+      selectedIssueId: null, markersVisible: true });
+  }, groupIssues);
+  await frame.locator('.ap-live-marker[data-issue-id="701"]').waitFor({ state: "visible" });
+  await frame.locator("body").evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const groupLayout = await frame.locator("body").evaluate(() => [...document.querySelectorAll(".ap-live-marker")]
+    .filter(marker => !marker.hidden)
+    .map(marker => ({
+      id: Number(marker.dataset.issueId),
+      cluster: marker.classList.contains("ap-live-marker--cluster"),
+      count: Number(marker.querySelector(".ap-live-marker__count")?.textContent || 1),
+      left: marker.getBoundingClientRect().left
+    })).sort((left, right) => left.id - right.id));
+  assert.deepEqual(groupLayout.map(({ id, cluster, count }) => ({ id, cluster, count })), [
+    { id: 700, cluster: false, count: 1 },
+    { id: 701, cluster: true, count: 5 },
+    { id: 711, cluster: true, count: 4 },
+    { id: 721, cluster: false, count: 1 },
+    { id: 722, cluster: false, count: 1 }
+  ], `a tab strip and a calendar must each share one chip, a tall list must not: ${JSON.stringify(groupLayout)}`);
+  const firstTabLeft = await frame.locator("#group-tab-0").evaluate(element => element.getBoundingClientRect().left);
+  assert.ok(Math.abs(groupLayout[1].left - (firstTabLeft - 8)) <= 0.75, "the tab cluster chip must stay on the first tab");
+  for (const issue of groupIssues) {
+    await page.evaluate(issueId => window.__sendLiveCommand({
+      source: "accessibility-dashboard", type: "FOCUS_ISSUE", issueId
+    }), issue.id);
+    await popover.locator(".ap-live-popover__title").filter({ hasText: issue.title }).waitFor();
+    assert.deepEqual(await highlightRectFor(), await targetRectFor(issue.pathSteps[0].selector), `grouped issue ${issue.id} must highlight its own element`);
+  }
+  await page.mouse.move(980, 800);
+
+  // A tall target leaves no room for the popover above or below it. The
+  // popover moves beside the target instead of covering the problem area.
+  await frame.locator("body").evaluate(() => {
+    window.scrollTo(0, 0);
+    const main = document.querySelector("main");
+    main.replaceChildren();
+    main.style.cssText = "position:relative;width:900px;height:2200px;padding:0";
+    const tall = document.createElement("section");
+    tall.id = "popover-tall-target";
+    tall.textContent = "세로로 긴 영역";
+    tall.style.cssText = "position:absolute;left:100px;top:150px;width:200px;height:480px;background:#edf1f7";
+    main.append(tall);
+  });
+  await page.evaluate(issues => window.__sendLiveCommand({ source: "accessibility-dashboard", type: "INIT_ISSUES",
+    issues, selectedIssueId: null, markersVisible: true }),
+  [createIssue(731, "#popover-tall-target", "긴 영역의 대비", "HIGH", "visual", "5.4.3")]);
+  const tallMarker = frame.locator('.ap-live-marker[data-issue-id="731"]');
+  await tallMarker.waitFor({ state: "visible" });
+  await tallMarker.hover();
+  await popover.locator(".ap-live-popover__title").filter({ hasText: "긴 영역의 대비" }).waitFor();
+  await frame.locator("body").evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const sidePlacement = await frame.locator("body").evaluate(() => {
+    const rect = element => {
+      const bounds = element.getBoundingClientRect();
+      return { left: bounds.left, top: bounds.top, right: bounds.right, bottom: bounds.bottom };
+    };
+    return {
+      popover: rect(document.querySelector(".ap-live-popover")),
+      target: rect(document.getElementById("popover-tall-target")),
+      marker: rect(document.querySelector('.ap-live-marker[data-issue-id="731"]')),
+      viewport: { width: document.documentElement.clientWidth, height: document.documentElement.clientHeight }
+    };
+  });
+  assert.equal(rectsOverlap(sidePlacement.popover, sidePlacement.target), false,
+    `the popover must not cover its problem area: ${JSON.stringify(sidePlacement)}`);
+  assert.equal(rectsOverlap(sidePlacement.popover, sidePlacement.marker), false,
+    `the popover must not cover its chip: ${JSON.stringify(sidePlacement)}`);
+  assert.ok(sidePlacement.popover.left >= sidePlacement.target.right
+    && sidePlacement.popover.right <= sidePlacement.viewport.width
+    && sidePlacement.popover.bottom <= sidePlacement.viewport.height,
+  `without room above or below, the popover must sit beside the target inside the viewport: ${JSON.stringify(sidePlacement)}`);
+  await page.mouse.move(980, 800);
+  await popover.waitFor({ state: "hidden" });
+
   await frame.locator("body").evaluate(() => {
     const embedded = document.createElement("iframe");
     embedded.id = "unsupported-frame";
@@ -1635,18 +1787,115 @@ try {
   });
   await initializeLocatorIssues([createIssue(703, "#changing-hidden-reason", "숨김 이유", "HIGH", "rule", "5.1.1")]);
   await waitForContentStatus(703, "HIDDEN_STATE", "DISPLAY_NONE");
+  // A transparent element is still read by screen readers, so its marker
+  // moves to the element it belongs to and returns when it is hidden again.
   await frame.locator("#changing-hidden-reason").evaluate(element => {
     element.style.display = "block"; element.style.opacity = "0";
   });
-  await waitForContentStatus(703, "HIDDEN_STATE", "ZERO_OPACITY", 3_000);
+  await waitForContentStatus(703, "VISIBLE", "INVISIBLE_ELEMENT", 3_000);
   await frame.locator("#changing-hidden-reason").evaluate(element => {
     element.style.opacity = "1"; element.hidden = true;
   });
   await waitForContentStatus(703, "HIDDEN_STATE", "HIDDEN_ATTRIBUTE", 3_000);
 
+  // Findings that are not on screen themselves are shown where they belong.
+  await frame.locator("html").evaluate(() => {
+    const style = document.createElement("style");
+    style.textContent = ".presentation-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}"
+      + ".presentation-skip{position:absolute;left:-9999px;top:0}.presentation-skip:focus{left:8px;top:8px}"
+      + "#presentation-carousel .swiper-wrapper{display:flex;gap:8px}#presentation-carousel .swiper-slide{width:120px}";
+    document.head.append(style);
+    const viewport = document.createElement("meta");
+    viewport.name = "viewport"; viewport.content = "width=device-width, user-scalable=no";
+    document.head.append(viewport);
+    const section = document.createElement("section");
+    section.id = "presentation-fixture";
+    section.innerHTML = `<h2 id="presentation-heading" class="presentation-sr">주요 소식</h2>
+      <button id="presentation-button" style="width:48px;height:32px"><span id="presentation-label" class="presentation-sr">검색</span>?</button>
+      <p id="presentation-ghost" style="opacity:0">투명한 안내 문구</p>
+      <div aria-hidden="true"><p id="presentation-decorative">장식 문구</p></div>
+      <div id="presentation-carousel" class="swiper"><div class="swiper-wrapper">
+        <div class="swiper-slide"><a href="#one">첫 번째</a></div>
+        <div class="swiper-slide"><a href="#two" title="">두 번째</a></div>
+        <div class="swiper-slide"><a href="#three">세 번째</a></div>
+      </div></div>`;
+    document.querySelector("main").prepend(section);
+    const skip = document.createElement("a");
+    skip.id = "presentation-skip"; skip.className = "presentation-skip"; skip.href = "#main"; skip.textContent = "본문 바로가기";
+    document.body.prepend(skip);
+    window.scrollTo(0, 0);
+  });
+  const presentationIssues = [
+    createIssue(801, "#presentation-label", "버튼 이름", "HIGH", "rule", "5.1.1"),
+    createIssue(802, "#presentation-heading", "영역 제목", "HIGH", "rule", "5.1.1"),
+    createIssue(803, "#presentation-ghost", "투명 문구", "HIGH", "rule", "5.1.1"),
+    createIssue(804, "#presentation-decorative", "장식 문구", "HIGH", "rule", "5.1.1"),
+    createIssue(805, "#presentation-skip", "건너뛰기 링크", "HIGH", "rule", "6.4.1"),
+    createIssue(806, 'meta[name="viewport"]', "확대 제한", "HIGH", "rule", "meta-viewport"),
+    createIssue(807, "html", "기본 언어", "HIGH", "rule", "7.1.1"),
+    createIssue(808, 'div[data-ua-audit-slide-index="1"] > a[title=""]', "예전 슬라이드 경로", "HIGH", "rule", "6.4.3",
+      { carouselId: 1, slideIndex: 1, slideCount: 3 }),
+    { ...createIssue(809, "#unsupported-frame", "프레임 내부", "HIGH", "rule", "5.1.1"),
+      pathSteps: [{ context: "DOCUMENT", selector: "#unsupported-frame" }, { context: "FRAME", selector: "button" }] }
+  ];
+  await initializeLocatorIssues(presentationIssues);
+  const latestLocatorStatus = issueId => page.evaluate(id => window.__liveEvents.filter(event => event?.type === "EVENT"
+    && event.payload?.type === "LOCATOR_STATUS" && event.payload.issueId === id).at(-1)?.payload ?? null, issueId);
+  const waitForLocatorReason = (issueId, reason, timeout = 10_000) => page.waitForFunction(expected => {
+    const latest = window.__liveEvents.filter(event => event?.type === "EVENT"
+      && event.payload?.type === "LOCATOR_STATUS" && event.payload.issueId === expected.issueId).at(-1)?.payload;
+    return latest?.reason === expected.reason;
+  }, { issueId, reason }, { timeout });
+  for (const [issueId, reason, ownerKind] of [
+    [801, "SCREEN_READER_ONLY", "BUTTON"],
+    [802, "SCREEN_READER_ONLY", "REGION"],
+    [803, "INVISIBLE_ELEMENT", "ELEMENT"],
+    [804, "ASSISTIVE_HIDDEN", undefined],
+    [809, "FRAME_CONTENT", undefined]
+  ]) {
+    await waitForLocatorReason(issueId, reason);
+    const latest = await latestLocatorStatus(issueId);
+    assert.ok(["VISIBLE", "OFFSCREEN"].includes(latest.status), `${issueId} is shown on the page`);
+    assert.equal(latest.ownerKind, ownerKind, `${issueId} names the element it belongs to`);
+  }
+  await waitForContentStatus(805, "HIDDEN_STATE", "FOCUS_TO_REVEAL");
+  assert.equal((await latestLocatorStatus(805)).recoverable, true);
+  await waitForContentStatus(806, "UNAVAILABLE", "DOCUMENT_METADATA");
+  await waitForContentStatus(807, "UNAVAILABLE", "DOCUMENT_METADATA");
+  await page.waitForFunction(() => window.__liveEvents.some(event => event?.type === "EVENT"
+    && event.payload?.type === "LOCATOR_STATUS" && event.payload.issueId === 808));
+  assert.notEqual((await latestLocatorStatus(808)).status, "UNAVAILABLE",
+    "a selector with the scanner's temporary slide attribute still finds its slide");
+
+  // The screen-reader-only label is marked on its button, with a note.
+  await page.evaluate(() => window.__sendLiveCommand({ source: "accessibility-dashboard", type: "FOCUS_ISSUE", issueId: 801 }));
+  await popover.locator(".ap-live-popover__note").filter({ hasText: "버튼에 표시했습니다" }).waitFor();
+  const buttonMarker = await frame.locator('.ap-live-marker[data-issue-id="801"]').isVisible();
+  assert.equal(buttonMarker, true, "the button carries the marker of its hidden label");
+  await page.evaluate(() => window.__sendLiveCommand({ source: "accessibility-dashboard", type: "FOCUS_ISSUE", issueId: 809 }));
+  await popover.locator(".ap-live-popover__note").filter({ hasText: "iframe" }).waitFor();
+
+  // A skip link appears once it has focus.
+  await page.evaluate(() => window.__sendLiveCommand({ source: "accessibility-dashboard", type: "FOCUS_ISSUE", issueId: 805 }));
+  await page.waitForFunction(() => {
+    const latest = window.__liveEvents.filter(event => event?.type === "EVENT"
+      && event.payload?.type === "LOCATOR_STATUS" && event.payload.issueId === 805).at(-1)?.payload;
+    return latest?.status === "VISIBLE" || latest?.reason === "FOCUS_REVEAL_FAILED";
+  });
+  assert.equal((await latestLocatorStatus(805)).status, "VISIBLE", "focusing the skip link reveals it");
+
+  // Page settings never get a marker and open the details instead.
+  await page.evaluate(() => window.__sendLiveCommand({ source: "accessibility-dashboard", type: "FOCUS_ISSUE", issueId: 806 }));
+  await page.waitForFunction(() => window.__liveEvents.some(event =>
+    event.payload?.type === "ISSUE_DETAIL_FALLBACK" && event.payload.issueId === 806));
+  assert.equal(await frame.locator('.ap-live-marker[data-issue-id="806"]').count(), 0);
+  await initializeLocatorIssues([]);
+  await frame.locator("#presentation-fixture").evaluate(element => element.remove());
+  await frame.locator("#presentation-skip").evaluate(element => element.remove());
+
   const locationReasonCases = [
-    { issue: { ...createIssue(401, "#unsupported-frame", "프레임 내부", "HIGH", "rule", "5.1.1"),
-      pathSteps: [{ context: "DOCUMENT", selector: "#unsupported-frame" }, { context: "FRAME", selector: "button" }] }, reason: "FRAME_UNSUPPORTED" },
+    { issue: { ...createIssue(401, "", "프레임 내부", "HIGH", "rule", "5.1.1"),
+      pathSteps: [{ context: "FRAME", selector: "button" }] }, reason: "FRAME_UNSUPPORTED" },
     { issue: { ...createIssue(402, "", "경로 없음", "HIGH", "rule", "5.1.1"), pathSteps: [] }, reason: "EMPTY_PATH" },
     { issue: createIssue(403, "[", "경로 오류", "HIGH", "rule", "5.1.1"), reason: "INVALID_SELECTOR" }
   ];
@@ -1694,6 +1943,55 @@ try {
     source: "accessibility-dashboard", type: "INIT_ISSUES", issues: [], selectedIssueId: null, markersVisible: true
   }));
   await frame.locator(".ap-live-coordinate-target").waitFor({ state: "detached" });
+
+  // Visual-engine findings located on an element follow that element and keep
+  // their marker only while it shows the analysed text and image.
+  await frame.locator("main").evaluate(main => {
+    window.scrollTo(0, 0);
+    main.replaceChildren();
+    const card = document.createElement("a");
+    card.id = "cv-feed-card";
+    card.href = "#";
+    card.style.cssText = "display:block;width:300px;height:120px";
+    const image = document.createElement("img");
+    image.id = "cv-feed-image";
+    image.width = 80;
+    image.height = 60;
+    image.alt = "";
+    image.src = "/thumb/1.jpg?type=f";
+    const headline = document.createElement("strong");
+    headline.id = "cv-feed-text";
+    headline.textContent = "33kg 감량 풍자";
+    card.append(image, headline);
+    main.append(card);
+  });
+  const anchoredCvIssues = [
+    { ...createIssue(502, "#cv-feed-image", "썸네일 속 글자의 명도 대비", "MEDIUM", "visual", "5.4.3"),
+      content: { text: "", image: "/thumb/1.jpg?type=f" } },
+    { ...createIssue(503, "#cv-feed-text", "기사 제목의 명도 대비", "MEDIUM", "visual", "5.4.3"),
+      content: { text: "33kg감량풍자", image: null } }
+  ];
+  await page.evaluate(issues => window.__sendLiveCommand({
+    source: "accessibility-dashboard", type: "INIT_ISSUES", issues, selectedIssueId: null, markersVisible: true
+  }), anchoredCvIssues);
+  for (const id of [502, 503]) {
+    await waitForContentStatus(id, "VISIBLE");
+    await frame.locator(`.ap-live-marker[data-issue-id="${id}"]`).waitFor({ state: "visible" });
+  }
+  assert.equal(await frame.locator(".ap-live-coordinate-target").count(), 0,
+    "a located visual finding uses its element, not the analysis box");
+  // The feed now shows another article in the same card.
+  await frame.locator("#cv-feed-image").evaluate(image => { image.src = "/thumb/2.jpg"; });
+  await waitForContentStatus(502, "UNAVAILABLE", "ELEMENT_CONTENT_CHANGED");
+  await frame.locator('.ap-live-marker[data-issue-id="502"]').waitFor({ state: "detached" });
+  await frame.locator("#cv-feed-text").evaluate(headline => { headline.firstChild.nodeValue = "다른 기사 제목"; });
+  await waitForContentStatus(503, "UNAVAILABLE", "ELEMENT_CONTENT_CHANGED");
+  await frame.locator('.ap-live-marker[data-issue-id="503"]').waitFor({ state: "detached" });
+  await frame.locator("#cv-feed-image").evaluate(image => { image.src = "/thumb/1.jpg?type=f"; });
+  await waitForContentStatus(502, "VISIBLE");
+  await page.evaluate(() => window.__sendLiveCommand({
+    source: "accessibility-dashboard", type: "INIT_ISSUES", issues: [], selectedIssueId: null, markersVisible: true
+  }));
 
   await page.goto(`http://127.0.0.1:${address.port}/keyboard`, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => window.__liveConnected === true);

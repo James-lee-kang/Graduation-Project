@@ -1,3 +1,4 @@
+import { getLocatorCategory, type LocatorCategory } from "./locator-labels";
 import type { AnalyzerType, IssueResultModel, SeverityLevel } from "@/types/accessibility-domain";
 
 import { formatIssueCodeLabel, normalizeIssueCode, severityChartItems } from "./constants";
@@ -47,7 +48,7 @@ function mostFrequent(values: readonly string[]): string {
 
 // Whether the current live page can point at the issue. "other-state" issues
 // are on the page but need the viewer to restore a slide first.
-export type ReportLocationStatus = "checking" | "disconnected" | "on-page" | "other-state" | "unavailable";
+export type ReportLocationStatus = "checking" | "disconnected" | LocatorCategory;
 
 export function getReportLocationStatus(
   state: LocatorIssueState | undefined,
@@ -55,9 +56,7 @@ export function getReportLocationStatus(
 ): ReportLocationStatus {
   if (checkState === "error") return "disconnected";
   if (!state) return "checking";
-  if (state.status === "VISIBLE" || state.status === "CONNECTED" || state.status === "OFFSCREEN") return "on-page";
-  if (state.status === "HIDDEN_STATE" && state.recoverable === true) return "other-state";
-  return "unavailable";
+  return getLocatorCategory(state);
 }
 
 export function canShowOnPage(status: ReportLocationStatus): boolean {
@@ -94,7 +93,9 @@ export function summarizeReportLocations(
   rows: readonly RecentIssueRow[],
   locationOf: (row: RecentIssueRow) => ReportLocationStatus
 ): ReportLocationSummary {
-  const summary: ReportLocationSummary = { checking: 0, disconnected: 0, "on-page": 0, "other-state": 0, unavailable: 0 };
+  const summary: ReportLocationSummary = {
+    checking: 0, disconnected: 0, "on-page": 0, "other-state": 0, "page-setting": 0, outdated: 0, unavailable: 0
+  };
   for (const row of rows) summary[locationOf(row)] += 1;
   return summary;
 }
@@ -202,7 +203,7 @@ export function groupByCriterion(rows: readonly RecentIssueRow[]): ReportCriteri
 export type ReportFilters = {
   severity: SeverityLevel | "ALL";
   analyzer: AnalyzerType | "ALL";
-  location: "ALL" | "on-page" | "unavailable";
+  location: "ALL" | "on-page" | "outdated" | "page-setting" | "unavailable";
   query: string;
 };
 
@@ -219,7 +220,7 @@ export function filterReportRows(
     if (filters.analyzer !== "ALL" && row.analyzerType !== filters.analyzer) return false;
     if (filters.location !== "ALL") {
       const status = locationOf(row);
-      if (filters.location === "on-page" ? !canShowOnPage(status) : status !== "unavailable") return false;
+      if (filters.location === "on-page" ? !canShowOnPage(status) : status !== filters.location) return false;
     }
     if (!query) return true;
     const { issue } = row;
@@ -231,6 +232,29 @@ export function filterReportRows(
       issue.message
     ].some((value) => value.toLocaleLowerCase("ko").includes(query));
   });
+}
+
+// Section labels written by the rule guide, the text analysis formatter and
+// the backend's recommendation suffix; the report shows them as sub-headings.
+const descriptionHeadings = new Set(["개선 안내", "분석 문장", "개선 필요", "개선 제안", "수정 예시", "수정 이유"]);
+const inlineHeadingPattern = /^(권장사항)\s*:\s*/;
+
+export type ReportDescriptionSection = { heading: string | null; body: string };
+
+export function splitDescriptionSections(description: string): ReportDescriptionSection[] {
+  return description
+    .split(/\n{2,}/)
+    .map((block) => block.trim())
+    .filter((block) => block.length > 0)
+    .map((block) => {
+      const inline = inlineHeadingPattern.exec(block);
+      if (inline) return { heading: inline[1]!, body: block.slice(inline[0].length).trim() };
+      const newline = block.indexOf("\n");
+      const firstLine = newline === -1 ? "" : block.slice(0, newline).trim();
+      return descriptionHeadings.has(firstLine)
+        ? { heading: firstLine, body: block.slice(newline + 1).trim() }
+        : { heading: null, body: block };
+    });
 }
 
 export type ReportIssueLocation =
