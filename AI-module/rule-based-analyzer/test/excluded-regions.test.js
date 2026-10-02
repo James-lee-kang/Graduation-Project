@@ -119,6 +119,46 @@ test('still excludes ads when the comparison load is disabled', async () => {
     'without a comparison load nothing is treated as dynamic');
 });
 
+// A site that records visits with a cookie shows returning visitors a
+// different greeting. The first visit sets the cookie from the server and the
+// page script sets another, like a visit counter. Content that changes only
+// because of the first visit's cookies is not dynamic: both loads must see
+// the page as a first-time visitor does.
+test('content that changes only for a returning visitor is not dynamic', async () => {
+  const server = http.createServer((request, response) => {
+    const returning = /(?:^|;\s*)(?:visited|seen)=1/.test(request.headers.cookie || '');
+    const greeting = returning ? '다시 오신 것을 환영합니다' : '처음 오셨군요, 환영합니다';
+    response.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Set-Cookie': 'visited=1; Path=/',
+    });
+    response.end(`<!doctype html><html lang="ko"><head><title>기관 홈</title></head><body><main>
+      <h1>기관 누리집</h1><p>변하지 않는 서비스 안내 문구입니다. 이 영역은 계속 검사합니다.</p>
+      <div id="greeting"><img id="greeting-photo" src="${IMAGE}#${returning ? 'returning' : 'first'}" width="80" height="60">
+        <span id="greeting-text" style="color:#d4d4d4;background:#fff">${greeting}</span></div>
+      <script>document.cookie = 'seen=1; path=/';</script>
+    </main></body></html>`);
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'excluded-regions-cookie-test-'));
+  try {
+    await run(`http://127.0.0.1:${server.address().port}/`, path.join(directory, 'result.json'),
+      { settleMs: 300, contentGraceMs: 0 });
+    const api = JSON.parse(fs.readFileSync(path.join(directory, 'result_api.json'), 'utf8'));
+    assert.ok(api.excluded_violations.every((group) => group.reason !== 'DYNAMIC'),
+      'a returning-visitor greeting is not dynamic content');
+    assert.ok(imageAltSelectors(api.violations).some((selector) => selector.includes('greeting-photo')),
+      'the greeting image is still checked');
+    const selectors = api.violations.flatMap((violation) =>
+      violation.rules.flatMap((rule) => rule.nodes.map((node) => node.selector)));
+    assert.ok(selectors.some((selector) => selector.includes('greeting-text')),
+      'the greeting text is still checked for contrast');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('content present in only one load counts as changed', () => {
   const current = { 'body>header:1': '로고', 'body>main:1>p:1': '안내', 'body>main:1>div:2>p:1': '피드 A' };
   const comparison = { 'body>header:1': '로고', 'body>main:1>p:1': '안내', 'body>main:1>ul:1>li:1': '피드 B' };

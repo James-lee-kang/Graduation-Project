@@ -194,16 +194,22 @@ async function collectContentSignatures(page) {
   return page.evaluate(inspectRegions, inspectionOptions('collect')).catch(() => null);
 }
 
-// Loads the page again in the same browser context and returns its content
-// signatures, or null when the comparison load fails.
-async function loadComparisonSignatures(context, url, { settleMs = 5000 } = {}) {
-  const page = await context.newPage();
+// Loads the page again in a new browser context and returns its content
+// signatures, or null when the comparison load fails. The new context has none
+// of the first visit's cookies or storage, so the site treats both loads as a
+// first-time visitor. Sharing the analysed page's context would make the site
+// see a returning visitor (visit-recording cookies, "welcome back" text,
+// cookie-driven styles) and mark that stable content DYNAMIC, and whether the
+// cookie existed yet would depend on timing.
+async function loadComparisonSignatures(browser, contextOptions, url, { settleMs = 5000 } = {}) {
+  const context = await browser.newContext(contextOptions);
   try {
+    const page = await context.newPage();
     await page.goto(url, { waitUntil: 'load', timeout: 60000 }).catch(() => {});
     await page.waitForTimeout(settleMs);
     return await collectContentSignatures(page);
   } finally {
-    await page.close().catch(() => {});
+    await context.close().catch(() => {});
   }
 }
 
