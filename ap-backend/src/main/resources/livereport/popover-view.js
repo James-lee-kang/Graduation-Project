@@ -1,4 +1,34 @@
 function createLivePopoverView({document, popover, popoverTags, popoverDetail, createSeverityBadge, createCodeBadge, textValue, clusterIssuesFor, presentationNoteFor, getState}) {
+  // 설명은 빈 줄로 나뉜 "소제목\n본문" 묶음이다. 소제목 줄만 굵게 해 본문과 구분한다.
+  const messageHeadings = new Set(['분석 문장', '개선 필요', '개선 제안', '개선 안내', '수정 예시', '수정 이유', '권장사항']);
+  const fillMessage = (message, text) => {
+    const lines = text.split('\n');
+    lines.forEach((line, index) => {
+      if (index > 0) message.append('\n');
+      if (messageHeadings.has(line.trim()) && (index === 0 || lines[index - 1].trim() === '')) {
+        const heading = document.createElement('strong');
+        heading.className = 'ap-live-popover__heading';
+        heading.textContent = line;
+        message.append(heading);
+      } else message.append(line);
+    });
+  };
+  // 페이지 화면은 대시보드에서 축소되어 보이므로 팝오버를 그만큼 되키운다. transform: scale은
+  // 이미 그린 글씨를 늘려 붙여 위치에 따라 글씨가 흐려지므로, zoom으로 글씨를 그 크기로 다시 그린다.
+  // zoom은 left/top에도 곱해지므로 위치는 배율로 나눠 넣는다.
+  const zoomSupported = globalThis.CSS?.supports?.('zoom', '2') === true;
+  let appliedZoom = 1;
+  const applyPopoverScale = scale => {
+    if (zoomSupported) {
+      appliedZoom = scale;
+      popover.style.zoom = String(scale);
+      popover.style.transform = '';
+    } else popover.style.transform = `scale(${scale})`;
+  };
+  const movePopoverTo = (left, top) => {
+    popover.style.left = `${left / appliedZoom}px`;
+    popover.style.top = `${top / appliedZoom}px`;
+  };
   const renderDetailContent = issue => {
     const severityBadge = createSeverityBadge(issue);
     const codeBadge = createCodeBadge(issue);
@@ -10,7 +40,7 @@ function createLivePopoverView({document, popover, popoverTags, popoverDetail, c
     title.textContent = textValue(issue.title, 300) || '접근성 이슈';
     const message = document.createElement('p');
     message.className = 'ap-live-popover__message';
-    message.textContent = textValue(issue.message, 1600) || '이 문제에 대한 상세 설명이 없습니다.';
+    fillMessage(message, textValue(issue.message, 1600) || '이 문제에 대한 상세 설명이 없습니다.');
     const path = document.createElement('code');
     path.className = 'ap-live-popover__path';
     path.textContent = textValue(issue.path, 2048) || '요소 경로 정보 없음';
@@ -50,7 +80,7 @@ function createLivePopoverView({document, popover, popoverTags, popoverDetail, c
     const targetEntry = openTargetEntry?.element?.isConnected ? openTargetEntry : openEntry;
     const anchor = (markerVisible ? openEntry.marker : targetEntry.element).getBoundingClientRect();
     const scale = 1 / viewScale;
-    popover.style.transform = `scale(${scale})`;
+    applyPopoverScale(scale);
     const width = popover.offsetWidth * scale;
     const height = popover.offsetHeight * scale;
     const gap = 8 * scale;
@@ -86,8 +116,7 @@ function createLivePopoverView({document, popover, popoverTags, popoverDetail, c
         ? openEntry.markerViewportAttached === true
         : targetEntry.viewportAttached === true;
     popover.style.position = viewportAttached ? 'fixed' : 'absolute';
-    popover.style.left = `${left + (viewportAttached ? 0 : documentLeft)}px`;
-    popover.style.top = `${top + (viewportAttached ? 0 : documentTop)}px`;
+    movePopoverTo(left + (viewportAttached ? 0 : documentLeft), top + (viewportAttached ? 0 : documentTop));
   };
-  return {renderDetailContent, sizePopoverForCluster, positionPopover};
+  return {renderDetailContent, sizePopoverForCluster, positionPopover, movePopoverTo};
 }

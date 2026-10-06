@@ -1,8 +1,9 @@
 /**
- * Verifies the scroll-world landing across desktop and mobile breakpoints.
- * The suite uses reduced motion for the viewport matrix so visual checks do
- * not download or decode the demo clips, then checks desktop scene navigation
- * and sequentially decodes the refreshed clips at each delivered resolution.
+ * Verifies the landing across desktop and mobile breakpoints:
+ * header, hero, the hero card that grows into the scroll film, the film's
+ * scenes and the feature sections after it. The viewport matrix uses reduced
+ * motion so it does not download or decode the demo clips; a separate desktop
+ * pass checks the card-to-film handoff, scene navigation and every clip tier.
  *
  * Usage: npm run verify:landing-design
  */
@@ -16,6 +17,7 @@ const outDir = process.env.OUT_DIR ?? "artifacts/design-migration/landing";
 mkdirSync(outDir, { recursive: true });
 
 const CONTROL_MIN_HEIGHT_PX = 44;
+const SECTION_ORDER = ["ua-hero", "uni-scroll-world", "ua-message", "ua-look", "ua-stats", "ua-report", "ua-tools", "ua-engine", "ua-compare", "ua-faq", "ua-end"];
 const refreshedScenes = [
   { id: "input", index: 1, scrollVh: 2.25 },
   { id: "analyze", index: 2, scrollVh: 3.6 },
@@ -39,6 +41,14 @@ async function settle(page) {
   await page.evaluate(
     () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
   );
+}
+
+/** Scroll to a point measured from the film's top (the film starts below the hero). */
+async function scrollFilm(page, scrollVh) {
+  await page.evaluate((value) => {
+    const filmTop = document.getElementById("tour").getBoundingClientRect().top + scrollY;
+    window.scrollTo(0, filmTop + Math.min(innerHeight, 1080) * value);
+  }, scrollVh);
 }
 
 async function verifyReducedMotionViewport(browser, viewport) {
@@ -70,178 +80,96 @@ async function verifyReducedMotionViewport(browser, viewport) {
     .every(image => image.complete && image.naturalWidth > 0));
   await settle(page);
 
-  const facts = await page.evaluate(() => {
+  const facts = await page.evaluate((order) => {
     const isVisible = (element) => {
       const style = getComputedStyle(element);
       const rect = element.getBoundingClientRect();
       return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
     };
-    const controls = [...document.querySelectorAll(".sw-brand,.sw-topcta,.sw-nav__item,.sw-route__dot,.sw-hint")]
-      .filter(isVisible)
-      .map((element) => ({
-        label: element.textContent?.trim() || element.getAttribute("aria-label") || element.className,
-        height: element.getBoundingClientRect().height,
-        width: element.getBoundingClientRect().width
-      }));
+    const main = document.querySelector("main#uni-access-main");
+    const header = document.querySelector(".ua-lnav");
+    const headerRect = header?.getBoundingClientRect();
     const title = document.querySelector("#ua-hero-title");
-    const root = document.querySelector("[data-scroll-world-ready=true]");
-    const topbar = document.querySelector(".sw-topbar");
-    const route = document.querySelector(".sw-route");
     const stage = document.querySelector(".sw-stage");
-    const openingPoster = document.querySelector(".sw-scene .sw-scene__still");
-    const activeCopy = document.querySelector('.sw-copy[aria-hidden="false"]');
-    const wordmark = document.querySelector(".sw-wordmark,.sw-brand__name");
-    const topCta = document.querySelector(".sw-topcta");
-    const titleStyle = title ? getComputedStyle(title) : null;
-    const titleRange = document.createRange();
-    if (title) titleRange.selectNodeContents(title);
-    const titleLines = [...titleRange.getClientRects()];
-    const rootStyle = root ? getComputedStyle(root) : null;
-    const topbarRect = topbar?.getBoundingClientRect();
-    const rect = (element) => {
-      const bounds = element?.getBoundingClientRect();
-      return bounds
-        ? { left: bounds.left, top: bounds.top, right: bounds.right, bottom: bounds.bottom, width: bounds.width, height: bounds.height }
-        : null;
-    };
-
+    const film = document.getElementById("tour");
+    const hero = document.querySelector(".ua-hero");
+    const controls = [...document.querySelectorAll(".ua-hero__actions a, .ua-look__pill, .ua-faq__item summary, .ua-footer__wordmark")]
+      .filter(isVisible)
+      .map((element) => ({ label: element.textContent?.trim(), height: element.getBoundingClientRect().height }));
+    const sectionOrder = [...main.children]
+      .map((element) => order.find((name) => element.classList.contains(name)))
+      .filter(Boolean);
     return {
-      ready: Boolean(root),
+      ready: Boolean(document.querySelector("[data-scroll-world-ready=true]")),
       mainCount: document.querySelectorAll("main#uni-access-main").length,
       h1Count: document.querySelectorAll("h1").length,
+      h1Text: title?.textContent,
+      headerOutsideMain: Boolean(header) && !header.closest("main"),
+      headerWithinViewport: Boolean(headerRect && headerRect.left >= -0.5 && headerRect.right <= document.documentElement.clientWidth + 0.5),
+      headerSticky: header ? getComputedStyle(header).position : null,
+      engineChromeCount: document.querySelectorAll(".sw-topbar, .sw-skip-link, .sw-hint").length,
       copyCount: document.querySelectorAll(".sw-copy").length,
-      activeCopyCount: document.querySelectorAll('.sw-copy[aria-hidden="false"]:not([inert])').length,
-      inactiveCopyLeakCount: document.querySelectorAll('.sw-copy[aria-hidden="true"]:not([inert])').length,
-      routeVisible: Boolean(route && isVisible(route)),
-      horizontalProgressCount: document.querySelectorAll(".sw-scrollbar").length,
-      sectionNumberCount: document.querySelectorAll(".sw-copy__num").length,
-      hintCount: document.querySelectorAll(".sw-hint").length,
-      hintText: document.querySelector(".sw-hint")?.textContent,
-      particleCount: document.querySelectorAll(".sw-pt").length,
+      activeCopyCount: document.querySelectorAll('.sw-copy[data-sw-active="true"]').length,
+      hiddenCopyCount: document.querySelectorAll('.sw-copy[aria-hidden="true"], .sw-copy[inert]').length,
+      inactiveCopyLeakCount: document.querySelectorAll('.sw-copy[data-sw-active="false"] :is(a[href], button):not([tabindex="-1"])').length,
+      routeVisible: Boolean(document.querySelector(".sw-route") && isVisible(document.querySelector(".sw-route"))),
       videoCount: document.querySelectorAll("video").length,
       posterReady: [...document.querySelectorAll(".sw-scene__still")].every((image) => image.complete && image.naturalWidth > 0),
       overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-      pageHeight: document.documentElement.scrollHeight,
-      topNavCount: document.querySelectorAll(".sw-nav").length,
-      titleFontSize: titleStyle ? Number.parseFloat(titleStyle.fontSize) : 0,
-      titleColor: titleStyle?.color,
-      titleLineCount: titleLines.length,
-      titleWithinViewport: titleLines.every(line => line.left >= 0 && line.right <= innerWidth && line.top >= 0 && line.bottom <= innerHeight),
-      rootBackground: rootStyle?.backgroundColor,
-      stageRect: rect(stage),
-      openingPosterRect: rect(openingPoster),
-      copyWidth: activeCopy?.getBoundingClientRect().width ?? 0,
-      wordmarkFontSize: wordmark ? Number.parseFloat(getComputedStyle(wordmark).fontSize) : 0,
-      topCtaHeight: topCta?.getBoundingClientRect().height ?? 0,
-      tagStyles: [...document.querySelectorAll(".sw-copy__tags li")].map((tag) => {
-        const style = getComputedStyle(tag);
-        return { color: style.color, backgroundColor: style.backgroundColor };
-      }),
-      hasLegacyStageClass: Boolean(document.querySelector(".sw-stage.ua-stage")),
-      hasLegacyTitleClass: Boolean(document.querySelector(".sw-copy__title.ua-hero__headline")),
-      topbarWithinViewport: Boolean(
-        topbarRect && topbarRect.left >= -0.5 && topbarRect.right <= document.documentElement.clientWidth + 0.5
-      ),
+      diveVisible: isVisible(document.querySelector(".ua-dive")),
+      // Without the growing card, the film's first frame sits in the page flow right after the hero.
+      stageInFlow: stage ? getComputedStyle(stage).position === "absolute" && getComputedStyle(stage).visibility !== "hidden" : false,
+      stageTopGap: stage && film ? Math.abs(stage.getBoundingClientRect().top - film.getBoundingClientRect().top) : null,
+      filmAfterHero: film && hero ? film.getBoundingClientRect().top >= hero.getBoundingClientRect().bottom - 0.5 : false,
+      titleFontSize: title ? Number.parseFloat(getComputedStyle(title).fontSize) : 0,
+      sectionOrder,
+      kwcagRows: document.querySelectorAll(".ua-report__column li").length,
+      statValues: [...document.querySelectorAll(".ua-stats__value")].map((element) => element.dataset.value),
+      lookTabs: document.querySelectorAll('.ua-look [role="tab"]').length,
+      faqCount: document.querySelectorAll(".ua-faq__item").length,
       controls
     };
-  });
+  }, SECTION_ORDER);
 
   const label = `${viewport.width}x${viewport.height}${viewport.deviceScaleFactor ? `@${viewport.deviceScaleFactor}x` : ""}`;
   assert.equal(facts.ready, true, `${label}: scroll world did not initialize`);
   assert.equal(facts.mainCount, 1, `${label}: landing must expose one main landmark`);
   assert.equal(facts.h1Count, 1, `${label}: landing must expose one h1`);
-  assert.equal(facts.copyCount, 5, `${label}: expected five narrative scenes`);
+  assert.equal(facts.h1Text, "복잡한 웹 접근성,이제 한눈에.", `${label}: hero heading changed`);
+  assert.equal(facts.headerOutsideMain, true, `${label}: the header must stay outside the main landmark`);
+  assert.equal(facts.headerWithinViewport, true, `${label}: header exceeds the viewport`);
+  assert.equal(facts.headerSticky, "sticky", `${label}: header must stay pinned while scrolling`);
+  assert.equal(facts.engineChromeCount, 0, `${label}: the film must not add its own header, skip link or scroll cue`);
+  assert.equal(facts.copyCount, 5, `${label}: expected five film scenes`);
   assert.equal(facts.activeCopyCount, 1, `${label}: exactly one scene copy must be active`);
-  assert.equal(facts.inactiveCopyLeakCount, 0, `${label}: inactive copy escaped inert state`);
+  assert.equal(facts.hiddenCopyCount, 0, `${label}: scene copy must stay readable by assistive technology`);
+  assert.equal(facts.inactiveCopyLeakCount, 0, `${label}: inactive copy controls escaped the Tab order`);
   assert.equal(facts.routeVisible, false, `${label}: side progress bar must stay hidden`);
-  assert.equal(facts.horizontalProgressCount, 0, `${label}: obsolete top progress bar is still rendered`);
-  assert.equal(facts.sectionNumberCount, 0, `${label}: decorative section counters must stay removed`);
-  assert.equal(facts.hintCount, 1, `${label}: opening must show one scroll instruction cue`);
-  assert.equal(facts.hintText, "SCROLL DOWN", `${label}: scroll instruction text is incorrect`);
-  assert.equal(facts.particleCount, 0, `${label}: studio layout must not render particles`);
   assert.equal(facts.videoCount, 0, `${label}: reduced motion must not create videos`);
   assert.deepEqual(videoRequests, [], `${label}: reduced motion unexpectedly requested video media`);
   assert.equal(facts.posterReady, true, `${label}: one or more scene posters failed to load`);
   assert.equal(facts.overflow, 0, `${label}: page-level horizontal overflow detected`);
-  assert.ok(facts.pageHeight > viewport.height * 6, `${label}: scroll narrative track is too short`);
-  assert.equal(facts.topbarWithinViewport, true, `${label}: top bar exceeds the viewport`);
-  assert.equal(facts.hasLegacyStageClass, false, `${label}: scroll stage leaked the legacy width-capped class`);
-  assert.equal(facts.hasLegacyTitleClass, false, `${label}: scroll title leaked the legacy headline class`);
-  assert.ok(
-    facts.stageRect &&
-      Math.abs(facts.stageRect.left) < 0.5 &&
-      Math.abs(facts.stageRect.top) < 0.5 &&
-      Math.abs(facts.stageRect.width - viewport.width) < 0.5 &&
-      Math.abs(facts.stageRect.height - viewport.height) < 0.5,
-    `${label}: stage does not match the visual viewport`
-  );
-  assert.ok(
-    facts.openingPosterRect &&
-      facts.openingPosterRect.left <= 0.5 &&
-      facts.openingPosterRect.top <= 0.5 &&
-      facts.openingPosterRect.right >= viewport.width - 0.5 &&
-      facts.openingPosterRect.bottom >= viewport.height - 0.5,
-    `${label}: opening media does not cover the visual viewport`
-  );
-  assert.equal(facts.rootBackground, "rgb(245, 245, 247)", `${label}: landing canvas token changed`);
-  assert.equal(facts.titleColor, "rgb(255, 255, 255)", `${label}: opening title must stay white`);
-  assert.equal(facts.titleLineCount, 1, `${label}: opening title must stay on one line`);
-  assert.equal(facts.titleWithinViewport, true, `${label}: opening title is clipped`);
-  assert.ok(facts.tagStyles.length > 0, `${label}: landing tags are missing`);
-  for (const tagStyle of facts.tagStyles) {
-    assert.deepEqual(
-      tagStyle,
-      { color: "rgb(255, 255, 255)", backgroundColor: "rgb(29, 29, 31)" },
-      `${label}: landing tags must use white text on the black surface`
-    );
-  }
+  assert.equal(facts.diveVisible, false, `${label}: the growing hero card must stay off under reduced motion`);
+  assert.equal(facts.stageInFlow, true, `${label}: the film's first frame must wait in the page flow`);
+  assert.ok(facts.stageTopGap !== null && facts.stageTopGap < 1, `${label}: the waiting first frame is not at the film's top`);
+  assert.equal(facts.filmAfterHero, true, `${label}: the film overlaps the hero`);
+  assert.deepEqual(facts.sectionOrder, SECTION_ORDER, `${label}: landing sections are out of order`);
+  assert.equal(facts.kwcagRows, 33, `${label}: the report grid must list all 33 KWCAG items`);
+  assert.deepEqual(facts.statValues.slice(0, 3), ["3", "33", "21"], `${label}: scope numbers changed`);
+  assert.equal(facts.lookTabs, 5, `${label}: expected five live-report features`);
+  assert.equal(facts.faqCount, 6, `${label}: expected six questions`);
   if (viewport.width >= 3840 && viewport.height >= 2000) {
-    assert.ok(facts.titleFontSize >= 155 && facts.titleFontSize <= 165, `${label}: 4K title scale is out of bounds`);
-    assert.ok(facts.copyWidth >= viewport.width * 0.9, `${label}: opening needs room for its single-line title`);
-    assert.ok(facts.topCtaHeight >= 68, `${label}: 4K primary action did not scale`);
-    assert.ok(facts.wordmarkFontSize >= 25, `${label}: 4K wordmark did not scale`);
+    assert.ok(facts.titleFontSize >= 155 && facts.titleFontSize <= 161, `${label}: 4K hero title did not scale (${facts.titleFontSize}px)`);
   } else if (viewport.width >= 2500 && viewport.height >= 1200) {
-    assert.ok(facts.titleFontSize >= 115 && facts.titleFontSize <= 130, `${label}: QHD title scale is out of bounds`);
-    assert.ok(facts.copyWidth >= viewport.width * 0.9, `${label}: opening needs room for its single-line title`);
-    assert.ok(facts.topCtaHeight >= 50, `${label}: QHD primary action did not scale`);
-    assert.ok(facts.wordmarkFontSize >= 21, `${label}: QHD wordmark did not scale`);
+    assert.ok(facts.titleFontSize >= 95 && facts.titleFontSize <= 112, `${label}: QHD hero title did not scale (${facts.titleFontSize}px)`);
   } else {
-    assert.ok(
-      viewport.width <= 860
-        ? facts.titleFontSize >= 18 && facts.titleFontSize <= 52
-        : facts.titleFontSize >= 60 && facts.titleFontSize <= 84,
-      `${label}: title scale is out of bounds (${facts.titleFontSize}px)`
-    );
+    assert.ok(facts.titleFontSize >= 40 && facts.titleFontSize <= 80, `${label}: hero title scale is out of bounds (${facts.titleFontSize}px)`);
   }
-  assert.equal(facts.topNavCount, 0, `${label}: header must stay focused on brand and primary action`);
   for (const control of facts.controls) {
-    assert.ok(
-      control.height >= CONTROL_MIN_HEIGHT_PX - 0.5,
-      `${label}: ${control.label} target is only ${control.height}px high`
-    );
+    assert.ok(control.height >= CONTROL_MIN_HEIGHT_PX - 0.5, `${label}: ${control.label} target is only ${control.height}px high`);
   }
 
-  if (viewport.width === 3840) {
-    await page.screenshot({ path: `${outDir}/scroll-world-${label}-opening.png`, fullPage: false });
-  }
-
-  if ([390, 1440, 2545, 3840].includes(viewport.width)) {
-    for (const fraction of [0, 0.25, 0.5, 0.75, 1]) {
-      await page.evaluate((targetFraction) => {
-        const maxScroll = document.documentElement.scrollHeight - innerHeight;
-        window.scrollTo(0, maxScroll * targetFraction);
-      }, fraction);
-      await settle(page);
-      await page.waitForFunction((targetFraction) => {
-        const maxScroll = document.documentElement.scrollHeight - innerHeight;
-        const actualFraction = maxScroll > 0 ? scrollY / maxScroll : 0;
-        return Math.abs(actualFraction - targetFraction) <= 0.002;
-      }, fraction);
-      assert.equal(await page.locator(".sw-route").isVisible(), false, `${label}: side bar reappeared while scrolling`);
-    }
-    await page.evaluate(() => window.scrollTo(0, 0));
-    await settle(page);
-  }
+  await page.screenshot({ path: `${outDir}/landing-${label}-top.png`, fullPage: false });
 
   await page.keyboard.press("Tab");
   assert.deepEqual(
@@ -255,7 +183,7 @@ async function verifyReducedMotionViewport(browser, viewport) {
   await page.keyboard.press("Enter");
   assert.equal(await page.evaluate(() => document.activeElement?.id), "uni-access-main");
 
-  const focus = await page.locator(".sw-topcta").evaluate((element) => {
+  const focus = await page.locator(".ua-hero .ua-button").evaluate((element) => {
     element.focus();
     const style = getComputedStyle(element);
     return { width: style.outlineWidth, offset: style.outlineOffset, style: style.outlineStyle };
@@ -264,78 +192,73 @@ async function verifyReducedMotionViewport(browser, viewport) {
   assert.equal(focus.offset, "3px", `${label}: CTA focus separation must be 3px`);
   assert.notEqual(focus.style, "none", `${label}: CTA focus outline is missing`);
 
-  // Scroll distance is capped at the FHD unit even when media fills a taller viewport.
-  await page.evaluate(() => window.scrollTo(0, Math.min(innerHeight, 1080) * 5.15));
+  // Film distances are capped at the FHD unit even when media fills a taller viewport.
+  await scrollFilm(page, 5.15);
   await page.waitForFunction(
-    () => document.querySelector(".sw-copy[aria-hidden=false] .sw-copy__title")?.textContent === "페이지와 분석 결과를 한눈에."
+    () => document.querySelector(".sw-copy[data-sw-active=true] .sw-copy__title")?.textContent === "페이지와 분석 결과를 한눈에."
   );
   await settle(page);
   const report = await page.evaluate(() => {
     const scene = document.querySelectorAll(".sw-scene")[3];
     const media = scene?.querySelector(".sw-scene__video, .sw-scene__still");
-    const copy = document.querySelector('.sw-copy[aria-hidden="false"]');
+    const copy = document.querySelector('.sw-copy[data-sw-active="true"]');
     const rect = media?.getBoundingClientRect();
     const copyRect = copy?.getBoundingClientRect();
-    const overlaps = Boolean(
-      rect && copyRect &&
-      rect.left < copyRect.right - 1 && rect.right > copyRect.left + 1 &&
-      rect.top < copyRect.bottom - 1 && rect.bottom > copyRect.top + 1
-    );
     return {
-      title: document.querySelector(".sw-copy[aria-hidden=false] .sw-copy__title")?.textContent,
-      inactiveCopyLeakCount: document.querySelectorAll('.sw-copy[aria-hidden="true"]:not([inert])').length,
-      cardElementFound: Boolean(media),
+      inactiveCopyLeakCount: document.querySelectorAll('.sw-copy[data-sw-active="false"] :is(a[href], button):not([tabindex="-1"])').length,
       cardWidth: rect?.width ?? 0,
       cardRadius: media ? Number.parseFloat(getComputedStyle(media).borderTopLeftRadius) : 0,
-      overlapsCopy: overlaps,
+      overlapsCopy: Boolean(rect && copyRect && rect.left < copyRect.right - 1 && rect.right > copyRect.left + 1 &&
+        rect.top < copyRect.bottom - 1 && rect.bottom > copyRect.top + 1),
+      stageFixed: getComputedStyle(document.querySelector(".sw-stage")).position === "fixed",
       overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
     };
   });
-  assert.equal(report.title, "페이지와 분석 결과를 한눈에.", `${label}: report copy did not activate`);
   assert.equal(report.inactiveCopyLeakCount, 0, `${label}: report transition exposed hidden CTA content`);
-  assert.equal(report.cardElementFound, true, `${label}: report card surface is missing`);
   assert.equal(report.overlapsCopy, false, `${label}: report media overlaps its copy`);
-  assert.ok(
-    report.cardRadius >= 20,
-    `${label}: report media must retain rounded card framing (${report.cardRadius}px)`
-  );
+  assert.equal(report.stageFixed, true, `${label}: the film stage must be pinned while it plays`);
+  assert.ok(report.cardRadius >= 20, `${label}: report media must retain rounded card framing (${report.cardRadius}px)`);
   const configuredCardRatio = viewport.width <= 860 ? 0.92 : viewport.width < 1280 ? 0.48 : 0.54;
   const cardMaxHeightRatio = viewport.width <= 860 ? 0.46 : 0.82;
-  const expectedCardWidth = Math.min(
-    viewport.width * configuredCardRatio,
-    viewport.height * cardMaxHeightRatio * (16 / 9)
-  );
+  const expectedCardWidth = Math.min(viewport.width * configuredCardRatio, viewport.height * cardMaxHeightRatio * (16 / 9));
   assert.ok(
     Math.abs(report.cardWidth - expectedCardWidth) < 1,
     `${label}: report card width is ${Math.round(report.cardWidth)}px; expected ${Math.round(expectedCardWidth)}px`
   );
   assert.equal(report.overflow, 0, `${label}: report scene introduced horizontal overflow`);
 
-  await page.evaluate(() => window.scrollTo(0, Math.min(innerHeight, 1080) * 6.75));
+  await scrollFilm(page, 6.75);
   await page.waitForFunction(
-    () => document.querySelector(".sw-copy[aria-hidden=false] .sw-copy__title")?.textContent === "접근성을 한 화면에서"
+    () => document.querySelector(".sw-copy[data-sw-active=true] .sw-copy__title")?.textContent === "접근성을 한 화면에서"
   );
   assert.deepEqual(
-    await page.locator('.sw-copy[aria-hidden="false"] .sw-copy__cta a').allTextContents(),
-    ["새 페이지 분석", "분석 결과 보기"],
-    `${label}: final actions are missing`
+    await page.locator('.sw-copy[data-sw-active="true"] .sw-copy__cta a').allTextContents(),
+    ["새 페이지 분석"],
+    `${label}: the final scene must offer only the primary action`
   );
-  await page.getByRole("link", { name: "분석 결과 보기", exact: true }).click();
-  await page.waitForFunction(
-    () => document.querySelector(".sw-copy[aria-hidden=false] .sw-copy__title")?.textContent === "페이지와 분석 결과를 한눈에."
-  );
+
+  // After the film: the following sections cover the pinned film layers.
+  await page.locator(".ua-report").scrollIntoViewIfNeeded();
+  await settle(page);
+  const covered = await page.evaluate(() => {
+    const paper = document.querySelector(".ua-report__paper").getBoundingClientRect();
+    const hit = document.elementFromPoint(paper.left + paper.width / 2, Math.max(paper.top + 10, 80));
+    return Boolean(hit?.closest(".ua-report"));
+  });
+  assert.equal(covered, true, `${label}: the final report section is hidden behind the film`);
 
   assert.equal(apiRequestCount, 0, `${label}: landing unexpectedly requested an API`);
   assert.deepEqual(pageErrors, [], `${label}: browser page errors detected`);
 
   if (viewport.width === 1440 || viewport.width === 390) {
-    await page.screenshot({ path: `${outDir}/scroll-world-${label}.png`, fullPage: false });
+    await page.screenshot({ path: `${outDir}/landing-${label}-report.png`, fullPage: false });
   }
 
   if (viewport.width === 1440) {
+    await page.evaluate(() => window.scrollTo(0, 0));
     await Promise.all([
       page.waitForURL("**/analyze"),
-      page.locator(".sw-topcta").click()
+      page.locator(".ua-lnav__cta").click()
     ]);
     await page.locator(".sw-root").waitFor({ state: "detached" });
     assert.equal(await page.locator(".sw-root").count(), 0, "route change must unmount the scroll world");
@@ -372,10 +295,45 @@ async function verifyDesktopMotionPath(browser) {
   assert.ok(openingBytes > 0 && openingBytes <= 8 * 1024 * 1024,
     `initial desktop video exceeds the 8 MiB media budget: ${openingBytes} bytes`);
 
+  // Before the film starts its layers stay hidden; the hero card owns the screen.
+  const layout = await page.evaluate(() => ({
+    stageHidden: getComputedStyle(document.querySelector(".sw-stage")).visibility === "hidden",
+    diveTop: document.querySelector(".ua-dive").getBoundingClientRect().top + scrollY,
+    filmTop: document.getElementById("tour").getBoundingClientRect().top + scrollY
+  }));
+  assert.equal(layout.stageHidden, true, "the film must stay hidden while the hero card grows");
+
+  // The card fills the viewport exactly when the film starts, on the same frame.
+  // Let the hero entrance finish first; it briefly lifts the card into place.
+  await page.evaluate(() => Promise.all(document.getAnimations()
+    .filter((animation) => animation.animationName === "ua-hero-rise")
+    .map((animation) => animation.finished)));
+  await page.evaluate((y) => window.scrollTo(0, y), layout.filmTop - 1);
+  await settle(page);
+  const card = await page.evaluate(() => {
+    const frame = document.querySelector(".ua-dive__frame").getBoundingClientRect();
+    return { width: frame.width, height: frame.height, top: frame.top,
+      viewportWidth: document.documentElement.clientWidth, viewportHeight: innerHeight,
+      stageHidden: getComputedStyle(document.querySelector(".sw-stage")).visibility === "hidden" };
+  });
+  assert.ok(Math.abs(card.width - card.viewportWidth) < 2 && Math.abs(card.height - card.viewportHeight) < 2 && Math.abs(card.top) < 2,
+    `the hero card must fill the viewport at the handoff: ${JSON.stringify(card)}`);
+  assert.equal(card.stageHidden, true, "the film must not appear before the card has filled the viewport");
+  await page.evaluate((y) => window.scrollTo(0, y), layout.filmTop + 1);
+  await settle(page);
+  const handoff = await page.evaluate(() => {
+    const stage = document.querySelector(".sw-stage");
+    const still = document.querySelector(".sw-scene .sw-scene__still").getBoundingClientRect();
+    return { visible: getComputedStyle(stage).visibility !== "hidden", fixed: getComputedStyle(stage).position === "fixed",
+      covers: still.left <= 0.5 && still.top <= 0.5 && still.right >= document.documentElement.clientWidth - 0.5 && still.bottom >= innerHeight - 0.5 };
+  });
+  assert.deepEqual(handoff, { visible: true, fixed: true, covers: true }, "the film must take over full-screen at the handoff");
+  await page.screenshot({ path: `${outDir}/handoff-1440.png` });
+
   const scenes = [];
   for (const scene of refreshedScenes) {
-    await page.evaluate((scrollVh) => window.scrollTo(0, innerHeight * scrollVh), scene.scrollVh);
-    await page.locator(`#sw-section-${scene.id}[aria-hidden="false"]:not([inert])`).waitFor();
+    await scrollFilm(page, scene.scrollVh);
+    await page.locator(`#sw-section-${scene.id}[data-sw-active="true"]`).waitFor();
     await page.waitForFunction((index) => {
       const element = document.querySelectorAll(".sw-scene")[index];
       const video = element?.querySelector("video");
@@ -402,7 +360,7 @@ async function verifyDesktopMotionPath(browser) {
         withinViewport: rect.left >= 0 && rect.top >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight,
         overlapsCopy: rect.left < copyRect.right - 1 && rect.right > copyRect.left + 1 &&
           rect.top < copyRect.bottom - 1 && rect.bottom > copyRect.top + 1,
-        activeCopyCount: document.querySelectorAll('.sw-copy[aria-hidden="false"]:not([inert])').length,
+        activeCopyCount: document.querySelectorAll('.sw-copy[data-sw-active="true"]').length,
         overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
       };
     }, scene);
@@ -418,9 +376,65 @@ async function verifyDesktopMotionPath(browser) {
     assert.equal(facts.overflow, 0, `${scene.id}: video introduced horizontal overflow`);
     scenes.push(facts);
   }
+
+  // The live-report features play their real recordings once the section is near.
+  await page.locator("#look").evaluate((section) => window.scrollTo(0, section.getBoundingClientRect().top + scrollY));
+  await page.waitForFunction(() => {
+    const video = document.querySelector(".ua-look__panel video");
+    return video && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && !video.paused && video.videoWidth === 1920;
+  }, null, { timeout: 15_000 });
+  assert.ok(videoRequests.includes("/landing/look/locate.mp4"), "the first feature recording was not requested");
+
+  // The message after the film lights up phrase by phrase as it scrolls in.
+  await page.locator(".ua-message").evaluate((element) => window.scrollTo(0, element.getBoundingClientRect().top + scrollY - innerHeight * 0.2));
+  await page.waitForFunction(() => document.querySelectorAll(".ua-message__phrase.is-lit").length === document.querySelectorAll(".ua-message__phrase").length);
+
   assert.deepEqual(pageErrors, [], "desktop motion path raised a page error");
   await context.close();
   return { openingBytes, scenes };
+}
+
+async function verifyLookTabs(browser) {
+  // Click, arrow keys and scroll position all select the same item.
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
+  try {
+    const page = await context.newPage();
+    await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded" });
+    await page.locator('[data-scroll-world-ready="true"]').waitFor();
+    // Start at the top of the pinned section, where the first item is open.
+    await page.locator("#look").evaluate((section) => window.scrollTo(0, section.getBoundingClientRect().top + scrollY));
+    await page.waitForFunction(() => document.querySelector('.ua-look [role="tab"][aria-selected="true"]')?.id === "ua-look-tab-locate");
+    const selected = () => page.locator('.ua-look [role="tab"][aria-selected="true"]').getAttribute("id");
+    assert.equal(await selected(), "ua-look-tab-locate");
+    await page.locator("#ua-look-tab-locate").focus();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    assert.equal(await selected(), "ua-look-tab-pause");
+    assert.equal(await page.evaluate(() => document.activeElement?.id), "ua-look-tab-pause");
+    await page.keyboard.press("End");
+    assert.equal(await selected(), "ua-look-tab-offscreen");
+    // Reduced motion shows each recording's poster instead of playing it.
+    assert.match(await page.locator(".ua-look__panel img").getAttribute("src"), /\/landing\/look\/offscreen\.webp$/);
+    assert.equal(await page.locator(".ua-look__panel video").count(), 0, "reduced motion must not play the feature recordings");
+    assert.equal(await page.locator("#ua-look-panel").getAttribute("aria-labelledby"), "ua-look-tab-offscreen");
+    await page.keyboard.press("Home");
+    assert.equal(await selected(), "ua-look-tab-locate");
+    // Scrolling through the pinned section opens the items in order.
+    await page.evaluate(() => {
+      const section = document.querySelector(".ua-look");
+      const top = section.getBoundingClientRect().top + scrollY;
+      window.scrollTo(0, top + (section.offsetHeight - innerHeight) * 0.7);
+    });
+    await page.waitForFunction(() => document.querySelector('.ua-look [role="tab"][aria-selected="true"]')?.id === "ua-look-tab-approx");
+    const pinned = await page.evaluate(() => Math.round(document.querySelector(".ua-look__inner").getBoundingClientRect().top));
+    assert.equal(pinned, 52, "the live-report feature stage must stay pinned under the header while scrolling");
+    await page.locator("#ua-look-tab-cluster").click();
+    assert.match(await page.locator(".ua-look__panel img").getAttribute("src"), /\/landing\/look\/cluster\.webp$/);
+    assert.equal(await page.locator('.ua-look [role="tab"][tabindex="0"]').count(), 1, "only the selected tab may be in the Tab order");
+    await page.locator(".ua-look").screenshot({ path: `${outDir}/look-cluster-1440.png` });
+  } finally {
+    await context.close();
+  }
 }
 
 async function verifyRefreshedMediaVariants(browser) {
@@ -506,70 +520,16 @@ async function verifyMobileHeightOnlyResize(browser) {
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
   await page.waitForFunction(() => {
     const maxScroll = document.documentElement.scrollHeight - innerHeight;
-    const activeTitle = document.querySelector('.sw-copy[aria-hidden="false"] .sw-copy__title');
+    const activeTitle = document.querySelector('.sw-copy[data-sw-active="true"] .sw-copy__title');
     return Math.abs(scrollY - maxScroll) <= 1 && activeTitle?.textContent === "접근성을 한 화면에서";
   });
   assert.equal(await page.locator(".sw-route").isVisible(), false, "mobile resize must not restore the side bar");
   assert.equal(
-    await page.locator('.sw-copy[aria-hidden="false"] .sw-copy__title').textContent(),
+    await page.locator('.sw-copy[data-sw-active="true"] .sw-copy__title').textContent(),
     "접근성을 한 화면에서",
     "mobile height-only resize lost the final scene state"
   );
   await context.close();
-}
-
-async function verifyScrollControl(browser) {
-  for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
-    const reducedMotion = viewport.width < 860 ? "reduce" : "no-preference";
-    const context = await browser.newContext({ viewport, reducedMotion });
-    try {
-      const page = await context.newPage();
-      await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded" });
-      await page.locator('[data-scroll-world-ready="true"]').waitFor();
-      const down = page.getByRole("button", { name: "SCROLL DOWN: 아래로 스크롤", exact: true });
-      const animation = await down.locator("svg").evaluate((arrow) => getComputedStyle(arrow).animationName);
-      assert.equal(animation === "none", reducedMotion === "reduce", "scroll arrow must respect reduced motion");
-      await down.click();
-      await page.waitForFunction(() => Math.abs(scrollY - innerHeight * 0.8) < 2);
-
-      for (const fraction of [0, 0.5, 0.95, 1]) {
-        await page.evaluate((value) => window.scrollTo({
-          top: (document.documentElement.scrollHeight - innerHeight) * value, behavior: "instant"
-        }), fraction);
-        const label = fraction === 1 ? "TOP: 맨 위로 이동" : "SCROLL DOWN: 아래로 스크롤";
-        const control = page.getByRole("button", { name: label, exact: true });
-        await control.waitFor();
-        const facts = await control.evaluate((element) => {
-          const rect = element.getBoundingClientRect();
-          const arrow = element.querySelector("i").getBoundingClientRect();
-          const text = element.querySelector("span").getBoundingClientRect();
-          return {
-            fixed: getComputedStyle(element).position === "fixed",
-            centered: Math.abs(rect.x + rect.width / 2 - innerWidth / 2) < 1,
-            bottom: rect.bottom <= innerHeight && rect.top >= innerHeight - 110,
-            onTop: element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)),
-            arrowAboveText: arrow.bottom <= text.top
-          };
-        });
-        assert.ok(Object.values(facts).every(Boolean), `${viewport.width}: scroll control is obscured or misplaced at ${fraction}: ${JSON.stringify(facts)}`);
-        if (fraction === 0 || fraction === 1) {
-          await page.screenshot({ path: `${outDir}/scroll-control-${viewport.width}-${fraction === 1 ? "bottom" : "opening"}.png` });
-        }
-      }
-      const top = page.getByRole("button", { name: "TOP: 맨 위로 이동", exact: true });
-      if (viewport.width >= 860) {
-        await top.focus();
-        await top.press("Enter");
-      } else {
-        await top.click();
-      }
-      await page.waitForFunction(() => scrollY < 1);
-      await down.waitFor();
-      assert.equal(await down.textContent(), "SCROLL DOWN", "returning to the top must restore the down label");
-    } finally {
-      await context.close();
-    }
-  }
 }
 
 async function verifyProductPreviewAccountMenu(browser) {
@@ -603,102 +563,6 @@ async function verifyProductPreviewAccountMenu(browser) {
   await context.close();
 }
 
-async function verifyMessageHandoff(browser) {
-  const context = await browser.newContext({ viewport: { width: 1740, height: 980 } });
-  try {
-    const page = await context.newPage();
-    await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded" });
-    await page.locator('[data-scroll-world-ready="true"]').waitFor();
-    await page.evaluate(() => document.fonts.ready);
-    const scrollToProgress = async (progress, scene) => {
-      await page.locator(".ua-findings__track").evaluate((track, fraction) => {
-        const rect = track.getBoundingClientRect();
-        scrollTo({ top: scrollY + rect.top + (rect.height - innerHeight) * fraction, behavior: "instant" });
-      }, progress);
-      await page.waitForFunction(expected => document.querySelector(".ua-findings__stage")?.dataset.scene === expected, scene);
-      await settle(page);
-    };
-    await scrollToProgress(0.06, "message");
-    await page.locator(".ua-message.is-visible").waitFor();
-    await page.waitForTimeout(1400); // Let the existing three-line entrance finish.
-    await scrollToProgress(0.18, "handoff");
-    const midpoint = await page.evaluate(() => {
-      const source = document.querySelector(".ua-message__word");
-      const target = document.querySelector(".ua-findings__target-word");
-      const moving = document.querySelector(".ua-findings__moving-word");
-      return { sourceX: source.getBoundingClientRect().left, targetX: target.getBoundingClientRect().left,
-        movingX: moving.getBoundingClientRect().left, movingVisible: getComputedStyle(moving).visibility,
-        sourceOpacity: getComputedStyle(source).opacity, targetOpacity: getComputedStyle(target).opacity };
-    });
-    assert.ok(midpoint.targetX < midpoint.movingX && midpoint.movingX < midpoint.sourceX, "The shared word must travel left between the two headings.");
-    assert.equal(midpoint.movingVisible, "visible");
-    assert.equal(midpoint.sourceOpacity, "0", "The moving word must not duplicate its source.");
-    assert.equal(midpoint.targetOpacity, "0", "The moving word must not duplicate its destination.");
-    await page.screenshot({ path: `${outDir}/message-handoff-midpoint.png` });
-    await scrollToProgress(0.279, "handoff");
-    const alignment = await page.evaluate(() => {
-      const moving = document.querySelector(".ua-findings__moving-word").getBoundingClientRect();
-      const target = document.querySelector(".ua-findings__target-word").getBoundingClientRect();
-      return Math.max(...["left", "top", "width", "height"].map(key => Math.abs(moving[key] - target[key])));
-    });
-    assert.ok(alignment < 1, `The arriving word must align with the next heading (${alignment}px).`);
-    await scrollToProgress(0.32, "findings");
-    assert.equal(await page.locator(".ua-findings__body").getAttribute("aria-hidden"), "false");
-    await scrollToProgress(0.18, "handoff");
-    await scrollToProgress(0.06, "message");
-    assert.equal(await page.locator(".ua-findings__message").getAttribute("aria-hidden"), "false");
-    await page.emulateMedia({ reducedMotion: "reduce" });
-    await scrollToProgress(0.2, "findings");
-    assert.equal(await page.locator(".ua-findings__moving-word").isVisible(), false);
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.emulateMedia({ reducedMotion: "no-preference" });
-    await scrollToProgress(0.06, "message");
-    await scrollToProgress(0.2, "findings");
-    assert.equal(await page.locator(".ua-findings__moving-word").isVisible(), false);
-    await page.screenshot({ path: `${outDir}/message-handoff-mobile.png` });
-  } finally {
-    await context.close();
-  }
-}
-
-async function verifyFindingsStages(browser) {
-  for (const viewport of [{ width: 390, height: 844 }, { width: 1920, height: 1080 }, { width: 3840, height: 2160 }]) {
-    const context = await browser.newContext({ viewport, reducedMotion: "reduce" });
-    try {
-      const page = await context.newPage();
-      await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded" });
-      await page.locator('[data-scroll-world-ready="true"]').waitFor();
-      await page.evaluate(() => document.fonts.ready);
-      for (const phase of [0, 1, 2, 3]) {
-        await page.locator(".ua-findings__track").evaluate((track, step) => {
-          const rect = track.getBoundingClientRect();
-          window.scrollTo({ top: scrollY + rect.top + (rect.height - innerHeight) * (0.28 + 0.72 * ((step + 0.2) / 4)), behavior: "instant" });
-        }, phase);
-        await page.waitForFunction((step) => {
-          const current = document.querySelector(".ua-findings__steps li[aria-current=step]");
-          return step === 0 ? !current : current === document.querySelectorAll(".ua-findings__steps li")[step - 1];
-        }, phase);
-        const figure = page.locator(".ua-findings__figure");
-        await figure.locator("img").evaluate(image => image.decode());
-        const facts = await figure.evaluate(element => {
-          const image = element.querySelector("img");
-          const rect = element.getBoundingClientRect();
-          return { imageRatio: image.naturalWidth / image.naturalHeight, step: element.dataset.step,
-            withinViewport: rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight,
-            overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth };
-        });
-        assert.equal(facts.step, String(Math.max(0, phase - 1)));
-        assert.ok(Math.abs(facts.imageRatio - 16 / 9) < 0.01, "The current findings capture must fill its 16:9 frame without cropping.");
-        assert.equal(facts.withinViewport, true, `${viewport.width}: findings media escaped the viewport at phase ${phase}`);
-        assert.equal(facts.overflow, false);
-        await figure.screenshot({ path: `${outDir}/findings-${viewport.width}-phase-${phase}.png` });
-      }
-    } finally {
-      await context.close();
-    }
-  }
-}
-
 const browser = await chromium.launch({ headless: true });
 try {
   const results = [];
@@ -706,15 +570,13 @@ try {
     results.push(await verifyReducedMotionViewport(browser, viewport));
   }
   await verifyMobileHeightOnlyResize(browser);
-  await verifyScrollControl(browser);
-  await verifyMessageHandoff(browser);
-  await verifyFindingsStages(browser);
+  await verifyLookTabs(browser);
   const scenes = await verifyDesktopMotionPath(browser);
   const variants = await verifyRefreshedMediaVariants(browser);
   await verifyProductPreviewAccountMenu(browser);
   writeFileSync(`${outDir}/landing-design-summary.json`, JSON.stringify(results, null, 2));
   writeFileSync(`${outDir}/landing-media-summary.json`, JSON.stringify({ scenes, variants }, null, 2));
-  console.log("Landing scroll-world visual checks passed.");
+  console.log("Landing visual checks passed.");
 } finally {
   await browser.close();
 }

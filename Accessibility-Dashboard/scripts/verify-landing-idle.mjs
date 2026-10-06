@@ -26,7 +26,9 @@ try {
   if (process.env.MEASURE_LANDING_BASELINE === "1") process.exitCode = 0;
   else {
     assert.equal(idleFrames, 0, "settled landing must stop scrub RAF work");
-    for (const position of [500, 0]) {
+    // The film starts below the hero; scroll inside it so the scrub loop has work to do.
+    const filmTop = await page.evaluate(() => document.getElementById("tour").getBoundingClientRect().top + scrollY);
+    for (const position of [filmTop + 500, filmTop]) {
       const before = await page.evaluate(() => window.scrubFrames);
       await page.evaluate(y => scrollTo(0, y), position);
       await page.waitForFunction(count => window.scrubFrames > count, before);

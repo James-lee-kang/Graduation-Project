@@ -36,7 +36,7 @@ const guides: Record<string, RuleGuide> = {
   "color-contrast": {
     help: "Elements must meet minimum color contrast ratio thresholds",
     explanation: "텍스트와 배경 사이의 명도 대비가 검사 기준에 미달합니다.",
-    guidance: "글자색이나 배경색을 조정하세요. 일반 텍스트는 4.5:1, 큰 텍스트는 3:1 이상의 대비가 필요합니다. 실제 측정값과 대상은 검사 원문에서 확인하세요."
+    guidance: "글자색이나 배경색을 조정하세요. 일반 텍스트는 4.5:1, 큰 텍스트는 3:1 이상의 대비가 필요합니다."
   },
   "document-title": {
     help: "Documents must have <title> element to aid in navigation",

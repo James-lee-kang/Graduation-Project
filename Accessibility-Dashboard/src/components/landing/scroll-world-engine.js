@@ -1,3 +1,4 @@
+// @ts-check
 /* ============================================================================
    scroll-world — portable scroll-scrubbed camera-flight engine
    ----------------------------------------------------------------------------
@@ -82,7 +83,9 @@ export function mountScrollWorld(container, config, options = {}) {
       .sort((p, q) => p.maxDevicePx - q.maxDevicePx).find(v => devicePx <= v.maxDevicePx);
     return (url && variant?.suffix) ? url.replace(/(\.[a-z0-9]+)(\?.*)?$/i, variant.suffix + '$1$2') : url;
   };
-  const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+  // Network Information API is non-standard; type it locally for @ts-check.
+  const navigatorWithConnection = /** @type {Navigator & { connection?: { saveData?: boolean }, mozConnection?: { saveData?: boolean }, webkitConnection?: { saveData?: boolean } }} */ (navigator);
+  const connection = navigatorWithConnection.connection || navigatorWithConnection.mozConnection || navigatorWithConnection.webkitConnection;
   const saveData = Boolean(connection && connection.saveData);
   const useStaticMedia = () => reduce || saveData || (isMobile() && config.mobileVideo === false);
   const SECTIONS = config.sections || [];
@@ -104,6 +107,16 @@ export function mountScrollWorld(container, config, options = {}) {
   injectCSS();
   container.replaceChildren();
   container.classList.add('sw-root');
+  // Optional landmark split: the skip link and topbar (banner) can live in a
+  // separate element before the page's own <main>, which then wraps this
+  // container together with the content that follows the film.
+  const chrome = options.chromeContainer || null;
+  if (chrome) {
+    chrome.replaceChildren();
+    chrome.classList.add('sw-chrome');
+  }
+  const externalMain = Boolean(options.externalMain);
+  const accentHosts = chrome ? [container, chrome] : [container];
 
   // ---- build the interleaved segment chain: dive0, conn0, dive1, … diveN-1 ----
   const SEGMENTS = [];
@@ -160,9 +173,11 @@ export function mountScrollWorld(container, config, options = {}) {
 
   const stage = el('div', 'sw-stage');
   stage.setAttribute('aria-hidden', 'true');
-  const copylayer = el('main', 'sw-copylayer');
-  copylayer.id = config.mainId || 'uni-access-main';
-  copylayer.tabIndex = -1;
+  const copylayer = el(externalMain ? 'div' : 'main', 'sw-copylayer');
+  if (!externalMain) {
+    copylayer.id = config.mainId || 'uni-access-main';
+    copylayer.tabIndex = -1;
+  }
   const route = el('nav', 'sw-route');
   route.setAttribute('aria-label', '현재 장면');
   if (config.route === false) route.style.display = 'none';   // route:false → 오른쪽 세로 진행 레일 숨김
@@ -171,7 +186,9 @@ export function mountScrollWorld(container, config, options = {}) {
   let hintAtBottom = false;
   if (hint) {
     hint.type = 'button';
-    hint.setAttribute('aria-label', `${config.hint}: 아래로 스크롤`);
+    hint.setAttribute('aria-label', config.hintLabel || '아래로 스크롤');
+    // The visible cue stays in English; mark it so screen readers pronounce it correctly.
+    hintText.lang = config.hintLang || 'en';
     const arrow = el('i');
     arrow.setAttribute('aria-hidden', 'true');
     arrow.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v16m-6-6 6 6 6-6"/></svg>';
@@ -187,9 +204,18 @@ export function mountScrollWorld(container, config, options = {}) {
   const track = el('div', 'sw-track');
   track.setAttribute('aria-hidden', 'true');
 
-  [skip, sky, topbar, stage, copylayer, route, hint, track]
-    .filter(Boolean)
-    .forEach(n => container.appendChild(n));
+  // chrome:false — the page renders its own skip link and header.
+  const ownChrome = config.chrome !== false;
+  if (chrome && ownChrome) {
+    [skip, topbar].forEach(n => chrome.appendChild(n));
+    [sky, stage, copylayer, route, hint, track]
+      .filter(Boolean)
+      .forEach(n => container.appendChild(n));
+  } else {
+    [ownChrome && skip, sky, ownChrome && topbar, stage, copylayer, route, hint, track]
+      .filter(Boolean)
+      .forEach(n => container.appendChild(n));
+  }
 
   // segment scenes
   SEGMENTS.forEach((s, segmentIndex) => {
@@ -234,8 +260,9 @@ export function mountScrollWorld(container, config, options = {}) {
   SECTIONS.forEach((s, i) => {
     const c = el('article', 'sw-copy'); c.style.setProperty('--sw-accent', s.accent || '');
     c.id = `sw-section-${s.id || i + 1}`;
-    c.setAttribute('aria-hidden', 'true');
-    c.inert = true;
+    // Every scene's copy stays in the accessibility tree (reading order =
+    // story order). Only its pointer and Tab reachability follow the scroll.
+    c.dataset.swActive = 'false';
     const headingTag = i === 0 ? 'h1' : 'h2';
     const headingId = i === 0 ? 'ua-hero-title' : `sw-title-${s.id || i + 1}`;
     const headingClass = 'sw-copy__title';
@@ -247,6 +274,12 @@ export function mountScrollWorld(container, config, options = {}) {
       (s.tags && s.tags.length ? `<ul class="sw-copy__tags">${s.tags.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : '') +
       (s.cta ? `<div class="sw-copy__cta">${ctaBtns(s.cta)}</div>` : '');
     copylayer.appendChild(c); copies.push(c);
+    setCopyInteractive(c, false);
+    // A screen reader (or a click on an off-screen copy) moving focus into a
+    // scene's copy scrolls the film to that scene so the focus is visible.
+    c.addEventListener('focusin', () => {
+      if (c.dataset.swActive !== 'true') jumpTo(i);
+    });
 
     const dot = el('button', 'sw-route__dot'); dot.type = 'button'; dot.style.setProperty('--sw-accent', s.accent || '');
     dot.setAttribute('aria-label', `${i + 1}. ${s.label || '장면'}`);
@@ -277,7 +310,7 @@ export function mountScrollWorld(container, config, options = {}) {
   // (where the copy peaks) and moves quicker near the seams. L=0 linear, L=1 full
   // mid-scene pause. f(0)=0, f(1)=1 always, so seam frames are untouched.
   const lingerEase = (x, L) => { L = clamp(L); const c = x - 0.5; return (1 - L) * x + L * (4 * c * c * c + 0.5); };
-  let vh = window.innerHeight, scrollUnit = vh, totalW = 0, activeIndex = -1, ticking = false, endedState = false;
+  let vh = window.innerHeight, scrollUnit = vh, totalW = 0, activeIndex = -1, ticking = false, placementState = 'fixed';
   let laidOutW = window.innerWidth;   // width the current layout was computed at (see onResize)
 
   function layout() {
@@ -301,7 +334,7 @@ export function mountScrollWorld(container, config, options = {}) {
 
   function jumpTo(i) {
     const seg = SECTIONS[i]._seg;
-    window.scrollTo({ top: seg.start + (seg.end - seg.start) * 0.5, behavior: reduce ? 'auto' : 'smooth' });
+    window.scrollTo({ top: filmOffset() + seg.start + (seg.end - seg.start) * 0.5, behavior: reduce ? 'auto' : 'smooth' });
   }
 
   function onActionClick(event) {
@@ -320,12 +353,22 @@ export function mountScrollWorld(container, config, options = {}) {
     jumpTo(sectionIndex);
   }
 
-  container.querySelectorAll('[data-sw-action]').forEach(link => {
-    link.addEventListener('click', onActionClick);
+  accentHosts.forEach(host => {
+    host.querySelectorAll('[data-sw-action]').forEach(link => {
+      link.addEventListener('click', onActionClick);
+    });
+    host.querySelectorAll('[data-sw-section]').forEach(link => {
+      link.addEventListener('click', onSectionLinkClick);
+    });
   });
-  container.querySelectorAll('[data-sw-section]').forEach(link => {
-    link.addEventListener('click', onSectionLinkClick);
-  });
+
+  function setCopyInteractive(copy, isInteractive) {
+    copy.dataset.swActive = String(isInteractive);
+    copy.querySelectorAll('a[href],button').forEach(control => {
+      if (isInteractive) control.removeAttribute('tabindex');
+      else control.tabIndex = -1;
+    });
+  }
 
   function loadClip(s) {
     // Under prefers-reduced-motion we never load the clips at all — the stills stay up
@@ -373,16 +416,23 @@ export function mountScrollWorld(container, config, options = {}) {
     pendingTimers.add(timer);
   }
 
+  // The film may start below other page content (options.scrollOffset): film time 0
+  // is the container's document top.
+  function filmOffset() {
+    return typeof options.scrollOffset === 'function' ? options.scrollOffset() : 0;
+  }
+
   function read() {
     if (destroyed) return;
-    const y = window.scrollY || window.pageYOffset;
+    const y = (window.scrollY || window.pageYOffset) - filmOffset();
     const fade = CROSSFADE * scrollUnit;
     let ci = 0;
     for (let i = 0; i < NSEG; i++) if (y >= SEGMENTS[i].start) ci = i;
 
     for (let i = 0; i < NSEG; i++) {
       const s = SEGMENTS[i];
-      if (y > s.start - 0.9 * scrollUnit && y < s.end + 0.9 * scrollUnit) loadClip(s);
+      // The opening clip loads up front even when the film starts further down the page.
+      if (i === 0 ? y < s.end + 0.9 * scrollUnit : y > s.start - 0.9 * scrollUnit && y < s.end + 0.9 * scrollUnit) loadClip(s);
       const local = clamp((y - s.start) / (s.end - s.start), 0, 1);
       s.target = s.linger ? lingerEase(local, s.linger) : local;
       if (s.kind === 'dive' && s.layout === 'card') {
@@ -391,8 +441,9 @@ export function mountScrollWorld(container, config, options = {}) {
         applyCard(s);
       }
       let outside = 0;
-      // The final scene stays fully visible past its end: it scrolls away with the page (see sw-ended).
-      if (y < s.start) outside = s.start - y; else if (y > s.end && i !== NSEG - 1) outside = y - s.end;
+      // The first scene stays fully visible before the film and the final scene past its end:
+      // they arrive and leave with the page (see the placement block below).
+      if (y < s.start && i !== 0) outside = s.start - y; else if (y > s.end && i !== NSEG - 1) outside = y - s.end;
       const op = smooth(1 - outside / fade);
       s.el.style.opacity = op; s.visible = op > 0.001;
       s.el.style.zIndex = (i === ci) ? '120' : String(100 + Math.round(op * 10));
@@ -426,26 +477,32 @@ export function mountScrollWorld(container, config, options = {}) {
           : `translate(${slideX.toFixed(2)}vw, calc(-50% + ${driftY}vh))`;
       const isInteractive = cop > 0.5;
       c.style.pointerEvents = isInteractive ? 'auto' : 'none';
-      c.setAttribute('aria-hidden', String(!isInteractive));
-      c.inert = !isInteractive;
+      if (c.dataset.swActive !== String(isInteractive)) setCopyInteractive(c, isInteractive);
     }
 
-    // ---- end of film: hand the last frame over to the document flow ----
-    // While the film plays the stage/copy are position:fixed. Once the scroll passes the last
-    // band (filmEnd) they become position:absolute at exactly that document offset, so the
-    // final scene scrolls away with the page and whatever follows the mount container
-    // (a normal section) continues directly beneath it. Reversible on scroll-up.
+    // ---- before and after the film: hand the first/last frame over to the document flow ----
+    // While the film plays the stage/copy are position:fixed. Past the last band (filmEnd)
+    // they become position:absolute at exactly that document offset, so the final scene
+    // scrolls away with the page and the following section continues beneath it. When the
+    // film starts below other content, the first frame likewise sits in the flow at the
+    // container top until it reaches the viewport top — unless options.hideBeforeStart()
+    // asks to keep the layers hidden (the page covers that stretch itself). Reversible.
     const filmEnd = totalW * scrollUnit;
     const ended = y >= filmEnd;
-    if (ended !== endedState) {
-      endedState = ended;
+    const placement = y < 0
+      ? (typeof options.hideBeforeStart === 'function' && options.hideBeforeStart() ? 'hidden' : 'before')
+      : ended ? 'after' : 'fixed';
+    if (placement !== placementState) {
+      placementState = placement;
       container.classList.toggle('sw-ended', ended);
+      const inFlow = placement === 'before' || placement === 'after';
       [stage, copylayer].forEach(n => {
-        n.style.position = ended ? 'absolute' : '';
-        n.style.top = ended ? filmEnd + 'px' : '';
-        n.style.bottom = ended ? 'auto' : '';
-        n.style.height = ended ? vh + 'px' : '';
+        n.style.position = inFlow ? 'absolute' : '';
+        n.style.top = placement === 'after' ? filmEnd + 'px' : placement === 'before' ? '0px' : '';
+        n.style.bottom = inFlow ? 'auto' : '';
+        n.style.height = inFlow ? vh + 'px' : '';
       });
+      [sky, stage, copylayer].forEach(n => { n.style.visibility = placement === 'hidden' ? 'hidden' : ''; });
     }
     // Fade the last scene's copy as it scrolls away so it never collides with the fixed topbar.
     if (ended) copylayer.style.opacity = String(clamp(1 - (y - filmEnd) / (vh * 0.45))); else copylayer.style.opacity = '';
@@ -465,7 +522,7 @@ export function mountScrollWorld(container, config, options = {}) {
         n.classList.toggle('is-active', isActive);
         if (isActive) n.setAttribute('aria-current', 'step'); else n.removeAttribute('aria-current');
       });
-      container.style.setProperty('--sw-accent', SECTIONS[near].accent || '');
+      accentHosts.forEach(host => host.style.setProperty('--sw-accent', SECTIONS[near].accent || ''));
       container.classList.toggle('sw-card-active', (SECTIONS[near].layout || 'full') === 'card');
     }
     // This replaces the removed horizontal page gauge, so it follows the
@@ -479,7 +536,7 @@ export function mountScrollWorld(container, config, options = {}) {
       hintAtBottom = atBottom;
       hint.classList.toggle('is-top', atBottom);
       hintText.textContent = atBottom ? 'TOP' : config.hint;
-      hint.setAttribute('aria-label', atBottom ? 'TOP: 맨 위로 이동' : `${config.hint}: 아래로 스크롤`);
+      hint.setAttribute('aria-label', atBottom ? '맨 위로 이동' : (config.hintLabel || '아래로 스크롤'));
     }
     if (particles) particles.style.transform = `translate3d(0, ${-y * 0.05}px, 0)`;
     ticking = false;
@@ -592,6 +649,11 @@ export function mountScrollWorld(container, config, options = {}) {
     container.classList.remove('sw-root', 'sw-card-active');
     container.removeAttribute('data-scroll-world-ready');
     container.style.removeProperty('--sw-accent');
+    if (chrome) {
+      chrome.replaceChildren();
+      chrome.classList.remove('sw-chrome');
+      chrome.style.removeProperty('--sw-accent');
+    }
   };
 
   // ---- helpers ----
@@ -626,11 +688,12 @@ function seedParticles(host, reduce) {
 function injectCSS() {
   const existingStyle = document.getElementById('sw-css');
   const css = `
-  .sw-root{--sw-bg:#f5f5f7;--sw-ink:#1d1d1f;--sw-ink-soft:#6e6e73;--sw-accent:#0071e3;
+  .sw-root,.sw-chrome{--sw-bg:#f5f5f7;--sw-ink:#1d1d1f;--sw-ink-soft:#6e6e73;--sw-accent:#0071e3;
     --sw-font-display:"Pretendard Variable",Pretendard,"Noto Sans KR",system-ui,sans-serif;
     --sw-font-body:"Pretendard Variable",Pretendard,"Noto Sans KR",system-ui,sans-serif;
-    position:relative;min-height:100vh;margin:0;overflow-x:clip;background:var(--sw-bg);color:var(--sw-ink);font-family:var(--sw-font-body);}
-  .sw-root *{box-sizing:border-box;}
+    color:var(--sw-ink);font-family:var(--sw-font-body);}
+  .sw-root{position:relative;min-height:100vh;margin:0;overflow-x:clip;background:var(--sw-bg);}
+  .sw-root *,.sw-chrome *{box-sizing:border-box;}
   .sw-skip-link{position:fixed;left:16px;top:12px;z-index:1000;transform:translateY(-180%);border-radius:10px;background:#fff;color:var(--sw-ink);padding:12px 16px;font-weight:700;text-decoration:none;box-shadow:0 8px 30px rgba(0,0,0,.16);transition:transform .18s ease;}
   .sw-skip-link:focus-visible{transform:translateY(0);outline:3px solid var(--sw-accent);outline-offset:3px;}
   .sw-sky{position:fixed;inset:0;z-index:0;overflow:hidden;pointer-events:none;background:var(--sw-bg);}
@@ -740,13 +803,13 @@ function injectCSS() {
     .sw-route__dot{width:44px;height:44px;}
     .sw-btn{padding:15px 26px;}
   }
-  .sw-root :where(a,button):focus-visible{outline:3px solid var(--sw-accent);outline-offset:3px;}
+  .sw-root :where(a,button):focus-visible,.sw-chrome :where(a,button):focus-visible{outline:3px solid var(--sw-accent);outline-offset:3px;}
   @media (forced-colors:active){
     .sw-route::before{background:GrayText;}
     .sw-route::after{background:Highlight;}
   }
   @media (prefers-reduced-motion:reduce){
-    .sw-root *,.sw-root *::before,.sw-root *::after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important;}
+    .sw-root *,.sw-root *::before,.sw-root *::after,.sw-chrome *,.sw-chrome *::before,.sw-chrome *::after{animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important;transition-duration:.01ms!important;}
     .sw-hint svg{animation:none;}.sw-pt{display:none;}
   }
   `;

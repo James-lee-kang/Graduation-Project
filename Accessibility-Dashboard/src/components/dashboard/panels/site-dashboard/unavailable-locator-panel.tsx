@@ -1,15 +1,18 @@
-import { ChevronLeft, ChevronRight, LocateFixed } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
-import { formatIssueCodeLabel } from "./constants";
+import type { SeverityLevel } from "@/types/accessibility-domain";
+
+import { groupByCriterion, type ReportCriterionGroup } from "./final-report";
+import { buildSharedGuidance, describeIssueLine, readIssue, type IssueReading } from "./issue-guidance";
 import { getLocatorLabel } from "./locator-labels";
-import { formatIssueDescription, toPageReplayIssue } from "./page-replay-protocol";
 import type { LocatorCheckState, LocatorIssueState, RecentIssueRow } from "./types";
 
 type UnavailableLocatorPanelProps = {
   checkState: LocatorCheckState;
   hasHiddenIssues?: boolean;
-  mode?: "recoverable" | "page-settings" | "outdated" | "unavailable";
+  mode?: "page-settings" | "unavailable";
+  /** Findings shown once the page switches state (a slide, tab or focus); they join the hidden list. */
+  recoverableRows?: RecentIssueRow[];
   onSelectIssue?: (issueId: number) => void;
   onShowLocation: (issueId: number) => void;
   issueStates?: Record<number, LocatorIssueState>;
@@ -17,125 +20,86 @@ type UnavailableLocatorPanelProps = {
 };
 
 const panelHeadings = {
-  recoverable: "다른 화면 상태의 문제",
   "page-settings": "페이지 전체 설정",
-  outdated: "분석 이후 바뀐 문제",
   unavailable: "화면에 표시되지 않은 문제"
 };
 
-// 최대 세 페이지를 표시하며 첫 페이지는 왼쪽, 마지막 페이지는 오른쪽에 둔다.
-function getPagerDotWindow(pageCount: number, pageIndex: number) {
-  const dotCount = Math.min(3, pageCount);
-  const startIndex = Math.max(0, Math.min(pageIndex - 1, pageCount - dotCount));
-  return Array.from({ length: dotCount }, (_, offset) => startIndex + offset);
+const STATE_FILTER = "다른 화면 상태";
+const ALL_FILTER = "전체";
+const INITIAL_VISIBLE = 4;
+const MORE_STEP = 6;
+const OPEN_MS = 280;
+const FOLD_MS = 240;
+const SLIDE_EASING = "cubic-bezier(0.32, 0.72, 0, 1)";
+
+/**
+ * Slides a group body between two measured heights. The body clips only
+ * while it moves, so focus rings are never cut once it rests. A fold holds
+ * its last frame until the rows are removed, so the full height never
+ * flashes back between the end of the fold and the removal.
+ */
+function slide(body: HTMLElement, from: number, to: number): Animation {
+  const folding = to === 0;
+  body.style.overflow = "clip";
+  const animation = body.animate(
+    [{ height: `${from}px`, opacity: from === 0 ? 0 : 1 }, { height: `${to}px`, opacity: folding ? 0 : 1 }],
+    { duration: folding ? FOLD_MS : OPEN_MS, easing: SLIDE_EASING, fill: folding ? "forwards" : "none" }
+  );
+  if (!folding) animation.finished.then(() => { body.style.overflow = ""; }, () => {});
+  return animation;
+}
+const severityRank: Record<SeverityLevel, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+
+type Entry = { row: RecentIssueRow; recoverable: boolean; reason: string };
+
+function filterKey(entry: Entry): string {
+  return entry.recoverable ? STATE_FILTER : entry.reason;
 }
 
-function useUnavailableIssuePageSize(hasVisibleRows: boolean) {
-  const listRef = useRef<HTMLUListElement>(null);
-  const [pageSize, setPageSize] = useState(1);
-
-  useLayoutEffect(() => {
-    const list = listRef.current;
-    if (!hasVisibleRows || !list) return;
-    const panel = list.closest<HTMLElement>(".site-unavailable-locator-panel");
-    const rail = panel?.parentElement;
-    if (!panel || !rail) return;
-    const header = panel.querySelector<HTMLElement>(".site-unavailable-locator-panel__header");
-    const pagination = list.parentElement;
-    const pager = panel.querySelector<HTMLElement>(".site-unavailable-locator-panel__pager");
-    if (!header || !pagination || !pager) return;
-
-    const measure = () => {
-      const style = getComputedStyle(list);
-      const minimumCardHeight = Number.parseFloat(style.minHeight);
-      const gap = Number.parseFloat(style.rowGap) || 0;
-      if (!Number.isFinite(minimumCardHeight) || minimumCardHeight <= 0) return;
-      const panelStyle = getComputedStyle(panel);
-      const paginationStyle = getComputedStyle(pagination);
-      const px = (value: string) => Number.parseFloat(value) || 0;
-      // Measure the chrome independently of the constrained panel height.
-      // Subtracting list height from panel height retains the old max-height
-      // after zoom/resize increases padding, trapping the pager at the edge.
-      const chromeHeight = px(panelStyle.paddingTop) + px(panelStyle.paddingBottom)
-        + px(panelStyle.borderTopWidth) + px(panelStyle.borderBottomWidth)
-        + header.getBoundingClientRect().height
-        + px(paginationStyle.marginTop) + px(paginationStyle.marginBottom)
-        + px(paginationStyle.rowGap) + pager.getBoundingClientRect().height;
-      const chromeValue = `${chromeHeight}px`;
-      if (panel.style.getPropertyValue("--site-unavailable-panel-chrome-height") !== chromeValue) {
-        panel.style.setProperty("--site-unavailable-panel-chrome-height", chromeValue);
-      }
-      const panelBounds = panel.getBoundingClientRect();
-      // A compact panel leaves unused rail space below it. Include that space
-      // when measuring capacity so shrinking the panel does not shrink its pages.
-      const remainingRailHeight = panel === rail.lastElementChild && getComputedStyle(rail).alignSelf === "stretch"
-        ? Math.max(0, rail.getBoundingClientRect().bottom - panelBounds.bottom)
-        : 0;
-      // Allow subpixel layout rounding without losing an otherwise fitting row.
-      const capacity = Math.max(1, Math.floor((panelBounds.height + remainingRailHeight - chromeHeight + gap + 0.5) / (minimumCardHeight + gap)));
-      setPageSize(previous => previous === capacity ? previous : capacity);
-    };
-
-    const observer = new ResizeObserver(measure);
-    const observeRail = () => {
-      observer.disconnect();
-      observer.observe(list);
-      observer.observe(rail);
-      observer.observe(header);
-      observer.observe(pager);
-      for (const card of rail.children) observer.observe(card);
-      measure();
-    };
-    observeRail();
-    const childObserver = new MutationObserver(observeRail);
-    childObserver.observe(rail, { childList: true });
-    return () => {
-      observer.disconnect();
-      childObserver.disconnect();
-    };
-  }, [hasVisibleRows]);
-
-  return { listRef, pageSize };
-}
-
+/**
+ * The rail's list of findings without a place on the current screen, grouped
+ * by criterion like the final report: each group says its shared advice once
+ * and lists one short line per finding. Chips filter by why a finding is not
+ * on screen; findings in another screen state are one of those reasons.
+ */
 export function UnavailableLocatorPanel({
   checkState,
   hasHiddenIssues = false,
   mode = "unavailable",
+  recoverableRows = [],
   onSelectIssue,
   onShowLocation,
   issueStates,
   rows
 }: UnavailableLocatorPanelProps) {
-  const [activeIssueId, setActiveIssueId] = useState<number | null>(null);
-  const { listRef, pageSize } = useUnavailableIssuePageSize(checkState === "ready" && rows.length > 0);
-  const isRecoverable = mode === "recoverable";
+  const [filter, setFilter] = useState(ALL_FILTER);
+  const [toggled, setToggled] = useState<ReadonlyMap<string, boolean>>(() => new Map());
+  const [visibleCounts, setVisibleCounts] = useState<ReadonlyMap<string, number>>(() => new Map());
   const heading = panelHeadings[mode];
   const headingId = `site-${mode}-locator-heading`;
 
-  const selectedIndex = rows.findIndex((row) => row.issue.id === activeIssueId);
-  const activeIndex = selectedIndex >= 0 ? selectedIndex : 0;
-  const pageStartIndex = Math.floor(activeIndex / pageSize) * pageSize;
-  const visibleRows = rows.slice(pageStartIndex, pageStartIndex + pageSize);
-  const pageEndIndex = pageStartIndex + visibleRows.length;
-  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
-  const pageIndex = Math.floor(pageStartIndex / pageSize);
-  // Reset only the visual dots when the list changes; keep the buttons and keyboard focus.
-  const dotLayoutKey = `${pageSize}:${rows.map((row) => row.issue.id).join(",")}`;
-  const goToPage = (nextPageIndex: number) => {
-    const clamped = Math.min(pageCount - 1, Math.max(0, nextPageIndex));
-    setActiveIssueId(rows[clamped * pageSize]?.issue.id ?? null);
-  };
+  const entries = useMemo<Entry[]>(() => [
+    ...recoverableRows.map((row) => ({ row, recoverable: true, reason: getLocatorLabel(issueStates?.[row.issue.id]) })),
+    ...rows.map((row) => ({ row, recoverable: false, reason: getLocatorLabel(issueStates?.[row.issue.id]) }))
+  ], [recoverableRows, rows, issueStates]);
 
-  useEffect(() => {
-    const firstIssueId = rows[0]?.issue.id ?? null;
-    if (activeIssueId !== null && rows.some((row) => row.issue.id === activeIssueId)) {
-      return;
-    }
-    setActiveIssueId(firstIssueId);
-  }, [activeIssueId, rows]);
+  // Only the hidden list filters; most common reason first.
+  const filters = useMemo(() => {
+    if (mode !== "unavailable") return [];
+    const counts = new Map<string, number>();
+    for (const entry of entries) counts.set(filterKey(entry), (counts.get(filterKey(entry)) ?? 0) + 1);
+    const ordered = [...counts.entries()].sort(([leftKey, left], [rightKey, right]) =>
+      Number(rightKey === STATE_FILTER) - Number(leftKey === STATE_FILTER) || right - left);
+    return ordered.length > 1 ? [[ALL_FILTER, entries.length] as const, ...ordered] : [];
+  }, [entries, mode]);
+  const activeFilter = filters.some(([key]) => key === filter) ? filter : ALL_FILTER;
+  const shown = activeFilter === ALL_FILTER ? entries : entries.filter((entry) => filterKey(entry) === activeFilter);
 
-  if (checkState !== "ready" || rows.length === 0) {
+  const entryById = useMemo(() => new Map(entries.map((entry) => [entry.row.issue.id, entry])), [entries]);
+  const groups = useMemo(() => groupByCriterion(shown.map((entry) => entry.row))
+    .sort((left, right) => severityRank[left.severity.key] - severityRank[right.severity.key] || right.rows.length - left.rows.length),
+  [shown]);
+  if (checkState !== "ready" || entries.length === 0) {
     // Only the last list explains an empty or pending state.
     if (mode !== "unavailable") {
       return null;
@@ -146,8 +110,6 @@ export function UnavailableLocatorPanel({
         data-locator-mode="unavailable"
         data-locator-check-state={checkState}
         data-unavailable-locator-count={checkState === "ready" ? 0 : undefined}
-        data-unavailable-page-size={pageSize}
-        data-visible-issue-count={0}
         aria-labelledby={headingId}
         aria-busy={checkState === "loading"}
       >
@@ -178,11 +140,8 @@ export function UnavailableLocatorPanel({
       data-locator-mode={mode}
       data-locator-check-state={checkState}
       data-unavailable-locator-count={mode === "unavailable" ? rows.length : undefined}
-      data-hidden-state-locator-count={isRecoverable ? rows.length : undefined}
-      data-locator-count={rows.length}
-      data-unavailable-page-size={pageSize}
-      data-visible-issue-count={visibleRows.length}
-      style={{ "--site-unavailable-visible-count": visibleRows.length } as CSSProperties}
+      data-hidden-state-locator-count={recoverableRows.length > 0 ? recoverableRows.length : undefined}
+      data-locator-count={entries.length}
       aria-labelledby={headingId}
     >
       <div className="site-unavailable-locator-panel__header">
@@ -190,144 +149,148 @@ export function UnavailableLocatorPanel({
           <h3 id={headingId}>{heading}</h3>
         </div>
         <span className="site-unavailable-locator-panel__count" aria-hidden="true">
-          {rows.length.toLocaleString("ko-KR")}건
+          {shown.length.toLocaleString("ko-KR")}건
         </span>
       </div>
-
-      <div
-        className="site-unavailable-locator-panel__pagination"
-        role="group"
-        aria-label={`${heading} 탐색`}
-      >
-        <ul ref={listRef} className="site-unavailable-locator-panel__issues">
-          {visibleRows.map((row) => {
-            const replayIssue = toPageReplayIssue(row);
-            const issueCode = formatIssueCodeLabel(replayIssue.code);
-            const style = {
-              "--site-unavailable-issue-color": row.severity.color
-            } as CSSProperties;
-
-            return (
-              <li
-                key={row.issue.id}
-                className="site-unavailable-locator-panel__issue"
-                data-issue-id={row.issue.id}
-                data-pageable={pageCount > 1 ? "true" : "false"}
-                tabIndex={0}
-                aria-label={`${replayIssue.title} 설명`}
-                style={style}
-                onClick={(event) => {
-                  if (pageCount <= 1 || (event.target as HTMLElement).closest("button")) return;
-                  const selection = window.getSelection();
-                  if (selection && !selection.isCollapsed && event.currentTarget.contains(selection.anchorNode)) return;
-                  const bounds = event.currentTarget.getBoundingClientRect();
-                  // Using the card's scrollbar must not turn the issue page.
-                  const localX = (event.clientX - bounds.left) * event.currentTarget.offsetWidth / bounds.width;
-                  if (localX >= event.currentTarget.clientLeft + event.currentTarget.clientWidth) return;
-                  if (event.clientX - bounds.left < bounds.width / 2) goToPage(pageIndex - 1);
-                  else goToPage(pageIndex + 1);
-                }}
-              >
-                <div className="site-unavailable-locator-panel__issue-header">
-                  <div className="site-unavailable-locator-panel__meta">
-                    <span className="site-unavailable-locator-panel__severity">
-                      {row.severity.label}
-                    </span>
-                    {issueCode ? (
-                      <span className="site-unavailable-locator-panel__code">{issueCode}</span>
-                    ) : null}
-                  </div>
-                  <button
-                    type="button"
-                    className="site-unavailable-locator-panel__reveal site-unavailable-locator-panel__location"
-                    onClick={() => onShowLocation(row.issue.id)}
-                  >
-                    문제 상세
-                  </button>
-                </div>
-                <h4 data-copyable>{replayIssue.title}</h4>
-                <p data-copyable className="site-unavailable-locator-panel__reason">
-                  {getLocatorLabel(issueStates?.[row.issue.id])}
-                </p>
-                <p data-copyable className="site-unavailable-locator-panel__message">
-                  {formatIssueDescription(row.issue.message, row.analyzerType, row.issue.ruleId) || "상세 설명이 없습니다."}
-                </p>
-                {isRecoverable && onSelectIssue ? (
-                  <div className="site-unavailable-locator-panel__actions">
-                    <button
-                      type="button"
-                      className="site-unavailable-locator-panel__reveal"
-                      onClick={() => onSelectIssue(row.issue.id)}
-                    >
-                      <LocateFixed size={14} strokeWidth={2.2} aria-hidden="true" />
-                      문제 위치로 이동
-                    </button>
-                  </div>
-                ) : null}
-              </li>
-            );
-          })}
-        </ul>
-
-        <div
-          className="site-unavailable-locator-panel__pager"
-          onKeyDown={(event) => {
-            if (event.key === "ArrowLeft") { event.preventDefault(); goToPage(pageIndex - 1); }
-            if (event.key === "ArrowRight") { event.preventDefault(); goToPage(pageIndex + 1); }
-          }}
-        >
-          <button
-            type="button"
-            className="site-unavailable-locator-panel__navigation site-unavailable-locator-panel__navigation--previous"
-            aria-label="이전 문제"
-            onClick={() => goToPage(pageIndex - 1)}
-            disabled={pageStartIndex === 0}
-          >
-            <ChevronLeft size={13} strokeWidth={2.25} aria-hidden="true" />
-          </button>
-          {pageCount > 1 ? (
-            <span className="site-unavailable-locator-panel__dots">
-              {getPagerDotWindow(pageCount, pageIndex).map((index) => (
-                <button
-                  key={index}
-                  type="button"
-                  className="site-unavailable-locator-panel__dot"
-                  data-active={index === pageIndex ? "true" : "false"}
-                  aria-label={`${index + 1}번째 페이지`}
-                  aria-current={index === pageIndex ? "true" : undefined}
-                  onClick={() => goToPage(index)}
-                >
-                  <span
-                    key={dotLayoutKey}
-                    className="site-unavailable-locator-panel__dot-shape"
-                    aria-hidden="true"
-                  />
-                </button>
-              ))}
-            </span>
-          ) : null}
-          <button
-            type="button"
-            className="site-unavailable-locator-panel__navigation site-unavailable-locator-panel__navigation--next"
-            aria-label="다음 문제"
-            onClick={() => goToPage(pageIndex + 1)}
-            disabled={pageEndIndex >= rows.length}
-          >
-            <ChevronRight size={13} strokeWidth={2.25} aria-hidden="true" />
-          </button>
+      {filters.length > 0 && (
+        <div className="site-unavailable-locator-panel__reasons" role="group" aria-label="이유로 거르기">
+          {filters.map(([key, count]) => (
+            <button key={key} type="button" className="site-unavailable-locator-panel__filter"
+              aria-pressed={activeFilter === key} onClick={() => setFilter(key)}>
+              {key} <span>{count.toLocaleString("ko-KR")}</span>
+            </button>
+          ))}
         </div>
-      </div>
+      )}
 
-      <span
-        className="site-unavailable-locator-panel__position sr-only"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-      >
-        {visibleRows.length === 1
-          ? `총 ${rows.length.toLocaleString("ko-KR")}건 중 ${pageStartIndex + 1}번째 문제: ${toPageReplayIssue(visibleRows[0]).title}`
-          : `총 ${rows.length.toLocaleString("ko-KR")}건 중 ${pageStartIndex + 1}번째부터 ${pageEndIndex}번째 문제`}
-      </span>
+      <div className="site-unavailable-locator-panel__groups">
+        {/* Every group starts folded; only the user opens one. */}
+        {groups.map((group) => {
+          const expanded = toggled.get(group.code) ?? false;
+          return (
+            <LocatorGroup
+              key={group.code}
+              group={group}
+              expanded={expanded}
+              visibleCount={visibleCounts.get(group.code) ?? INITIAL_VISIBLE}
+              entryById={entryById}
+              mode={mode}
+              onToggle={() => setToggled((current) => new Map(current).set(group.code, !expanded))}
+              onShowMore={() => setVisibleCounts((current) =>
+                new Map(current).set(group.code, (current.get(group.code) ?? INITIAL_VISIBLE) + MORE_STEP))}
+              onSelectIssue={onSelectIssue}
+              onShowLocation={onShowLocation}
+            />
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function LocatorGroup({ group, expanded, visibleCount, entryById, mode, onToggle, onShowMore, onSelectIssue, onShowLocation }: {
+  group: ReportCriterionGroup;
+  expanded: boolean;
+  visibleCount: number;
+  entryById: ReadonlyMap<number, Entry>;
+  mode: "page-settings" | "unavailable";
+  onToggle: () => void;
+  onShowMore: () => void;
+  onSelectIssue?: (issueId: number) => void;
+  onShowLocation: (issueId: number) => void;
+}) {
+  const listId = `site-${mode}-locator-${group.code.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+  const readings = useMemo(() => new Map<number, IssueReading>(group.rows.map((row) => [row.issue.id, readIssue(row)])), [group.rows]);
+  const shared = useMemo(
+    () => buildSharedGuidance(group.rows, (row) => readings.get(row.issue.id) ?? readIssue(row)),
+    [group.rows, readings]
+  );
+  const visibleRows = group.rows.slice(0, visibleCount);
+  const remaining = group.rows.length - visibleRows.length;
+  // Opening slides the rows down from the header; closing folds them back
+  // up from their current height and removes them the moment they are gone.
+  // Only a press animates; a group opened by a live update simply appears.
+  const [mounted, setMounted] = useState(expanded);
+  const pressedRef = useRef(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  if (expanded && !mounted) setMounted(true);
+  useLayoutEffect(() => {
+    const body = bodyRef.current;
+    const pressed = pressedRef.current;
+    pressedRef.current = false;
+    if (!body) return;
+    body.inert = !expanded;
+    const animate = pressed && !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const moving = body.getAnimations();
+    const current = body.getBoundingClientRect().height;
+    moving.forEach((animation) => animation.cancel());
+    body.style.overflow = "";
+    if (expanded) {
+      if (animate) slide(body, moving.length > 0 ? current : 0, body.getBoundingClientRect().height);
+      return;
+    }
+    if (animate) {
+      slide(body, current, 0).finished.then(() => setMounted(false), () => {});
+    } else {
+      void Promise.resolve().then(() => setMounted(false));
+    }
+  }, [expanded]);
+
+  return (
+    <section className="site-unavailable-locator-panel__group">
+      <h4>
+        <button type="button" className="site-unavailable-locator-panel__group-toggle" aria-expanded={expanded}
+          aria-controls={listId} onClick={() => {
+            pressedRef.current = true;
+            onToggle();
+          }}>
+          {group.codeLabel && <span className="site-unavailable-locator-panel__code">{group.codeLabel}</span>}
+          <span className="site-unavailable-locator-panel__group-name">{group.title}</span>
+          <span className="site-unavailable-locator-panel__group-count">{group.rows.length.toLocaleString("ko-KR")}건</span>
+          <span className="site-unavailable-locator-panel__plus" aria-hidden="true">{expanded ? "−" : "+"}</span>
+        </button>
+      </h4>
+      <div ref={bodyRef} id={listId} hidden={!mounted} data-state={expanded ? "open" : "closing"}
+        className="site-unavailable-locator-panel__group-body">
+        {mounted && (
+          <div className="site-unavailable-locator-panel__group-inner">
+            {/* The rail stays short: the header names the criterion, and the
+                advice each finding shares is read in its details dialog. */}
+            <ul className="site-unavailable-locator-panel__issues">
+              {visibleRows.map((row) => {
+                const entry = entryById.get(row.issue.id);
+                const recoverable = Boolean(entry?.recoverable && onSelectIssue);
+                const carousel = row.issue.locator?.carouselContext;
+                const line = describeIssueLine(row, readings.get(row.issue.id) ?? readIssue(row), shared);
+                return (
+                  <li key={row.issue.id} className="site-unavailable-locator-panel__issue" data-issue-id={row.issue.id}
+                    style={{ "--site-unavailable-issue-color": row.severity.color } as CSSProperties}>
+                    <button type="button" className="site-unavailable-locator-panel__line"
+                      onClick={() => recoverable ? onSelectIssue?.(row.issue.id) : onShowLocation(row.issue.id)}>
+                      <span className="site-unavailable-locator-panel__severity">{row.severity.label}</span>
+                      <span className="site-unavailable-locator-panel__line-main">
+                        <span className="site-unavailable-locator-panel__line-title" data-copyable>{line.title}</span>
+                        <span className="site-unavailable-locator-panel__line-reason">
+                          <span className="site-unavailable-locator-panel__reason">{entry?.reason}</span>
+                          {carousel ? ` · ${carousel.slideCount}장 중 ${carousel.slideIndex + 1}번째` : null}
+                        </span>
+                      </span>
+                      <span className={`site-unavailable-locator-panel__action${recoverable ? " site-unavailable-locator-panel__action--primary" : ""}`}>
+                        {recoverable ? "위치로 이동" : "상세"}<span aria-hidden="true"> ›</span>
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+            {remaining > 0 && (
+              <button type="button" className="site-unavailable-locator-panel__more" onClick={onShowMore}>
+                더 보기 · 남은 {remaining.toLocaleString("ko-KR")}건
+              </button>
+            )}
+          </div>
+        )}
+      </div>
     </section>
   );
 }

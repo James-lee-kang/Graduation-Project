@@ -34,7 +34,13 @@ export type ScrollWorldConfig = {
   skipLabel?: string;
   mainId?: string;
   hint?: string;
+  /** Accessible name of the scroll hint button (default: 아래로 스크롤). */
+  hintLabel?: string;
+  /** Language of the visible hint text (default: en). */
+  hintLang?: string;
   nav?: boolean;
+  /** false: the page renders its own skip link and header; the engine adds neither. */
+  chrome?: boolean;
   /** false 면 오른쪽 세로 진행 레일(장면 점)을 숨긴다 */
   route?: boolean;
   /** 필름 아래 일반 섹션으로 가는 추가 내비 링크 */
@@ -64,6 +70,14 @@ export type ScrollWorldConfig = {
 export type ScrollWorldOptions = {
   onEnterApp?: () => void;
   subscribeScroll?: (listener: () => void) => (() => void) | void;
+  /** Document offset where the film starts when it sits below other page content. */
+  scrollOffset?: () => number;
+  /** Before the film starts: true keeps its layers hidden, otherwise the first frame sits in the page flow. */
+  hideBeforeStart?: () => boolean;
+  /** Receives the skip link and topbar so they sit outside the page's main landmark. */
+  chromeContainer?: HTMLElement | null;
+  /** The page supplies its own <main id={config.mainId}>; the copy layer becomes a plain div. */
+  externalMain?: boolean;
 };
 
 export function mountScrollWorld(

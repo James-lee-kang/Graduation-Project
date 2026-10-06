@@ -5,13 +5,14 @@ import type { EvaluationCaptureMetadata, LiveReportSession } from "@/types/acces
 
 import { formatIssueCodeLabel } from "./constants";
 import { PageFavicon } from "./page-favicon";
-import { getReplaySourceWidth, type EvidenceFrameKind } from "./evidence-source";
+import { getReplaySourceWidth, resolveReplayCaptureMetadataStatus, type EvidenceFrameKind } from "./evidence-source";
 import { getPageEvidenceLoadingProgress, type PageEvidenceLoadingPhase } from "./page-evidence-loading-progress";
 import {
   REPLAY_VIEW_SCALE_MIN, REPLAY_VIEW_SCALE_MAX, REPLAY_VISUAL_WIDTH_MAX,
   type ReplayViewportMetrics
 } from "./page-replay-protocol";
 import type { LocatorReport, RecentIssueRow } from "./types";
+import type { EvaluationCaptureMetadataLoadState } from "./use-evaluation-capture-metadata";
 import type { LiveReportSessionLoadState } from "./use-live-report-session";
 import { usePageEvidenceConnection } from "./use-page-evidence-connection";
 
@@ -20,6 +21,7 @@ type RenderedPageEvidenceCardProps = {
   headerActions: ReactNode;
   faviconUrl?: string | null;
   captureMetadata: EvaluationCaptureMetadata | null;
+  captureMetadataLoadState?: EvaluationCaptureMetadataLoadState;
   errorMessage: string | null;
   evaluationRequestId: number | null;
   liveSession: LiveReportSession | null;
@@ -34,6 +36,16 @@ type RenderedPageEvidenceCardProps = {
   selectedIssueFocusRequestId: number;
   targetName: string;
 };
+
+// 페이지는 다른 출처라 별도 프로세스에서 그려진다. iframe을 transform: scale로 줄이면 그 안의
+// 합성 레이어(고정 헤더, 슬라이드, 그 위에 겹친 문제 설명창 등)가 줄이기 전 해상도로 그려진 뒤
+// 축소되어 흐려진다. Chromium은 iframe의 zoom을 안쪽 문서의 배율로 넘겨 처음부터 줄인 크기로
+// 그리므로 그 방식을 쓴다. 안쪽 화면 크기는 같다(가로 = 원본 너비, 세로 = 칸 높이 / 배율).
+// 자동화 브라우저(navigator.webdriver)는 zoom된 iframe 안 요소 좌표를 잘못 계산해 클릭·호버가
+// 엇나가므로 기존 방식을 유지하고, iframe zoom 전달이 확인되지 않은 다른 엔진도 기존 방식을 쓴다.
+const frameZoomSupported = typeof navigator !== "undefined" && !navigator.webdriver
+  && ((navigator as Navigator & { userAgentData?: { brands?: { brand: string }[] } })
+    .userAgentData?.brands?.some(({ brand }) => brand === "Chromium") ?? false);
 
 type PageEvidenceLoadingBarStyle = CSSProperties & {
   "--site-page-evidence-loading-progress": number;
@@ -117,6 +129,7 @@ export function RenderedPageEvidenceCard({
   headerActions,
   faviconUrl,
   captureMetadata,
+  captureMetadataLoadState = "ready",
   errorMessage,
   evaluationRequestId,
   liveSession,
@@ -143,12 +156,13 @@ export function RenderedPageEvidenceCard({
     activeFrameKind, effectiveLoadState, replayConnectionState, replayLoadingPhase,
     documentTitle, isDocumentScrolled, fallbackIssue,
     unavailableLocatorCount, recoverableHiddenLocatorCount,
-    handleFrameLoad, handleFrameError, retryFrame, enterReportFocus
+    handleFrameLoad, handleFrameError, retryFrame, enterReportFocus, resetAutomaticLiveRecovery
   } = usePageEvidenceConnection({
     evaluationRequestId, liveSession, liveSessionLoadState, onRetryLiveSession,
     onLocatorReportChange, onSelectIssue, previewRuntimeUrl, rows,
     deviceScaleFactor: captureMetadata?.deviceScaleFactor ?? null, selectedIssueId,
-    selectedIssueFocusRequestId, replayViewportMetrics, chromeHeight
+    selectedIssueFocusRequestId, replayViewportMetrics, chromeHeight,
+    captureMetadataStatus: resolveReplayCaptureMetadataStatus(captureMetadataLoadState, captureMetadata !== null)
   });
   const headerTitle = documentTitle === null ? "" : documentTitle || "제목 없음";
   const loadingFrameKind = activeFrameKind ?? "live";
@@ -162,13 +176,19 @@ export function RenderedPageEvidenceCard({
     || (effectiveLoadState === "ready" && showsReplayLoadingOverlay);
   const replaySourceWidth = getReplaySourceWidth(captureMetadata, activeFrameKind);
   const replayScale = replayViewportMetrics.scale;
-  const replayFrameStyle = activeFrameKind !== null && captureMetadata && replayScale < 0.999
-    ? {
-        width: `${replaySourceWidth}px`,
-        height: `${100 / replayScale}%`,
-        transform: `scale(${replayScale})`,
-        transformOrigin: "top left"
-      }
+  const replayFrameStyle: CSSProperties | undefined = activeFrameKind !== null && captureMetadata && replayScale < 0.999
+    ? frameZoomSupported
+      ? {
+          width: `${replaySourceWidth}px`,
+          height: "100%",
+          zoom: String(replayScale)
+        }
+      : {
+          width: `${replaySourceWidth}px`,
+          height: `${100 / replayScale}%`,
+          transform: `scale(${replayScale})`,
+          transformOrigin: "top left"
+        }
     : undefined;
 
   useLayoutEffect(() => {
@@ -267,7 +287,10 @@ export function RenderedPageEvidenceCard({
                 {errorMessage ??
                   "원본 사이트에 연결할 수 없습니다. 잠시 후 동적 화면을 다시 시도해 주세요."}
               </p>
-              <button type="button" className="site-page-evidence-retry" onClick={onRetry}>
+              <button type="button" className="site-page-evidence-retry" onClick={() => {
+                resetAutomaticLiveRecovery();
+                onRetry();
+              }}>
                 <RefreshCw aria-hidden="true" size={15} />
                 다시 시도
               </button>

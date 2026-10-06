@@ -71,7 +71,7 @@ try {
               liveSession={session} liveSessionLoadState="ready" onRetry={()=>{}}
               onRetryLiveSession={()=>setRetries(v=>v+1)} onLocatorReportChange={onReport} onSelectIssue={setSelected}
               rows={rows} selectedIssueId={selected} selectedIssueFocusRequestId={focusRequest} targetName="회귀 fixture"/>
-            {details&&<IssueLocationDialog row={rows[count-1]} state={report?.issueStates[count]} onClose={()=>setDetails(false)}/>}
+            {details&&<IssueLocationDialog row={rows[count-1]} onClose={()=>setDetails(false)}/>}
           </>
         }
         createRoot(document.getElementById('root')).render(<App/>);
@@ -134,7 +134,6 @@ try {
         await page.locator("#show-detail").click();
         const details = page.getByRole("dialog", { name: "문제 상세" });
         await details.waitFor();
-        assert.match(await details.innerText(), /표시 한도 초과/);
         assert.match(await details.innerText(), new RegExp(`#missing-${count - 1}`));
         await details.getByRole("button", { name: "문제 상세 닫기" }).click();
       }

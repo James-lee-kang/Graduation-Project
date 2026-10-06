@@ -1,28 +1,40 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, type MouseEvent } from "react";
 import { useScroll } from "framer-motion";
 
 import {
   mountScrollWorld,
   type ScrollWorldConfig
 } from "@/components/landing/scroll-world-engine.js";
+import { LandingNav } from "@/components/landing/landing-nav";
+import { LandingHero } from "@/components/landing/landing-hero";
+import { LandingMessageSection } from "@/components/landing/landing-message-section";
+import { LandingLookSection } from "@/components/landing/landing-look-section";
+import { LandingStatsSection } from "@/components/landing/landing-stats-section";
+import { LandingReportSection } from "@/components/landing/landing-report-section";
+import { LandingToolsSection } from "@/components/landing/landing-tools-section";
 import { LandingEngineSection } from "@/components/landing/landing-engine-section";
-import { LandingFindingsSection } from "@/components/landing/landing-findings-section";
+import { LandingCompareSection } from "@/components/landing/landing-compare-section";
 import { LandingFaqSection } from "@/components/landing/landing-faq-section";
+import { LandingEndSection } from "@/components/landing/landing-end-section";
 import { LandingFooter } from "@/components/landing/landing-footer";
-import { mountLandingSnap } from "@/components/landing/landing-scroll-snap";
 
 // Latin 700 only: the landing wordmark is the sole DM Sans text.
 import "@fontsource/dm-sans/latin-700.css";
+import "@/styles/landing.css";
 import "@/styles/landing-large-screen.css";
 
 const ASSET_ROOT = "/landing/scroll-world";
+const STATIC_HERO_QUERY = "(max-width: 760px), (prefers-reduced-motion: reduce)";
 
+/**
+ * 제품 소개 랜딩.
+ * 히어로의 사진 카드가 화면을 채우면 같은 장면에서 스크롤 필름이 이어받고,
+ * 필름이 끝나면 기능 소개 섹션이 차례로 이어진다. 상단바와 건너뛰기 링크는 페이지가 그린다.
+ */
 const LANDING_CONFIG = {
   brand: { name: "UNI ACCESS", href: "#uni-access-main", wordmark: { text: "uniaccess" } },
-  cta: { label: "새 페이지 분석", href: "/analyze", action: "enter-app" },
-  skipLabel: "본문으로 바로가기",
   mainId: "uni-access-main",
-  hint: "SCROLL DOWN",
+  chrome: false,
   nav: false,
   route: false,
   showSectionNumbers: false,
@@ -52,7 +64,8 @@ const LANDING_CONFIG = {
       accent: "#0071e3",
       scroll: 1.6,
       linger: 0.3,
-      title: "복잡한 웹 접근성, 이제 한눈에.",
+      // 제목은 위 히어로가 맡는다. 첫 장면은 히어로 카드에서 이어지는 영상만 보여 준다.
+      title: "",
       tags: []
     },
     {
@@ -112,11 +125,6 @@ const LANDING_CONFIG = {
           label: "새 페이지 분석",
           href: "/analyze",
           action: "enter-app"
-        },
-        secondary: {
-          label: "분석 결과 보기",
-          href: "#report",
-          section: "report"
         }
       }
     }
@@ -128,6 +136,8 @@ type LandingPageProps = {
   onEnterApp: () => void;
 };
 
+export type EnterAppHandler = (event: MouseEvent<HTMLAnchorElement>) => void;
+
 export function LandingPage({ onEnterApp }: LandingPageProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const onEnterAppRef = useRef(onEnterApp);
@@ -137,33 +147,56 @@ export function LandingPage({ onEnterApp }: LandingPageProps) {
     onEnterAppRef.current = onEnterApp;
   }, [onEnterApp]);
 
+  const enterApp = useCallback(() => {
+    window.scrollTo({ top: 0, behavior: "auto" });
+    onEnterAppRef.current();
+  }, []);
+
+  // 페이지가 그리는 '새 페이지 분석' 링크: 새 탭 열기 등은 그대로 두고 일반 클릭만 앱으로 전환한다.
+  const onEnterAppClick = useCallback<EnterAppHandler>((event) => {
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    enterApp();
+  }, [enterApp]);
+
   useLayoutEffect(() => {
     const root = rootRef.current;
     if (!root) return;
 
     window.scrollTo({ top: 0, behavior: "auto" });
+    // landing.css 와 같은 조건: 이때는 히어로 카드가 없으므로 필름 첫 장면이 히어로 바로 아래에 놓인다.
+    const staticHero = window.matchMedia(STATIC_HERO_QUERY);
 
-    const unmountWorld = mountScrollWorld(root, LANDING_CONFIG, {
+    return mountScrollWorld(root, LANDING_CONFIG, {
+      externalMain: true,
+      // 필름은 히어로 아래에서 시작하므로, 필름 맨 위를 스크롤 0으로 삼는다.
+      scrollOffset: () => root.getBoundingClientRect().top + window.scrollY,
+      // 카드가 커지는 동안은 카드가 화면을 맡고, 카드가 화면을 채운 순간 필름이 같은 장면으로 이어받는다.
+      hideBeforeStart: () => !staticHero.matches,
       subscribeScroll: (listener) => scrollY.on("change", listener),
-      onEnterApp: () => {
-        window.scrollTo({ top: 0, behavior: "auto" });
-        onEnterAppRef.current();
-      }
+      onEnterApp: enterApp
     });
-    const unmountSnap = mountLandingSnap();
-    return () => {
-      unmountSnap();
-      unmountWorld();
-    };
-  }, [scrollY]);
+  }, [scrollY, enterApp]);
 
   return (
     <>
-      <div ref={rootRef} className="uni-scroll-world" data-landing-root />
-      {/* 스크롤 필름이 끝난 뒤 이어지는 일반 섹션 */}
-      <LandingFindingsSection />
-      <LandingEngineSection />
-      <LandingFaqSection />
+      {/* 건너뛰기 링크와 상단바(banner)는 main 밖에 둔다. */}
+      <a className="ua-skip-link" href={`#${LANDING_CONFIG.mainId}`}>본문으로 바로가기</a>
+      <LandingNav onEnterApp={onEnterAppClick} />
+      <main id={LANDING_CONFIG.mainId} tabIndex={-1} className="ua-landing outline-none">
+        <LandingHero onEnterApp={onEnterAppClick} />
+        <div ref={rootRef} id="tour" className="uni-scroll-world" data-landing-root />
+        {/* 스크롤 필름이 끝난 뒤 이어지는 일반 섹션 */}
+        <LandingMessageSection />
+        <LandingLookSection />
+        <LandingStatsSection />
+        <LandingReportSection />
+        <LandingToolsSection />
+        <LandingEngineSection />
+        <LandingCompareSection />
+        <LandingFaqSection />
+        <LandingEndSection onEnterApp={onEnterAppClick} />
+      </main>
       <LandingFooter />
     </>
   );

@@ -951,18 +951,6 @@
   padding: 0.125rem 0.25rem;
 }
 
-.bridge-dashboard.dashboard-site-detail .site-page-analysis-actions__stale {
-  margin: 0;
-  padding: 0.125rem 0.375rem;
-  border-radius: 999px;
-  color: #93370d;
-  background: #fef0c7;
-  font-size: var(--site-rail-caption-size);
-  font-weight: 700;
-  line-height: 1.45;
-  white-space: nowrap;
-}
-
 .bridge-dashboard.dashboard-site-detail .site-page-analysis-actions__rescan {
   display: inline-flex;
   align-items: center;
@@ -1190,9 +1178,77 @@
    current live document remain inspectable as compact cards in the rail. */
 
 .bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel {
-  --site-unavailable-issue-height: clamp(12rem, 27dvh, 15rem);
+  /* Compact rows (title, reason, location) so several fit; the full
+     explanation lives in the details dialog and the final report. */
+  --site-unavailable-issue-height: clamp(8.25rem, 16dvh, 9rem);
   display: flex;
   flex-direction: column;
+}
+
+/* Restorable issues also carry a "문제 위치로 이동" action. */
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel--recoverable {
+  --site-unavailable-issue-height: clamp(10.5rem, 20dvh, 11.5rem);
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  margin: 0.625rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__reasons li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-height: 1.5rem;
+  padding: 0 0.5rem;
+  border-radius: 999px;
+  color: var(--dashboard-text-muted);
+  background: var(--site-row-surface);
+  font-size: var(--site-rail-caption-size);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__reasons strong {
+  color: var(--dashboard-text-strong);
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__facts {
+  display: grid;
+  gap: 0.125rem;
+  margin: 0;
+  min-width: 0;
+  color: var(--dashboard-text-muted);
+  font-size: calc(var(--site-rail-caption-size) + 0.0625rem);
+  line-height: 1.45;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__facts p {
+  min-width: 0;
+  margin: 0;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__where {
+  overflow: hidden;
+  color: var(--dashboard-text-muted);
+  font-size: var(--site-rail-caption-size);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__where code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.95em;
+}
+
+.bridge-dashboard.dashboard-site-detail.theme-dark .site-unavailable-locator-panel__reasons strong {
+  color: #ffffff;
 }
 
 .bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel:not(.is-empty) {
@@ -1270,6 +1326,7 @@
   overscroll-behavior-y: contain;
   scrollbar-width: thin;
   border-radius: 0.875rem;
+  /* The issue keeps its own grey box inside the card. */
   background: var(--site-row-surface);
 }
 
@@ -1336,9 +1393,13 @@
 }
 
 .bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__issue h4 {
+  display: -webkit-box;
   flex: none;
   min-width: 0;
-  margin-top: 0.25rem;
+  margin-top: 0.125rem;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   color: var(--dashboard-text-strong);
   font-size: calc(var(--site-rail-body-size) + 0.125rem);
   font-weight: 750;
@@ -1376,15 +1437,13 @@
   max-width: 100%;
 }
 .bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__reason {
-  flex: none;
   margin: 0;
-  color: var(--dashboard-text-muted);
-  font-size: var(--site-rail-caption-size);
-  line-height: 1.4;
+  color: inherit;
+  font-size: inherit;
+  line-height: inherit;
 }
 
 .bridge-dashboard.dashboard-site-detail.theme-dark .site-unavailable-locator-panel__issue h4,
-.bridge-dashboard.dashboard-site-detail.theme-dark .site-unavailable-locator-panel__reason,
 .bridge-dashboard.dashboard-site-detail.theme-dark .site-unavailable-locator-panel__message {
   color: #ffffff;
 }
@@ -1393,60 +1452,276 @@
   display: flex;
   flex: none;
   flex-wrap: wrap;
-  gap: 0.375rem 0.75rem;
+  gap: 0.25rem 1.125rem;
+  margin-top: 0.25rem;
 }
 
-.site-issue-location-dialog {
-  width: min(100%, 40rem);
-  --location-panel: var(--muted);
+/* Text links in the key color, the secondary one in grey. */
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__link {
+  min-height: 1.75rem;
+  padding: 0;
+  border: 0;
+  color: var(--dashboard-text-muted);
+  background: transparent;
+  font: inherit;
+  font-size: calc(var(--site-rail-caption-size) + 0.0625rem);
+  font-weight: 500;
+  cursor: pointer;
 }
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__link--primary {
+  color: var(--dashboard-accent);
+}
+
+.bridge-dashboard.dashboard-site-detail.theme-dark .site-unavailable-locator-panel__link--primary {
+  color: #4da3ff;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__link:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__link:focus-visible {
+  outline: 2px solid var(--dashboard-accent);
+  outline-offset: 2px;
+}
+
+/* Issue details, in the final report's style: a large title with
+   its severity and criterion, explanation rows laid out like a spec sheet,
+   and grey tiles instead of rules between sections. */
+.site-issue-location-dialog {
+  width: min(100%, 42rem);
+  border-radius: 24px;
+  --location-panel: var(--muted);
+  --location-tile: var(--modal-surface);
+}
+
+.dark .site-issue-location-dialog {
+  --location-tile: #2c2c2e;
+}
+
+.site-issue-location-dialog p { margin: 0; overflow-wrap: anywhere; word-break: keep-all; }
 
 .site-issue-location-dialog__header {
   flex: none;
-  padding: 1.25rem 1.5rem;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 1rem;
-  border-bottom: 1px solid var(--modal-border);
+  padding: 1.75rem 1.75rem 1.25rem;
 }
 
-.site-issue-location-dialog__header > div { min-width: 0; }
-.site-issue-location-dialog h3 { margin: 0 0 0.625rem; font-size: 0.875rem; font-weight: 650; }
-.site-issue-location-dialog p { margin: 0.375rem 0 0; color: var(--modal-muted); font-size: 0.8125rem; line-height: 1.6; word-break: keep-all; overflow-wrap: anywhere; }
-.site-issue-location-dialog__description { white-space: pre-wrap; }
-.site-issue-location-dialog__body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 1.25rem 1.5rem; }
-.site-issue-location-dialog__body:focus-visible { outline: 2px solid var(--modal-focus); outline-offset: -3px; }
-.site-issue-location-dialog__body section + section { margin-top: 1rem; }
-.site-issue-location-dialog__status {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.625rem;
-  padding: 0.75rem 0.875rem;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--primary) 6%, var(--modal-surface));
+.site-issue-location-dialog__heading { min-width: 0; }
+.site-issue-location-dialog__eyebrow { margin: 0; color: var(--modal-muted); font-size: 0.8125rem; font-weight: 600; }
+.site-issue-location-dialog p.site-issue-location-dialog__title {
+  margin-top: 0.25rem;
+  color: var(--modal-text);
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
 }
-.site-issue-location-dialog__status > svg { flex: none; margin-top: 0.0625rem; color: var(--modal-focus); }
-.site-issue-location-dialog__status > div { min-width: 0; }
-.site-issue-location-dialog__status h3 { margin-bottom: 0; }
-.site-issue-location-dialog__paths { margin: 0; padding: 0 1rem; border-radius: 12px; background: var(--location-panel); list-style: none; }
-.site-issue-location-dialog__paths li { min-width: 0; padding: 0.75rem 0; }
-.site-issue-location-dialog__paths li + li { border-top: 1px solid var(--modal-border); }
-.site-issue-location-dialog__path-content { display: grid; gap: 0.3125rem; min-width: 0; }
-.site-issue-location-dialog__context { font-size: 0.75rem; font-weight: 650; }
+
+.site-issue-location-dialog p.site-issue-location-dialog__tags { display: flex; flex-wrap: wrap; gap: 0.375rem; margin-top: 0.75rem; }
+
+.site-issue-location-dialog__severity,
+.site-issue-location-dialog__code {
+  display: inline-flex;
+  min-height: 1.375rem;
+  align-items: center;
+  padding: 0 0.5625rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.site-issue-location-dialog__severity { color: #101828; background: var(--issue-severity-color); }
+
+.site-issue-location-dialog__code {
+  color: #ffffff;
+  background: #101828;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.6875rem;
+}
+
+.dark .site-issue-location-dialog__code { color: #101828; background: #ffffff; }
+
+.site-issue-location-dialog__close {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  color: var(--modal-text);
+  background: var(--modal-secondary);
+  cursor: pointer;
+}
+
+.site-issue-location-dialog__close:hover { background: var(--modal-secondary-hover); }
+.site-issue-location-dialog__close:focus-visible { outline: 2px solid var(--modal-focus); outline-offset: 2px; }
+
+.site-issue-location-dialog__body {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 1.75rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0.25rem 1.75rem 1.75rem;
+}
+
+.site-issue-location-dialog__body:focus-visible { outline: 2px solid var(--modal-focus); outline-offset: -3px; }
+
+.site-issue-location-dialog__section > h3 {
+  margin: 0 0 0.75rem;
+  color: var(--modal-text);
+  font-size: 1.0625rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* Spec sheet: a label column beside its text, rows parted by space alone. */
+.site-issue-location-dialog__specs,
+.site-issue-location-dialog__records {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0.375rem 0;
+  border-radius: 16px;
+  background: var(--location-panel);
+}
+
+.site-issue-location-dialog__specs > div,
+.site-issue-location-dialog__record {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(0, 1fr);
+  gap: 0.25rem 1.25rem;
+  min-width: 0;
+  padding: 0.75rem 1.125rem;
+}
+
+.site-issue-location-dialog__specs dt,
+.site-issue-location-dialog__record h4 {
+  margin: 0;
+  color: var(--modal-text);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  line-height: 1.6;
+}
+
+.site-issue-location-dialog__specs dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--modal-text);
+  font-size: 0.875rem;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  word-break: keep-all;
+}
+
+.site-issue-location-dialog__text { white-space: pre-wrap; }
+
+.site-issue-location-dialog__specs dd.site-issue-location-dialog__chips { display: flex; flex-wrap: wrap; gap: 0.375rem; }
+
+.site-issue-location-dialog__chips > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1875rem 0.625rem;
+  border-radius: 999px;
+  background: var(--location-tile);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.site-issue-location-dialog__chips strong { font-weight: 750; font-variant-numeric: tabular-nums; }
+
+/* Before and after, side by side as comparison cards. */
+.site-issue-location-dialog__compare {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.site-issue-location-dialog__compare > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.375rem;
+  padding: 1rem 1.125rem;
+  border-radius: 16px;
+  background: var(--location-panel);
+  font-size: 0.875rem;
+  line-height: 1.65;
+}
+
+.site-issue-location-dialog p.site-issue-location-dialog__compare-label { color: var(--modal-muted); font-size: 0.75rem; font-weight: 700; }
+.site-issue-location-dialog__compare-after p.site-issue-location-dialog__compare-label { color: var(--modal-focus); }
+.site-issue-location-dialog__compare-after > p:not(.site-issue-location-dialog__compare-label) { font-weight: 600; }
+
+.site-issue-location-dialog p.site-issue-location-dialog__compare-reason {
+  grid-column: 1 / -1;
+  padding: 0 0.25rem;
+  color: var(--modal-muted);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+.site-issue-location-dialog__record > div { display: flex; min-width: 0; flex-direction: column; gap: 0.5rem; }
+
+.site-issue-location-dialog p.site-issue-location-dialog__empty,
+.site-issue-location-dialog p.site-issue-location-dialog__aside {
+  color: var(--modal-muted);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+.site-issue-location-dialog__paths { display: flex; flex-direction: column; gap: 0.375rem; margin: 0; padding: 0; list-style: none; }
+
+.site-issue-location-dialog__paths li {
+  display: grid;
+  min-width: 0;
+  gap: 0.25rem;
+  padding: 0.625rem 0.75rem;
+  border-radius: 12px;
+  background: var(--location-tile);
+}
+
+.site-issue-location-dialog__context { color: var(--modal-muted); font-size: 0.75rem; font-weight: 650; }
 .site-issue-location-dialog code { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.75rem; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
-.site-issue-location-dialog pre { margin: 0; padding: 0.875rem 1rem; border-radius: 12px; background: var(--location-panel); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.site-issue-location-dialog pre {
+  min-width: 0;
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+  border-radius: 12px;
+  background: var(--location-tile);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .site-issue-location-dialog__url { color: var(--modal-muted); font-size: 0.75rem; line-height: 1.5; overflow-wrap: anywhere; }
-.site-issue-location-dialog__coordinates { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin: 0; border: 1px solid var(--location-panel); border-radius: 12px; overflow: hidden; background: var(--modal-surface); }
-.site-issue-location-dialog__coordinates > div { min-width: 0; padding: 0.625rem 1rem; background: var(--location-panel); }
-.site-issue-location-dialog__coordinates dt { color: var(--modal-muted); font-size: 0.75rem; }
-.site-issue-location-dialog__coordinates dd { margin: 0.25rem 0 0; font-size: 1rem; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.site-issue-location-dialog p.site-issue-location-dialog__coordinate-basis { margin-top: 0.5rem; font-size: 0.75rem; }
-.site-issue-location-dialog p.site-issue-location-dialog__note { margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--modal-border); font-size: 0.75rem; }
+
+.site-issue-location-dialog__coordinates { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.375rem; margin: 0; }
+.site-issue-location-dialog__coordinates > div { min-width: 0; padding: 0.5rem 0.75rem; border-radius: 12px; background: var(--location-tile); }
+.site-issue-location-dialog__coordinates dt { color: var(--modal-muted); font-size: 0.6875rem; font-weight: 600; }
+.site-issue-location-dialog__coordinates dd { margin: 0.125rem 0 0; font-size: 1rem; font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+.site-issue-location-dialog p.site-issue-location-dialog__note { color: var(--modal-muted); font-size: 0.75rem; line-height: 1.6; }
 
 @media (max-width: 480px) {
-  .site-issue-location-dialog__header { padding: 1rem; }
-  .site-issue-location-dialog__body { padding: 1rem; }
+  .site-issue-location-dialog__header { padding: 1.25rem 1.25rem 1rem; }
+  .site-issue-location-dialog p.site-issue-location-dialog__title { font-size: 1.25rem; }
+  .site-issue-location-dialog__body { gap: 1.5rem; padding: 0.25rem 1.25rem 1.25rem; }
+  .site-issue-location-dialog__specs > div,
+  .site-issue-location-dialog__record { grid-template-columns: minmax(0, 1fr); }
+  .site-issue-location-dialog__compare { grid-template-columns: minmax(0, 1fr); }
   .site-issue-location-dialog__coordinates { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
@@ -1517,18 +1792,7 @@
 
 .bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__location {
   flex: none;
-  min-height: 1.75rem;
-  margin-top: 0;
-  padding: 0.25rem 0.75rem;
-  border: 0;
-  border-radius: 9999px;
-  background: #ffffff;
-  color: #000000;
   white-space: nowrap;
-}
-
-.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__location:hover {
-  background: #eeeeee;
 }
 
 .bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__dot-shape {
@@ -1634,4 +1898,262 @@
   .bridge-dashboard.dashboard-site-detail .site-rail-severity__tooltip {
     transition: none;
   }
+}
+
+/* Grouped rail list, like the final report at rail size: filter chips,
+   one grey card per criterion with a round plus, its shared advice once,
+   then one white line per finding. Declared last so it replaces the paged
+   single-card layout above. */
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel:not(.is-empty) {
+  max-height: none;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__reasons {
+  gap: 0.375rem;
+  margin-top: 0.75rem;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__filter {
+  display: inline-flex;
+  min-height: 1.75rem;
+  align-items: center;
+  gap: 0.3125rem;
+  padding: 0 0.6875rem;
+  border: 0;
+  border-radius: 999px;
+  color: var(--dashboard-text-strong);
+  background: var(--site-row-surface);
+  font: inherit;
+  font-size: var(--site-rail-caption-size);
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__filter > span {
+  opacity: 0.65;
+  font-variant-numeric: tabular-nums;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__filter:hover {
+  background: var(--dashboard-sidebar-item-hover-bg);
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__filter[aria-pressed="true"] {
+  color: var(--site-glass-bg-opaque);
+  background: var(--dashboard-text-strong);
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__groups {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.875rem;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__group {
+  border-radius: 1rem;
+  background: var(--site-row-surface);
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__group h4 {
+  margin: 0;
+  font-size: inherit;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__group-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 0;
+  border-radius: 1rem;
+  color: var(--dashboard-text-strong);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* A criterion code keeps its full width; the title beside it shortens
+   first, and only an unusually long code ends in an ellipsis. */
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__group-toggle .site-unavailable-locator-panel__code {
+  display: inline-block;
+  flex: none;
+  max-width: 60%;
+  line-height: 1.25rem;
+}
+
+/* The criterion name is the group's only description, so it wraps to a
+   second line before it is cut. */
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__group-name {
+  display: -webkit-box;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-size: var(--site-rail-body-size);
+  font-weight: 650;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__group-count {
+  flex: none;
+  font-size: var(--site-rail-caption-size);
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__plus {
+  display: grid;
+  width: 1.375rem;
+  height: 1.375rem;
+  flex: none;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--site-glass-bg-opaque);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__group-toggle:hover .site-unavailable-locator-panel__plus {
+  background: var(--dashboard-sidebar-item-hover-bg);
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__group-inner {
+  padding: 0 0.75rem 0.75rem;
+}
+
+/* A growing list must not narrow the page when the scrollbar appears.
+   The gutter is only reserved on a root that scrolls (not overflow:
+   visible); the page itself stays the scroller. */
+html:has(.bridge-dashboard.dashboard-site-detail) {
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__issues {
+  display: flex;
+  min-height: 0;
+  flex: none;
+  flex-direction: column;
+  gap: 0.25rem;
+  contain: none;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__issue {
+  display: block;
+  padding: 0;
+  overflow: visible;
+  border-radius: 0.625rem;
+  background: transparent;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__line {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5625rem 0.625rem;
+  border: 0;
+  border-radius: 0.625rem;
+  color: inherit;
+  background: var(--site-glass-bg-opaque);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__line:hover {
+  background: var(--dashboard-sidebar-item-hover-bg);
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__line .site-unavailable-locator-panel__severity {
+  display: inline-flex;
+  width: 2.375rem;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__line-main {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__line-title {
+  overflow: hidden;
+  color: var(--dashboard-text-strong);
+  font-size: var(--site-rail-caption-size);
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__line-reason {
+  color: var(--dashboard-text-muted);
+  font-size: calc(var(--site-rail-caption-size) - 0.0625rem);
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__line .site-unavailable-locator-panel__reason {
+  color: inherit;
+  font-size: inherit;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__action {
+  flex: none;
+  color: var(--dashboard-text-muted);
+  font-size: var(--site-rail-caption-size);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__action--primary {
+  color: var(--dashboard-accent);
+}
+
+.bridge-dashboard.dashboard-site-detail.theme-dark .site-unavailable-locator-panel__action--primary {
+  color: #4da3ff;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__more {
+  display: block;
+  margin: 0.5rem auto 0;
+  padding: 0.25rem 0;
+  border: 0;
+  color: var(--dashboard-accent);
+  background: transparent;
+  font: inherit;
+  font-size: var(--site-rail-caption-size);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.bridge-dashboard.dashboard-site-detail.theme-dark .site-unavailable-locator-panel__more {
+  color: #4da3ff;
+}
+
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__more:hover {
+  text-decoration: underline;
+}
+
+.bridge-dashboard.dashboard-site-detail :is(.site-unavailable-locator-panel__filter, .site-unavailable-locator-panel__group-toggle, .site-unavailable-locator-panel__line, .site-unavailable-locator-panel__more):focus-visible {
+  outline: 2px solid var(--dashboard-accent);
+  outline-offset: 2px;
+}
+
+/* The header fills its card edge to edge, so its ring sits just inside. */
+.bridge-dashboard.dashboard-site-detail .site-unavailable-locator-panel__group-toggle:focus-visible {
+  outline-offset: -2px;
 }

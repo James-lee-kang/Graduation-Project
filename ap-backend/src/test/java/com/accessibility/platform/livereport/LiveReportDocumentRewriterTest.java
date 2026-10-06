@@ -263,7 +263,8 @@ class LiveReportDocumentRewriterTest {
         assertThat(rewritten).contains("const markerCountBadgeOverhang = 6");
         assertThat(rewritten).contains("baseLeft:targetGeometry.bounds.left - markerCornerOverhang / viewScale");
         assertThat(rewritten).contains("baseTop:firstRect.top - gap - (markerPillHeight / 2) / viewScale");
-        assertThat(rewritten).contains("const transform = `translate(0, -50%) scale(${1 / viewScale})`");
+        assertThat(rewritten).contains("const zoom = markerZoomSupported ? 1 / viewScale : 1");
+        assertThat(rewritten).contains("const left = `${markerLeft / zoom}px`");
         assertThat(rewritten).contains("right: left + (rightExtent + collisionPadding) * inverseScale");
         assertThat(rewritten).contains("top: top - (topExtent + collisionPadding) * inverseScale");
         assertThat(rewritten).contains("const markerEngineLabels = Object.freeze({RULE_BASED:'규칙', AI_TEXT:'텍스트', CV_VISION:'시각'})");

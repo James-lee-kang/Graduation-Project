@@ -77,10 +77,14 @@ try {
       }));
       return;
     }
+    // The live dashboard polls the PENDING request's status every 5s; the
+    // extended keyboard checks can outlast the first poll.
     const payload =
       pathname === "/api/requests"
         ? [pendingRequest]
-        : pathname === "/api/organizations"
+        : pathname === `/api/requests/${pendingRequest.id}`
+          ? pendingRequest
+          : pathname === "/api/organizations"
           ? [organization]
           : pathname === `/api/organizations/${organization.id}/evaluation-targets`
             ? [evaluationTarget]
@@ -99,11 +103,39 @@ try {
   assert.equal(await page.locator(".sw-scrollbar").count(), 0, "obsolete top progress bar must stay removed");
   assert.equal(await page.locator("video").count(), 0, "reduced-motion landing must not load videos");
   assert.equal(
-    await page.locator('.sw-copy[aria-hidden="true"]:not([inert])').count(),
+    await page.locator('.sw-copy[aria-hidden="true"], .sw-copy[inert]').count(),
     0,
-    "inactive landing copy must stay outside the keyboard and accessibility trees"
+    "every landing scene's copy must stay in the accessibility tree"
   );
-  assert.equal(await page.locator('.sw-copy[aria-hidden="false"]').count(), 1);
+  assert.equal(await page.locator('.sw-copy[data-sw-active="true"]').count(), 1);
+  assert.equal(
+    await page.locator('.sw-copy[data-sw-active="false"] :is(a[href], button):not([tabindex="-1"])').count(),
+    0,
+    "controls of off-screen scene copy must leave the Tab order"
+  );
+  assert.equal(
+    await page.evaluate(() => document.querySelector(".ua-lnav")?.closest("main")),
+    null,
+    "the landing banner must stay outside the main landmark"
+  );
+  for (const selector of [".ua-look", ".ua-report", ".ua-faq", "#ua-hero-title"]) {
+    assert.equal(
+      await page.evaluate((target) => document.querySelector(target)?.closest("main#uni-access-main") !== null, selector),
+      true,
+      `${selector} must be inside the landing main landmark`
+    );
+  }
+  assert.equal(await page.getByRole("tablist", { name: "라이브 리포트 기능" }).count(), 1);
+  assert.equal(
+    await page.locator('.ua-look [role="tab"][aria-selected="true"]').count(),
+    1,
+    "the live-report feature tabs must expose exactly one selected tab"
+  );
+  assert.equal(
+    await page.locator(".ua-message__title").getAttribute("aria-hidden"),
+    null,
+    "the scroll-lit message must stay readable by assistive technology"
+  );
   assert.equal(landingApiRequestCount, 0, "landing unexpectedly called an API");
 
   // The product preview remains a dedicated route. Keep its read-only product
@@ -290,19 +322,22 @@ try {
   }
 
   await page.setViewportSize({ width: 1440, height: 900 });
-  // Scroll to the middle of the report scene without the removed side controls.
-  await page.evaluate(() => window.scrollTo(0, innerHeight * 5.15));
+  // Scroll to the middle of the report scene; the film starts below the hero.
+  await page.evaluate(() => {
+    const filmTop = document.getElementById("tour").getBoundingClientRect().top + scrollY;
+    window.scrollTo(0, filmTop + innerHeight * 5.15);
+  });
   await page.waitForFunction(
-    () => document.querySelector(".sw-copy[aria-hidden=false] .sw-copy__title")?.textContent?.includes("페이지와 분석 결과를 한눈에.")
+    () => document.querySelector('.sw-copy[data-sw-active="true"] .sw-copy__title')?.textContent?.includes("페이지와 분석 결과를 한눈에.")
   );
   assert.equal(
-    await page.locator('.sw-copy[aria-hidden="true"]:not([inert])').count(),
-    0,
-    "scene navigation exposed inactive copy"
+    await page.locator('.sw-copy[data-sw-active="true"]').count(),
+    1,
+    "scene navigation must keep exactly one interactive copy"
   );
 
   const landingReducedMotion = await page.evaluate(() => {
-    const action = document.querySelector(".sw-topcta");
+    const action = document.querySelector(".ua-lnav__cta");
     return {
       matches: window.matchMedia("(prefers-reduced-motion: reduce)").matches,
       scrollBehavior: getComputedStyle(document.documentElement).scrollBehavior,
@@ -332,7 +367,7 @@ try {
   await page.keyboard.press("Enter");
   assert.equal(await page.evaluate(() => document.activeElement?.id), "uni-access-main");
 
-  const heroCta = page.locator(".sw-topcta");
+  const heroCta = page.locator(".ua-lnav__cta");
   await Promise.all([
     page.waitForURL("**/analyze"),
     heroCta.click()
@@ -402,6 +437,7 @@ try {
     true
   );
 
+
   const dashboardReducedMotion = await page.evaluate(() => {
     const skipLink = document.querySelector(".dashboard-skip-link");
     return {
@@ -457,6 +493,35 @@ try {
   assert.equal(await accountTrigger.evaluate((trigger) => trigger === document.activeElement), true);
 
   await context.close();
+
+  // Quick-analysis validation errors are announced (persistent live region),
+  // linked to the field and rendered in an AA-contrast colour. A clean context
+  // is used because the context above restores a stored quick-analysis attempt.
+  const quickContext = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: "light" });
+  const quickPage = await quickContext.newPage();
+  await quickPage.route("**/api/**", async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    assert.equal(pathname, "/api/dashboard/overview", `Unexpected quick-analysis API request: ${pathname}`);
+    await fulfillJson(route, createDashboardOverview({ organizations: [] }));
+  });
+  await quickPage.goto(`${baseUrl}/analyze`, { waitUntil: "networkidle" });
+  const quickUrl = quickPage.locator("#quick-analyze-url");
+  const quickError = quickPage.locator("#quick-analyze-url-error");
+  assert.equal(await quickError.getAttribute("aria-live"), "assertive", "the live region must exist before any error");
+  assert.equal(await quickError.getAttribute("role"), null, "an empty region must not be reported as an alert");
+  await quickUrl.fill("https://");
+  await quickUrl.press("Enter");
+  await quickError.filter({ hasText: "올바른 페이지 주소" }).waitFor();
+  assert.equal(await quickError.getAttribute("role"), "alert");
+  assert.equal(await quickUrl.getAttribute("aria-invalid"), "true");
+  assert.equal(await quickUrl.getAttribute("aria-describedby"), "quick-analyze-url-error");
+  assert.equal(
+    await quickError.evaluate((element) => getComputedStyle(element).color),
+    "rgb(180, 35, 50)",
+    "light-theme error text must use the AA danger token"
+  );
+  await quickContext.close();
+
   console.log("Accessibility P0 regression checks passed.");
 } finally {
   await browser.close();

@@ -20,12 +20,14 @@ async function assertVisibleFocus(control, label) {
       const css = getComputedStyle(ancestor);
       opacity *= Number(css.opacity);
       if (ancestor === element) continue;
-      const bounds = ancestor.getBoundingClientRect();
+      // The root's scroll box is the viewport, not its own border box.
+      const root = ancestor === document.documentElement;
+      const bounds = root ? new DOMRect(0, 0, ancestor.clientWidth, ancestor.clientHeight) : ancestor.getBoundingClientRect();
       const paint = /paint|strict|content/.test(css.contain);
       const clipX = paint || /^(hidden|clip|auto|scroll)$/.test(css.overflowX);
       const clipY = paint || /^(hidden|clip|auto|scroll)$/.test(css.overflowY);
-      const left = bounds.left + ancestor.clientLeft;
-      const top = bounds.top + ancestor.clientTop;
+      const left = bounds.left + (root ? 0 : ancestor.clientLeft);
+      const top = bounds.top + (root ? 0 : ancestor.clientTop);
       if ((clipX && (rect.left - outset < left - 1 || rect.right + outset > left + ancestor.clientWidth + 1))
         || (clipY && (rect.top - outset < top - 1 || rect.bottom + outset > top + ancestor.clientHeight + 1))) {
         clippedBy.push(ancestor.className);
@@ -101,8 +103,9 @@ try {
       const name = `${viewport.width}-${theme}`;
       await page.goto(`${baseUrl}/projects/1`);
       await page.locator(".dashboard-project-card").waitFor();
-      const project = page.locator(".sidebar-tree-parent-row").first();
-      if (await project.getAttribute("aria-expanded") === "false") await project.click();
+      // The disclosure state lives on the separate chevron toggle.
+      const projectToggle = page.locator(".sidebar-tree-toggle").first();
+      if (await projectToggle.getAttribute("aria-expanded") === "false") await projectToggle.click();
       for (const selector of [".reference-sidebar-primary-row", ".sidebar-tree-parent-row", ".sidebar-tree-children .sidebar-nav-link", ".sidebar-tree-recent-list .sidebar-nav-link"]) {
         await tabTo(page, page.locator(selector).first(), `${name} sidebar ${selector}`);
       }
@@ -118,35 +121,27 @@ try {
 
       await page.goto(`${baseUrl}/projects/1/pages/101`);
       const panel = page.getByRole("region", { name: "화면에 표시되지 않은 문제", exact: true });
-      const dots = panel.locator(".site-unavailable-locator-panel__dot");
-      await dots.nth(1).waitFor({ timeout: 10_000 }).catch(async error => {
+      const toggle = panel.locator(".site-unavailable-locator-panel__group-toggle").first();
+      const line = panel.locator(".site-unavailable-locator-panel__line").first();
+      await line.waitFor({ timeout: 10_000 }).catch(async error => {
         console.error(JSON.stringify({ body: (await page.locator('body').innerText()).slice(0, 2000), errors,
           requests: fixture.journal, frames: page.frames().map(frame => frame.url()) }));
         throw error;
       });
-      const next = panel.getByRole("button", { name: "다음 문제", exact: true });
-      const previous = panel.getByRole("button", { name: "이전 문제", exact: true });
-      const dotBox = await dots.first().boundingBox();
-      await dots.last().focus();
+      // Group headers and finding lines are ordinary buttons in tab order.
+      await tabTo(page, toggle, `${name} issue group`);
       await page.keyboard.press("Tab");
-      await assertVisibleFocus(next, `${name} next issue`);
-      const focusedDotBox = await dots.first().boundingBox();
-      assert.equal(focusedDotBox.x, dotBox.x, `${name}: showing navigation must not shift dots horizontally`);
-      await panel.screenshot({ path: `${output}/${name}-pager.png` });
-      const firstIssue = await panel.locator("h4").first().textContent();
+      await assertVisibleFocus(line, `${name} issue line`);
+      await panel.screenshot({ path: `${output}/${name}-issue-groups.png` });
+      await toggle.focus();
       await page.keyboard.press("Enter");
-      assert.notEqual(await panel.locator("h4").first().textContent(), firstIssue, "Enter on next must change the issue page");
-      await dots.first().focus();
-      await page.keyboard.press("Shift+Tab");
-      await assertVisibleFocus(previous, `${name} previous issue`);
+      assert.equal(await toggle.getAttribute("aria-expanded"), "false", "Enter on a group header must close the group");
       await page.keyboard.press("Enter");
-      assert.equal(await panel.locator("h4").first().textContent(), firstIssue, "Enter on previous must return to the first page");
-      await dots.first().focus();
-      assert.equal(await next.evaluate(element => getComputedStyle(element).opacity), "0", "navigation hides when focus leaves it");
+      assert.equal(await toggle.getAttribute("aria-expanded"), "true", "Enter again must reopen the group");
       assert.deepEqual(errors, [], `${name}: no page errors`);
       fixture.assertIsolated();
       await context.close();
-      console.log(`${name}: sidebar, page card, modal and issue navigation PASS`);
+      console.log(`${name}: sidebar, page card, modal and issue groups PASS`);
     }
   }
 } finally { await browser.close(); }

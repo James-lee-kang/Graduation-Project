@@ -53,7 +53,11 @@ try {
         assert.deepEqual(requests.map(url => new URL(url).pathname), [expectedPath], "Initially load only the suitable opening variant");
         let previousTime = -1;
         for (const position of [0.2, 0.4]) {
-          await page.evaluate(p => window.scrollTo(0, innerHeight * p), position);
+          // The film starts below the hero; positions are measured from its top.
+          await page.evaluate(p => {
+            const filmTop = document.getElementById("tour").getBoundingClientRect().top + scrollY;
+            window.scrollTo(0, filmTop + innerHeight * p);
+          }, position);
           await page.waitForFunction(previous => {
             const video = document.querySelector("video");
             return video && !video.seeking && video.readyState >= 2 && video.currentTime > previous + 0.05;
