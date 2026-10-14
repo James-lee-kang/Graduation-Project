@@ -1,0 +1,296 @@
+{
+  "_설명": [
+    "웹사이트를 쓰는 데 쓰는 화면 요소·기능 이름(인터페이스 어휘). 2026-10-04 추가.",
+    "국립국어원 학습용 어휘(2003, 외국인 학습자용)에서 C등급이거나 목록에 없지만, 누리집 이용자는 사이트를 쓰는 것만으로 접하는 말이라 쉬운 단어로 본다.",
+    "difficulty_engine.get_word_grade()가 이 단어들을 C/D 대신 'W'로 돌려주고, 'W'는 A·B와 함께 쉬운 단어(EASY_GRADES)로 센다.",
+    "내용 어휘(행정·법률·의료·복지 용어)는 여러 사이트에 자주 나와도 넣지 않는다. 예: 민원, 행정, 입찰, 법령, 채용, 보건, 복지, 소득, 인증, 정책.",
+    "기준이 '자주 나옴'이 아니라 '사이트 기능의 이름'인 이유: 10개 사이트가 대부분 공공기관이라, 빈도로만 고르면 공공기관 전문 용어가 쉬운 단어로 들어간다.",
+    "sites_of_10은 10개 사이트(9/14 실행 9곳 + 9/28 네이버) 추출 글에 일반명사로 나온 사이트 수. MeCab이 합성어를 쪼개므로 '챗봇'은 '챗'+'봇', '공지사항'은 '공지'+'사항', '사이트맵'은 '사이트'+'맵'으로 들어 있다.",
+    "원래 등급이 A·B인 말(메뉴, 홈페이지, 회원, 파일, 버튼, 인터넷 등)은 이미 쉬운 단어라 넣지 않았다."
+  ],
+  "words": {
+    "화면 구성": [
+      {
+        "word": "화면",
+        "original_grade": "C",
+        "sites_of_10": 2
+      },
+      {
+        "word": "페이지",
+        "original_grade": "D",
+        "sites_of_10": 4
+      },
+      {
+        "word": "본문",
+        "original_grade": "D",
+        "sites_of_10": 6
+      },
+      {
+        "word": "상단",
+        "original_grade": "D",
+        "sites_of_10": 2
+      },
+      {
+        "word": "하단",
+        "original_grade": "D",
+        "sites_of_10": 0
+      },
+      {
+        "word": "창",
+        "original_grade": "C",
+        "sites_of_10": 4
+      },
+      {
+        "word": "새창",
+        "original_grade": "D",
+        "sites_of_10": 6
+      },
+      {
+        "word": "팝업",
+        "original_grade": "D",
+        "sites_of_10": 3
+      },
+      {
+        "word": "슬라이드",
+        "original_grade": "D",
+        "sites_of_10": 3
+      },
+      {
+        "word": "목록",
+        "original_grade": "C",
+        "sites_of_10": 4
+      },
+      {
+        "word": "게시판",
+        "original_grade": "C",
+        "sites_of_10": 4
+      },
+      {
+        "word": "게시물",
+        "original_grade": "D",
+        "sites_of_10": 1
+      },
+      {
+        "word": "자료실",
+        "original_grade": "D",
+        "sites_of_10": 4
+      },
+      {
+        "word": "주메뉴",
+        "original_grade": "D",
+        "sites_of_10": 2
+      },
+      {
+        "word": "사이트",
+        "original_grade": "D",
+        "sites_of_10": 5
+      },
+      {
+        "word": "맵",
+        "original_grade": "D",
+        "sites_of_10": 2
+      },
+      {
+        "word": "링크",
+        "original_grade": "D",
+        "sites_of_10": 3
+      },
+      {
+        "word": "홈",
+        "original_grade": "D",
+        "sites_of_10": 2
+      },
+      {
+        "word": "컨트롤",
+        "original_grade": "D",
+        "sites_of_10": 1
+      }
+    ],
+    "기능·동작": [
+      {
+        "word": "입력",
+        "original_grade": "C",
+        "sites_of_10": 8
+      },
+      {
+        "word": "검색",
+        "original_grade": "D",
+        "sites_of_10": 5
+      },
+      {
+        "word": "검색어",
+        "original_grade": "D",
+        "sites_of_10": 7
+      },
+      {
+        "word": "열기",
+        "original_grade": "C",
+        "sites_of_10": 6
+      },
+      {
+        "word": "열림",
+        "original_grade": "D",
+        "sites_of_10": 5
+      },
+      {
+        "word": "가입",
+        "original_grade": "C",
+        "sites_of_10": 4
+      },
+      {
+        "word": "로그인",
+        "original_grade": "D",
+        "sites_of_10": 4
+      },
+      {
+        "word": "로그아웃",
+        "original_grade": "D",
+        "sites_of_10": 1
+      },
+      {
+        "word": "접속",
+        "original_grade": "D",
+        "sites_of_10": 2
+      },
+      {
+        "word": "설치",
+        "original_grade": "C",
+        "sites_of_10": 4
+      },
+      {
+        "word": "설정",
+        "original_grade": "D",
+        "sites_of_10": 2
+      },
+      {
+        "word": "공유",
+        "original_grade": "D",
+        "sites_of_10": 2
+      },
+      {
+        "word": "구독",
+        "original_grade": "D",
+        "sites_of_10": 2
+      },
+      {
+        "word": "다운로드",
+        "original_grade": "D",
+        "sites_of_10": 1
+      },
+      {
+        "word": "업로드",
+        "original_grade": "D",
+        "sites_of_10": 0
+      },
+      {
+        "word": "첨부",
+        "original_grade": "D",
+        "sites_of_10": 0
+      },
+      {
+        "word": "클릭",
+        "original_grade": "D",
+        "sites_of_10": 1
+      },
+      {
+        "word": "조회",
+        "original_grade": "D",
+        "sites_of_10": 6
+      },
+      {
+        "word": "댓글",
+        "original_grade": "D",
+        "sites_of_10": 0
+      }
+    ],
+    "공통 메뉴 이름": [
+      {
+        "word": "안내",
+        "original_grade": "C",
+        "sites_of_10": 7
+      },
+      {
+        "word": "문의",
+        "original_grade": "D",
+        "sites_of_10": 2
+      },
+      {
+        "word": "공지",
+        "original_grade": "D",
+        "sites_of_10": 5
+      },
+      {
+        "word": "사항",
+        "original_grade": "D",
+        "sites_of_10": 6
+      }
+    ],
+    "서비스·매체": [
+      {
+        "word": "누리집",
+        "original_grade": "D",
+        "sites_of_10": 5
+      },
+      {
+        "word": "웹",
+        "original_grade": "D",
+        "sites_of_10": 4
+      },
+      {
+        "word": "온라인",
+        "original_grade": "C",
+        "sites_of_10": 5
+      },
+      {
+        "word": "앱",
+        "original_grade": "D",
+        "sites_of_10": 1
+      },
+      {
+        "word": "블로그",
+        "original_grade": "D",
+        "sites_of_10": 3
+      },
+      {
+        "word": "동영상",
+        "original_grade": "D",
+        "sites_of_10": 2
+      },
+      {
+        "word": "이메일",
+        "original_grade": "D",
+        "sites_of_10": 1
+      },
+      {
+        "word": "브라우저",
+        "original_grade": "D",
+        "sites_of_10": 1
+      },
+      {
+        "word": "콘텐츠",
+        "original_grade": "D",
+        "sites_of_10": 1
+      },
+      {
+        "word": "아이디",
+        "original_grade": "D",
+        "sites_of_10": 3
+      },
+      {
+        "word": "비밀번호",
+        "original_grade": "D",
+        "sites_of_10": 3
+      },
+      {
+        "word": "챗",
+        "original_grade": "D",
+        "sites_of_10": 4
+      },
+      {
+        "word": "봇",
+        "original_grade": "D",
+        "sites_of_10": 4
+      }
+    ]
+  }
+}

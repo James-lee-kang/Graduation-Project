@@ -1,6 +1,6 @@
 """
 CV 모듈 - 명암비 분석기
-ai-analysis/cv/contrast_analyzer.py
+cv-analyzer/contrast_analyzer.py
 
 [역할]
   스크린샷 이미지에서 OCR로 찾아낸 각 텍스트 영역의
@@ -29,7 +29,7 @@ ai-analysis/cv/contrast_analyzer.py
   # → 각 텍스트 영역별 명암비 + 판정 결과 + 위반/통과 분류
 
 [파이프라인 위치]
-  screenshot_capture.py → vision_ocr.py → ★contrast_analyzer.py → cv_runner.py
+  run.js가 만든 임시 PNG → vision_ocr.py → ★contrast_analyzer.py → cv_runner.py
   
   vision_ocr.py가 전달하는 것: 텍스트 내용 + 바운딩박스(x, y, width, height)
   이 모듈이 하는 것: 바운딩박스 위치의 픽셀에서 색상 추출 → 명암비 계산 → 판정
@@ -40,7 +40,7 @@ import json
 import math
 import sys
 from pathlib import Path
-from typing import Tuple, List, Dict, Any, Optional
+from typing import Tuple, List, Dict, Any, Optional, Callable
 
 from PIL import Image
 
@@ -443,110 +443,124 @@ class ContrastAnalyzer:
             "summary": summary,
         }
     
-    def suggest_fix(self, 
-                    fg: Tuple[int, int, int], 
+    def suggest_fix(self,
+                    fg: Tuple[int, int, int],
                     bg: Tuple[int, int, int],
                     target_ratio: float = 4.5) -> Dict[str, Any]:
         """
         명암비가 기준에 미달할 때, 기준을 충족하는 대체 색상 조합을 추천
-        
+
         [두 가지 방안을 모두 제시하는 이유]
         실무에서는 브랜드 가이드라인 등으로 글자색이나 배경색 중
         한쪽을 못 바꾸는 경우가 있으므로, 양쪽 모두 제안
-        색상 변화가 더 적은 쪽이 실용적
-        
-        [추천 전략]
-        - 방안 1: 전경색(글자)을 단계적으로 더 어둡게 조정
-        - 방안 2: 배경색을 단계적으로 더 밝게 조정
-        
+
+        [방향은 상대 휘도로 정한다 (10/9 수정)]
+        명암비는 두 색의 밝기 차이이므로, 차이를 벌리는 방향은 어느 쪽이 더 밝은지에 달려 있다.
+        - 글자가 배경보다 어두움(밝은 바탕의 어두운 글자): 글자를 더 어둡게 / 배경을 더 밝게
+        - 글자가 배경보다 밝음(다크 테마, 어두운 배너의 흰 글자): 글자를 더 밝게 / 배경을 더 어둡게
+        예전에는 항상 앞의 방향만 추천해서, 회색 배경(#808080) 위 흰 글자(3.94:1)에
+        "글자 #171717"(글자와 배경이 뒤집힘), "배경 #FFFFFF"(글자와 같은 색, 1:1)를 내놓았다.
+
+        [끝까지 가도 모자랄 때]
+        글자가 이미 흰색이면 더 밝게 할 수 없다. 이렇게 한쪽 끝(흰색·검정)까지 움직여도
+        목표에 못 미치면 그 끝 색과 함께 meets_target을 false로 돌려준다. 이때는 다른 방안을 쓴다.
+
         매개변수:
           fg, bg: 현재 전경/배경 RGB 색상
           target_ratio: 목표 명암비. 기본값 4.5 (KWCAG AA 일반 텍스트 기준)
-        
-        반환 예시 (미달인 경우):
+
+        반환 예시 (흰 글자 / #808080 배경, 3.94:1):
           {
             "needed": true,
-            "current_ratio": 2.31,
+            "current_ratio": 3.94,       ← 표시값은 소수 둘째 자리에서 버린다(displayed_ratio)
             "target_ratio": 4.5,
-            "option_1": {                              ← 글자를 어둡게
-              "description": "전경색(글자)을 더 어둡게",
-              "suggested_fg_hex": "#1A1A1A",
-              "new_ratio": 4.58
+            "text_is_lighter": true,                       ← 글자가 배경보다 밝다
+            "option_1": {                                  ← 글자색을 바꾸는 방안
+              "description": "전경색(글자)을 더 밝게",
+              "direction": "lighten",
+              "suggested_fg_hex": "#FFFFFF",               ← 이미 흰색이라 더 못 밝힘
+              "new_ratio": 3.94,
+              "meets_target": false
             },
-            "option_2": {                              ← 배경을 밝게
-              "description": "배경색을 더 밝게",
-              "suggested_bg_hex": "#FAFAFA",
-              "new_ratio": 4.52
+            "option_2": {                                  ← 배경색을 바꾸는 방안
+              "description": "배경색을 더 어둡게",
+              "direction": "darken",
+              "suggested_bg_hex": "#767676",
+              "new_ratio": 4.54,
+              "meets_target": true
             }
           }
         """
         current_ratio = contrast_ratio(fg, bg)
-        
+
         if current_ratio >= target_ratio:
             return {
                 "needed": False,
-                "current_ratio": round(current_ratio, 2),
+                "current_ratio": displayed_ratio(current_ratio),
                 "message": "이미 기준을 충족합니다."
             }
-        
-        # 방안 1: 전경색을 단계적으로 어둡게 해서 목표 도달
-        adjusted_fg = self._darken_to_target(fg, bg, target_ratio)
-        
-        # 방안 2: 배경색을 단계적으로 밝게 해서 목표 도달
-        adjusted_bg = self._lighten_to_target(fg, bg, target_ratio)
-        
+
+        text_is_lighter = relative_luminance(fg) > relative_luminance(bg)
+
+        if text_is_lighter:
+            fg_direction, bg_direction = "lighten", "darken"
+            fg_description, bg_description = "전경색(글자)을 더 밝게", "배경색을 더 어둡게"
+        else:
+            fg_direction, bg_direction = "darken", "lighten"
+            fg_description, bg_description = "전경색(글자)을 더 어둡게", "배경색을 더 밝게"
+
+        adjusted_fg = self._shift_to_target(fg, lambda c: contrast_ratio(c, bg), target_ratio, fg_direction)
+        adjusted_bg = self._shift_to_target(bg, lambda c: contrast_ratio(fg, c), target_ratio, bg_direction)
+        fg_ratio = contrast_ratio(adjusted_fg, bg)
+        bg_ratio = contrast_ratio(fg, adjusted_bg)
+
         return {
             "needed": True,
-            "current_ratio": round(current_ratio, 2),
+            "current_ratio": displayed_ratio(current_ratio),
             "target_ratio": target_ratio,
+            "text_is_lighter": text_is_lighter,
             "option_1": {
-                "description": "전경색(글자)을 더 어둡게",
+                "description": fg_description,
+                "direction": fg_direction,
                 "original_fg": list(fg),
                 "suggested_fg": list(adjusted_fg),
                 "suggested_fg_hex": self._rgb_to_hex(adjusted_fg),
-                "new_ratio": round(contrast_ratio(adjusted_fg, bg), 2),
+                "new_ratio": displayed_ratio(fg_ratio),
+                "meets_target": fg_ratio >= target_ratio,
             },
             "option_2": {
-                "description": "배경색을 더 밝게",
+                "description": bg_description,
+                "direction": bg_direction,
                 "original_bg": list(bg),
                 "suggested_bg": list(adjusted_bg),
                 "suggested_bg_hex": self._rgb_to_hex(adjusted_bg),
-                "new_ratio": round(contrast_ratio(fg, adjusted_bg), 2),
+                "new_ratio": displayed_ratio(bg_ratio),
+                "meets_target": bg_ratio >= target_ratio,
             },
         }
-    
-    def _darken_to_target(self, 
-                          fg: Tuple[int, int, int], 
-                          bg: Tuple[int, int, int], 
-                          target: float) -> Tuple[int, int, int]:
+
+    @staticmethod
+    def _shift_to_target(color: Tuple[int, int, int],
+                         ratio_of: Callable[[Tuple[int, int, int]], float],
+                         target: float,
+                         direction: str) -> Tuple[int, int, int]:
         """
-        전경색을 RGB 각 채널에서 1씩 줄여가며(더 어둡게)
-        목표 명암비에 도달하는 색상을 찾음.
-        최대 256단계까지 시도하며, 못 찾으면 검정(0,0,0)을 반환
+        색을 RGB 각 채널에서 1씩 밝게(lighten) 또는 어둡게(darken) 움직이며
+        ratio_of(후보)가 목표에 처음 도달하는 색을 찾는다.
+        최대 255단계까지 가도 못 찾으면 그쪽 끝 색(흰색 또는 검정)을 돌려준다.
+        그 색이 목표를 충족하는지는 호출한 쪽이 다시 계산한다(meets_target).
         """
-        r, g, b = fg
+        sign = 1 if direction == "lighten" else -1
+        r, g, b = color
+        candidate = color
         for step in range(256):
-            candidate = (max(0, r - step), max(0, g - step), max(0, b - step))
-            if contrast_ratio(candidate, bg) >= target:
+            candidate = (min(255, max(0, r + sign * step)),
+                         min(255, max(0, g + sign * step)),
+                         min(255, max(0, b + sign * step)))
+            if ratio_of(candidate) >= target:
                 return candidate
-        return (0, 0, 0)
-    
-    def _lighten_to_target(self, 
-                           fg: Tuple[int, int, int], 
-                           bg: Tuple[int, int, int], 
-                           target: float) -> Tuple[int, int, int]:
-        """
-        배경색을 RGB 각 채널에서 1씩 늘려가며(더 밝게)
-        목표 명암비에 도달하는 색상을 찾음.
-        최대 256단계까지 시도하며, 못 찾으면 흰색(255,255,255)을 반환
-        """
-        r, g, b = bg
-        for step in range(256):
-            candidate = (min(255, r + step), min(255, g + step), min(255, b + step))
-            if contrast_ratio(fg, candidate) >= target:
-                return candidate
-        return (255, 255, 255)
-    
+        return candidate
+
     @staticmethod
     def _rgb_to_hex(rgb: Tuple[int, int, int]) -> str:
         """RGB 튜플을 HEX 문자열로 변환함. 예: (255, 0, 0) → '#FF0000'"""
@@ -597,10 +611,12 @@ def main():
         if not result['kwcag_pass']:
             fix = analyzer.suggest_fix(fg, bg)
             print(f"\n수정 추천:")
-            print(f"  방안1: 글자색 → {fix['option_1']['suggested_fg_hex']}"
-                  f" (명암비 {fix['option_1']['new_ratio']}:1)")
-            print(f"  방안2: 배경색 → {fix['option_2']['suggested_bg_hex']}"
-                  f" (명암비 {fix['option_2']['new_ratio']}:1)")
+            for key, label, color_key in (("option_1", "글자색", "suggested_fg_hex"),
+                                          ("option_2", "배경색", "suggested_bg_hex")):
+                option = fix[key]
+                verdict = "" if option["meets_target"] else " — 이 방향으로는 기준에 못 미침, 다른 방안 사용"
+                print(f"  {option['description']}: {label} → {option[color_key]}"
+                      f" (명암비 {option['new_ratio']}:1){verdict}")
     else:
         # 이미지 + OCR JSON 모드
         image_path = arg1

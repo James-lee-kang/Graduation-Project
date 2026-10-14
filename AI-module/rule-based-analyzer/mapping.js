@@ -193,7 +193,10 @@ const kwcagItems = {
     module: '규칙기반',
     weight: 'medium',
     severity: 'major',      // 스크린리더 링크 목적 파악 불가
-    axeRules: ['link-name', 'identical-links-same-purpose'],
+    // uniaccess-ambiguous-link: link-audit.js 자체 규칙(2026-10-03). "더보기"·"바로가기"처럼
+    // 목적을 알 수 없는 말뿐인 링크. identical-links-same-purpose는 AAA 태그라 현재
+    // axe 실행 범위(A·AA)에서는 돌지 않는다 — 실제로 이 항목을 채우는 건 link-name과 이 규칙.
+    axeRules: ['link-name', 'identical-links-same-purpose', 'uniaccess-ambiguous-link'],
   },
   '6.4.4': {
     name: '고정된 참조 위치 정보',
@@ -258,7 +261,9 @@ const kwcagItems = {
     module: '규칙기반',
     weight: 'medium',
     severity: 'major',      // 예기치 않은 동작으로 인지 혼란
-    axeRules: ['select-name'],
+    // uniaccess-new-window-notice: link-audit.js 자체 규칙(2026-10-03). 새 창으로 열리는
+    // 링크에 새 창 안내가 없음. axe에는 해당 규칙이 없다.
+    axeRules: ['select-name', 'uniaccess-new-window-notice'],
   },
   '7.2.2': {
     name: '찾기 쉬운 도움 정보',
@@ -298,7 +303,10 @@ const kwcagItems = {
   },
   '7.3.4': {
     name: '반복 입력 정보',
-    wcag: ['3.3.9'],
+    // 2026-10-13 수정: 3.3.9(접근 가능한 인증 AAA)로 잘못 적혀 있었다. 반복 입력 정보는
+    //   WCAG 2.2 성공기준 3.3.7 Redundant Entry다(3.3.8은 7.3.3 접근 가능한 인증).
+    //   이 항목은 수동 검사이고 axe 규칙이 없어 점수·매핑 결과는 달라지지 않는다.
+    wcag: ['3.3.7'],
     mappingType: '1:1',
     module: '수동',
     weight: 'low',

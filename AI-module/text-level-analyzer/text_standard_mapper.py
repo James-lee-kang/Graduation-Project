@@ -17,6 +17,23 @@ if str(AI_MODULE_DIR) not in sys.path:
     sys.path.insert(0, str(AI_MODULE_DIR))
 
 from standard_mapping import kwcag_items_for_wcag
+import re
+
+
+# 감각 의존 지시 플래그 (difficulty_engine.detect_sensory_instructions가 만드는 문자열 기준).
+#   예) '감각 의존 지시(위치): "오른쪽 상단의 버튼" — 이름 없이 위치로만 가리킴'
+# 좌우·옆·색·모양·소리는 화면을 못 보거나 색을 못 구별하면 단서가 전혀 없어 high.
+# "화면 아래의 버튼"처럼 화면 전체 기준의 위·아래는 문서의 처음과 끝은 짐작할 수 있어 한 단계
+# 낮춰 medium이다 (2026-10-03 위·아래 medium, 좌우·옆 high를 새 탐지기로 옮김, 2026-10-13).
+# 위치 플래그의 인용문이 화면·페이지·창의 위·아래 기준이고 좌우 단서가 없을 때만 medium이다.
+_SENSORY_FLAG = re.compile(r'감각 의존 지시\((위치|색|모양|소리)\)')
+_HORIZONTAL_CUE = re.compile(r'오른쪽|왼쪽|우측|좌측|옆|우상단|우하단|좌상단|좌하단')
+_SCREEN_EDGE_CUE = re.compile(r'(?:화면|페이지|창)의?\s?(?:상단|하단|위쪽|아래쪽|위|아래|맨\s?위|맨\s?아래)')
+_QUOTED = re.compile(r'"([^"]*)"')
+
+# 2026-10-13 이전 엔진이 만든 '위치 참조' 플래그. 보관해 둔 결과 파일을 다시 처리할 때만 들어온다.
+# 위·아래는 읽는 순서와 맞으면 어느 정도 통해 medium, 좌우·옆은 단서가 없어 high였다 (2026-10-03).
+_LEGACY_VERTICAL_LOCATION_FLAG = re.compile(r'"(위|아래)\(의\)"')
 
 
 def classify_text_flag(flag: str, category: str) -> dict[str, Any]:
@@ -46,9 +63,24 @@ def classify_text_flag(flag: str, category: str) -> dict[str, Any]:
         issue_type, wcag_id, wcag_name, priority = (
             "noun_stacking", "3.1.5", "읽기 수준", "medium"
         )
-    elif "위치 참조" in flag or "모호한 참조" in flag:
+    elif _SENSORY_FLAG.search(flag):
+        # 2026-10-13: 예전 "위치 참조" 플래그(location_dependency)를 이름 없이 위치·색·모양·소리로만
+        # 가리키는 안내로 좁혀 대체했다. 기준은 같은 1.3.3(KWCAG 5.3.3)이고 유형 이름만 바뀐다.
+        kind = _SENSORY_FLAG.search(flag).group(1)
+        quoted = _QUOTED.search(flag)
+        phrase = quoted.group(1) if quoted else ""
+        screen_wide_only = (kind == "위치" and bool(_SCREEN_EDGE_CUE.search(phrase))
+                            and not _HORIZONTAL_CUE.search(phrase))
+        priority = "medium" if screen_wide_only else "high"
+        issue_type, wcag_id, wcag_name = "sensory_instruction", "1.3.3", "감각적 특성"
+    elif "위치 참조" in flag:
+        priority = "medium" if _LEGACY_VERTICAL_LOCATION_FLAG.search(flag) else "high"
+        issue_type, wcag_id, wcag_name = "location_dependency", "1.3.3", "감각적 특성"
+    elif "모호한 참조" in flag:
+        # 2026-10-03: "해당 ~"·"여기 클릭"은 위치 정보가 아니라 무엇을 가리키는지 모호한
+        # 문제라 1.3.3(감각적 특성)이 아니라 2.4.4(링크 목적)로 본다. 페이지 감점은 없다.
         issue_type, wcag_id, wcag_name, priority = (
-            "location_dependency", "1.3.3", "감각적 특성", "high"
+            "ambiguous_reference", "2.4.4", "링크 목적", "medium"
         )
     elif "텍스트 길이 과다" in flag:
         if category in {"link", "button"}:

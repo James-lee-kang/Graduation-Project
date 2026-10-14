@@ -1,6 +1,6 @@
 """
 CV 모듈 - 통합 실행기
-ai-analysis/cv/cv_runner.py
+cv-analyzer/cv_runner.py
 
 [역할]
   CV 모듈의 전체 파이프라인을 한 번에 실행하는 통합 실행기.
@@ -12,10 +12,10 @@ ai-analysis/cv/cv_runner.py
    미달이면 수정 색상까지 추천하는 파이프라인을 실행."
 
 [내부 파이프라인 — 4단계]
-  Step 1: 사용자 제공 또는 screenshot_capture.py가 저장한 이미지 확인
+  Step 1: 분석할 이미지 확인 (run_all.py가 규칙 검사와 같은 시점에 만든 임시 PNG 또는 직접 준 이미지)
   Step 2: vision_ocr.py 호출 → Google Vision API로 이미지 내 텍스트 + 위치 추출
   Step 3: contrast_analyzer.py 호출 → 각 텍스트의 전경색/배경색 명암비 계산 + 판정
-  Step 4: 명암비 미달 항목에 대한 수정 추천 색상 생성
+  Step 4: 명암비 미달 항목에 대한 수정 추천 색상 생성 (글자가 배경보다 밝은지에 따라 방향이 정해짐)
 
 [현재 실행 위치]
   run_all.py가 규칙 검사와 같은 렌더 시점의 임시 PNG를 CV에만 전달하고 즉시 삭제.
@@ -69,8 +69,26 @@ def cv_contrast_kwcag_item() -> Dict[str, str]:
     }
 
 
+def format_fix_option(option: Dict[str, Any], color_key: str) -> Dict[str, Any]:
+    """suggest_fix의 한 방안(글자색 또는 배경색)을 결과 JSON 형식으로 바꾼다.
+
+    color_key는 'suggested_fg'(글자색 방안) 또는 'suggested_bg'(배경색 방안).
+    direction이 'lighten'이면 더 밝게, 'darken'이면 더 어둡게다. meets_target이 false면
+    그 방향으로 끝(흰색·검정)까지 가도 기준에 못 미친다는 뜻이므로 다른 방안을 써야 한다.
+    """
+    return {
+        "direction": option.get("direction", ""),
+        "description": option.get("description", ""),
+        "suggested_color": option.get(color_key, []),
+        "suggested_hex": option.get(f"{color_key}_hex", ""),
+        "new_ratio": option.get("new_ratio", 0),
+        "meets_target": bool(option.get("meets_target", False)),
+    }
+
+
 def format_violation(v: Dict[str, Any]) -> Dict[str, Any]:
     """contrast_analyzer 위반 항목(수정 추천 포함)을 결과 JSON 형식으로 바꾼다."""
+    fix = v["fix_suggestion"]
     return {
         "text": v["text"],                      # ← 위반 텍스트 내용
         "location": v["bbox"],                  # ← 스크린샷 내 위치 (x, y, w, h)
@@ -80,18 +98,14 @@ def format_violation(v: Dict[str, Any]) -> Dict[str, Any]:
         "is_large_text": v["is_large_text"],    # ← 큰 텍스트 여부
         "foreground_color": v["foreground"],    # ← 추출된 전경색 RGB
         "background_color": v["background"],    # ← 추출된 배경색 RGB
+        # 수정 추천 (10/9 수정): 글자가 배경보다 밝은지(text_is_lighter)에 따라 방향이 정해진다.
+        #   글자가 어두움 → 글자 darken / 배경 lighten, 글자가 밝음 → 글자 lighten / 배경 darken
+        # 예전 키 darken_text / lighten_background는 방향이 고정이라 없앴다.
         "fix_suggestion": {
-            "darken_text": {                    # ← 방안 1: 글자를 더 어둡게
-                "suggested_color": v["fix_suggestion"].get("option_1", {}).get("suggested_fg", []),
-                "suggested_hex": v["fix_suggestion"].get("option_1", {}).get("suggested_fg_hex", ""),
-                "new_ratio": v["fix_suggestion"].get("option_1", {}).get("new_ratio", 0),
-            },
-            "lighten_background": {             # ← 방안 2: 배경을 더 밝게
-                "suggested_color": v["fix_suggestion"].get("option_2", {}).get("suggested_bg", []),
-                "suggested_hex": v["fix_suggestion"].get("option_2", {}).get("suggested_bg_hex", ""),
-                "new_ratio": v["fix_suggestion"].get("option_2", {}).get("new_ratio", 0),
-            },
-        } if v["fix_suggestion"].get("needed") else None,
+            "text_is_lighter": bool(fix.get("text_is_lighter")),
+            "text_color": format_fix_option(fix.get("option_1", {}), "suggested_fg"),         # ← 방안 1: 글자색
+            "background_color": format_fix_option(fix.get("option_2", {}), "suggested_bg"),   # ← 방안 2: 배경색
+        } if fix.get("needed") else None,
     }
 
 
@@ -173,7 +187,7 @@ class CVRunner:
         스크린샷 이미지를 받아서 CV 분석 전체(OCR → 명암비 → 수정 추천)를 실행
         
         매개변수:
-          image_path: 사용자 제공 또는 screenshot_capture.py가 저장한 이미지 경로
+          image_path: 분석할 이미지 경로 (run_all.py의 임시 PNG 또는 직접 준 이미지)
           output_path: 결과 JSON 저장 경로. None이면 result_cv.json으로 자동 생성
         
         반환값:
@@ -267,7 +281,8 @@ class CVRunner:
         
         # ── Step 4: 수정 추천 생성 ──
         # 명암비 미달인 각 텍스트에 대해, 기준을 충족하는 대체 색상을 추천함.
-        # 방안 1(글자를 더 어둡게)과 방안 2(배경을 더 밝게) 두 가지를 모두 생성함.
+        # 방안 1(글자색 변경)과 방안 2(배경색 변경) 두 가지를 모두 생성하고, 방향은 상대 휘도로 정함:
+        #   글자가 배경보다 어두우면 글자 darken / 배경 lighten, 밝으면 글자 lighten / 배경 darken.
         print(f"\n[Step 4/4] 위반 항목 수정 추천 생성")
         
         violations_with_fix = []
@@ -296,7 +311,6 @@ class CVRunner:
         
         # 결과를 JSON 파일로 저장함
         if output_path is None:
-            output_path = str(image_path.stem).replace("result", "") 
             output_path = "result_cv.json"
         
         with open(output_path, 'w', encoding='utf-8') as f:

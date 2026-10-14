@@ -56,7 +56,9 @@
                             플래그가 없을 때 (2026-10-02 추가)
   '어려운 어휘 포함(표본 부족)' : paragraph(일반명사 5개 미만)에서 C/D등급 명사가
                             SHORT_TEXT_MIN_HARD_NOUNS(2)개 이상 (고유명사 제외)
-  '위치 참조'              : 위/아래/옆/오른쪽/왼쪽 등 위치 의존 표현 (모든 종류)
+  '감각 의존 지시(위치|색|모양|소리)' : 이름 없이 위치·색·모양·소리로만 대상을 가리키는 안내
+                            (모든 종류, 2026-10-13. 예전 '위치 참조'를 대체. 보관해 둔 옛 결과의
+                            '위치 참조'도 그대로 처리한다)
   '모호한 참조'            : 해당 버튼/여기 클릭 등 모호한 참조 표현 (모든 종류)
   '텍스트 길이 과다'       : button/link/label/form_guide/heading 글자수 초과
                             (보이는 글을 그대로 담은 title·aria-label은 제외)
@@ -74,7 +76,7 @@ load_dotenv()
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from text_standard_mapper import classify_text_block
+from text_standard_mapper import classify_text_block, classify_text_flag
 
 
 # ─────────────────────────────────────────
@@ -134,8 +136,9 @@ OFFLINE_MODE = not bool(OPENAI_API_KEY)
 # [difficulty_engine.py 플래그 문자열과 1:1 대응]
 #   '문장 길이 과다'   → sentence_length 제안
 #   '어려운 어휘 과다' → hard_vocab_ratio 제안
-#   '위치 참조'        → location_dependency 제안
-#   '모호한 참조'      → location_dependency 제안
+#   '감각 의존 지시'   → sensory_instruction 제안 (좌우·옆·색·모양·소리 high, 화면 위·아래 medium)
+#   '위치 참조'        → location_dependency 제안 (2026-10-13 이전 엔진의 플래그, 옛 결과 호환용)
+#   '모호한 참조'      → ambiguous_reference 제안 (2026-10-03 분리, WCAG 2.4.4)
 #   '텍스트 길이 과다' → 카테고리별 길이 제안
 #   '명사 나열'        → noun_stacking 제안 (2026-10-02 추가)
 #
@@ -147,6 +150,54 @@ OFFLINE_MODE = not bool(OPENAI_API_KEY)
 #     wcag_ref  : 원본 WCAG 항목
 #     kwcag_items: canonical mapping.js로 변환한 KWCAG 2.2 항목 목록
 #     priority  : 우선순위 (high/medium/low)
+
+def gl_target_sentence(metrics):
+    """
+    난이도 엔진이 기준 초과 문단에 붙인 metrics.gl_targets를 안내 문장으로 바꾼다. (2026-10-13)
+
+    목표는 "쉬운 단어 60%" 같은 고정값이 아니라 기준(GL 9)을 정한 식에서 이 글의 수치로 거꾸로
+    계산한 값이다(difficulty_engine.calc_gl_targets). 없으면(옛 결과, 기준 아래 글) 빈 문자열.
+    """
+    targets = (metrics or {}).get('gl_targets')
+    if not targets or targets.get('max_avg_sentence_length') is None:
+        return ''
+    max_len = targets['max_avg_sentence_length']
+    min_ratio = targets.get('min_easy_word_ratio')
+    cur_len = metrics.get('avg_sentence_length')
+    cur_ratio = metrics.get('easy_word_ratio')
+    now_len = f'(지금 {cur_len:.1f}어절)' if cur_len is not None else ''
+    now_ratio = f'(지금 {cur_ratio * 100:.1f}%)' if cur_ratio is not None else ''
+    if min_ratio is None:
+        return (f'어휘를 전부 쉬운 말로 바꿔도 이 문장 길이로는 기준(GL 9)을 넘으므로 문장을 나눠야 합니다. '
+                f'지금 어휘 그대로라면 평균 {max_len:.1f}어절 이하가 목표입니다{now_len}.')
+    return (f'기준(GL 9)을 맞추려면 쉬운 단어 비율은 그대로 두고 평균 문장 길이를 {max_len:.1f}어절 이하로 '
+            f'줄이거나{now_len}, 문장 길이는 그대로 두고 쉬운 단어 비율을 {min_ratio * 100:.1f}% 이상으로 '
+            f'올려야 합니다{now_ratio}. 둘을 섞어 맞춰도 됩니다.')
+
+
+# 감각 의존 지시 종류별 수정 방향 (2026-10-13). 공통 원칙: 감각 정보에 "대상의 이름"을 함께 쓴다.
+SENSORY_GUIDES = {
+    '위치': '위치만 말하지 말고 가리키는 대상의 이름을 함께 쓰세요. '
+            '예: "오른쪽 버튼을 클릭하세요" → "오른쪽의 \'제출\' 버튼을 클릭하세요". '
+            '읽는 순서를 따르는 "아래 표를 참고하세요"는 괜찮지만, 화면 배치에 따라 달라지는 '
+            '오른쪽·왼쪽 같은 위치는 이름 없이 쓰지 마세요.',
+    '색': '색만 말하지 말고 대상의 이름을 함께 쓰세요. '
+          '예: "빨간색 버튼을 누르세요" → "\'삭제\' 버튼(빨간색)을 누르세요". '
+          '색을 구별하기 어려운 사용자도 같은 대상을 찾을 수 있어야 합니다.',
+    '모양': '모양만 말하지 말고 대상의 이름을 함께 쓰세요. '
+            '예: "동그란 아이콘을 누르세요" → "\'검색\' 아이콘(돋보기 모양)을 누르세요".',
+    '소리': '소리 신호만으로 안내하지 말고 같은 내용을 화면의 글로도 알려 주세요. '
+            '예: "삐 소리가 나면 말씀하세요" → "삐 소리가 나고 화면에 \'녹음 중\'이 표시되면 말씀하세요".',
+}
+
+
+def _sensory_kind(flag):
+    """'감각 의존 지시(색): ...' 플래그에서 종류(위치·색·모양·소리)를 읽는다. 모르면 '위치'."""
+    for kind in SENSORY_GUIDES:
+        if f'감각 의존 지시({kind})' in flag:
+            return kind
+    return '위치'
+
 
 def generate_rule_based_suggestion(block):
     """
@@ -161,8 +212,9 @@ def generate_rule_based_suggestion(block):
       '읽기 수준 초과'   → 문장 나누기 가이드 (priority: medium)
       '어려운 어휘 포함(표본 부족)' → 쉬운 말 바꾸기 가이드 (priority: medium)
       '명사 나열'        → 조사·서술어 넣어 풀어 쓰기 가이드 (priority: medium)
-      '위치 참조'        → 구체적 이름 사용 가이드 (priority: high)
-      '모호한 참조'      → 구체적 이름 사용 가이드 (priority: high)
+      '감각 의존 지시'   → 구체적 이름 쓰기 가이드 (priority: 좌우·옆·색·모양·소리 high, 화면 위·아래 medium)
+      '위치 참조'        → 같은 가이드 (옛 결과 호환용)
+      '모호한 참조'      → 가리키는 대상 이름 쓰기 가이드 (priority: medium)
       '텍스트 길이 과다' → 카테고리별 간결화 가이드 (priority: low~medium)
 
     Args:
@@ -192,8 +244,9 @@ def generate_rule_based_suggestion(block):
             suggestions.append({
                 'type': 'sentence_length',
                 'issue': f'평균 문장 길이가 {avg_len:.1f}어절로 기준(25어절)을 초과합니다.',
-                'guide': '한 문장에 하나의 정보만 담도록 분리하세요. '
-                         '접속사(~하고, ~하며, ~하여)로 이어진 문장을 마침표로 나누면 됩니다.',
+                'guide': ('한 문장에 하나의 정보만 담도록 분리하세요. '
+                          '접속사(~하고, ~하며, ~하여)로 이어진 문장을 마침표로 나누면 됩니다. '
+                          + gl_target_sentence(metrics)).rstrip(),
                 'wcag_ref': '3.1.5 읽기 수준',
                 'priority': 'high',
             })
@@ -224,9 +277,10 @@ def generate_rule_based_suggestion(block):
             suggestions.append({
                 'type': 'hard_vocab_ratio',
                 'issue': issue_text,
-                'guide': '고급 어휘나 전문 용어를 쉬운 단어로 바꾸세요. '
-                         '예: "이행" → "지키기", "제반 사항" → "모든 내용", '
-                         '"의거하여" → "따라서", "시행" → "실시/시작"',
+                'guide': ('고급 어휘나 전문 용어를 쉬운 단어로 바꾸세요. '
+                          '예: "이행" → "지키기", "제반 사항" → "모든 내용", '
+                          '"의거하여" → "따라서", "시행" → "실시/시작" '
+                          + gl_target_sentence(metrics)).rstrip(),
                 'wcag_ref': '3.1.5 읽기 수준',
                 'priority': 'medium',
             })
@@ -272,8 +326,9 @@ def generate_rule_based_suggestion(block):
             suggestions.append({
                 'type': 'reading_level',
                 'issue': issue_text,
-                'guide': '긴 문장을 마침표로 나누고, 한 문장에 정보 하나만 담으세요. '
-                         '마침표 없이 이어 붙인 제목·날짜·설명은 줄을 나누거나 문장으로 정리하세요.',
+                'guide': ('긴 문장을 마침표로 나누고, 한 문장에 정보 하나만 담으세요. '
+                          '마침표 없이 이어 붙인 제목·날짜·설명은 줄을 나누거나 문장으로 정리하세요. '
+                          + gl_target_sentence(metrics)).rstrip(),
                 'wcag_ref': '3.1.5 읽기 수준',
                 'priority': 'medium',
             })
@@ -295,26 +350,53 @@ def generate_rule_based_suggestion(block):
                 'priority': 'medium',
             })
 
-        # ── 위치 의존 표현 (위치 참조 / 모호한 참조) ──
-        # difficulty_engine LOCATION_PATTERNS 출력:
-        #   '위치 참조: "위(의)" 사용', '위치 참조: "아래(의)" 사용' 등
-        #   '모호한 참조: "해당 ~" 사용', '모호한 참조: "여기/이곳 클릭" 사용'
-        #
-        # 두 플래그를 같은 elif로 처리하는 이유:
-        #   위치 참조("위의 버튼")와 모호한 참조("해당 버튼")는 발생 원인은 다르지만
-        #   수정 방향이 동일함 → "구체적 이름을 쓰세요"
-        #   KWCAG 1.3.3: 위치/방향/색상 등 감각에만 의존해서 UI를 가리키면 안 됨
-        elif '위치 참조' in flag or '모호한 참조' in flag:
+        # ── 감각 의존 지시 (2026-10-13, 예전 '위치 참조'를 대체) ──
+        # difficulty_engine.detect_sensory_instructions 출력:
+        #   '감각 의존 지시(위치): "오른쪽 상단의 버튼" — 이름 없이 위치로만 가리킴'
+        #   종류는 위치·색·모양·소리. WCAG 1.3.3: 모양·색·위치·소리 같은 감각에만 의존해서
+        #   대상을 가리키면 안 됨. 대상의 이름을 같이 쓰면 위치·색은 덧붙여도 된다.
+        #   우선순위는 text_standard_mapper와 같은 규칙(좌우·옆·색·모양·소리 high,
+        #   화면 전체 기준 위·아래 medium)을 그대로 쓴다.
+        elif '감각 의존 지시' in flag:
+            priority = classify_text_flag(flag, category)['priority']
+            suggestions.append({
+                'type': 'sensory_instruction',
+                'issue': f'위치·색·모양·소리 같은 감각 정보만으로 대상을 가리키는 안내가 있습니다: {flag}',
+                'guide': SENSORY_GUIDES[_sensory_kind(flag)],
+                'wcag_ref': '1.3.3 감각적 특성',
+                'priority': priority,
+            })
+
+        # ── 옛 위치 참조 플래그 (2026-10-13 이전 엔진이 만든 결과를 다시 처리할 때만) ──
+        #   '위치 참조: "위(의)" 사용', '위치 참조: "오른쪽(의)" 사용' 등
+        #   2026-10-03: 위·아래는 읽는 순서와 맞으면 어느 정도 통하므로 medium,
+        #   좌우·옆은 화면을 못 보면 단서가 없으므로 high (text_standard_mapper와 같음)
+        elif '위치 참조' in flag:
+            vertical = '"위(의)"' in flag or '"아래(의)"' in flag
             # flag 문자열 자체를 issue에 포함하여 어떤 표현이 문제인지 구체적으로 표시
-            # 예: '위치에 의존하는 모호한 표현이 있습니다: 위치 참조: "위(의)" 사용'
             suggestions.append({
                 'type': 'location_dependency',
-                'issue': f'위치에 의존하는 모호한 표현이 있습니다: {flag}',
-                'guide': '위치 참조 대신 구체적 이름을 사용하세요. '
-                         '예: "위의 버튼을 클릭하세요" → "\'제출\' 버튼을 클릭하세요", '
-                         '"해당 메뉴" → "\'민원 신청\' 메뉴"',
+                'issue': f'위치에 의존하는 표현이 있습니다: {flag}',
+                'guide': '위치 대신 가리키는 대상의 이름을 쓰세요. '
+                         '예: "오른쪽 버튼을 클릭하세요" → "\'제출\' 버튼을 클릭하세요", '
+                         '"아래 표를 참고하세요" → "\'수수료 안내\' 표를 참고하세요"',
                 'wcag_ref': '1.3.3 감각적 특성',
-                'priority': 'high',
+                'priority': 'medium' if vertical else 'high',
+            })
+
+        # ── 모호한 참조 (2026-10-03 위치 참조와 분리) ──
+        #   '모호한 참조: "해당 ~" 사용', '모호한 참조: "여기/이곳 클릭" 사용'
+        #   위치가 아니라 무엇을 가리키는지 모호한 문제 → WCAG 2.4.4 링크 목적.
+        #   링크 글자 자체가 "여기"·"더보기"뿐인 경우는 규칙 모듈(link-audit.js)이 따로 잡는다.
+        elif '모호한 참조' in flag:
+            suggestions.append({
+                'type': 'ambiguous_reference',
+                'issue': f'무엇을 가리키는지 모호한 표현이 있습니다: {flag}',
+                'guide': '"해당"·"여기" 대신 대상의 이름을 쓰세요. '
+                         '예: "여기를 클릭하세요" → "\'민원 신청\' 페이지로 이동하세요", '
+                         '"해당 메뉴" → "\'민원 신청\' 메뉴"',
+                'wcag_ref': '2.4.4 링크 목적',
+                'priority': 'medium',
             })
 
         # ── 카테고리별 텍스트 길이 과다 ──
@@ -331,11 +413,15 @@ def generate_rule_based_suggestion(block):
         #   예: 버튼은 "동작을 2~4단어로" / 링크는 "목적지를 간결하게" / heading은 "핵심만 60자 이내"
         elif '텍스트 길이 과다' in flag:
             if category == 'link':
+                # [2026-10-13] 점수에서 빠진 참고 기준이다(경험값 30글자). WCAG 2.4.4는 링크 글만 보고
+                # 목적지를 알 수 있을 만큼 구체적이기를 원하므로, 기사·공지 제목처럼 제목 자체가 링크
+                # 글인 경우까지 줄이라고 하지 않는다. 제목 밖의 부가 정보가 링크 안에 들어 있을 때 줄인다.
                 suggestions.append({
                     'type': 'link_length',
-                    'issue': f'링크 텍스트가 {len(text)}글자로 기준(30글자)을 초과합니다.',
-                    'guide': '링크 텍스트는 목적지를 간결하게 설명해야 합니다. '
-                             '부가 설명은 링크 밖에 두고, 링크 자체는 핵심만 담으세요.',
+                    'issue': f'링크 텍스트가 {len(text)}글자로 참고 기준(30글자)을 넘습니다.',
+                    'guide': '링크 글은 가려는 곳을 알 수 있을 만큼 구체적이어야 합니다. 기사·공지 제목이 그대로 '
+                             '링크 글이라면 그대로 두어도 됩니다. 날짜·조회수·요약 같은 부가 정보가 링크 안에 '
+                             '함께 들어 있다면 링크 밖으로 빼서 링크 글은 제목만 남기세요.',
                     'wcag_ref': '2.4.4 링크 목적',
                     'priority': 'low',
                 })
@@ -690,6 +776,20 @@ RULE_BASED_GUIDES = {
         'code_before': '<a href="/apply">여기</a>를 클릭하세요',
         'code_after': '<a href="/apply">민원 신청 페이지로 이동</a>',
         'wcag_ref': '2.4.4 링크 목적',
+    },
+    # 2026-10-03: 규칙 모듈 link-audit.js 자체 규칙 두 개
+    'uniaccess-ambiguous-link': {
+        'guide': '"더보기"·"바로가기"처럼 목적을 알 수 없는 링크 글에 대상을 밝히세요.',
+        'code_before': '<h2>공지사항</h2> ... <a href="/notice">더보기</a>',
+        'code_after': '<a href="/notice">공지사항 더보기</a>\n'
+                      '또는 <a href="/notice">더보기<span class="sr-only"> 공지사항</span></a>',
+        'wcag_ref': '2.4.4 링크 목적',
+    },
+    'uniaccess-new-window-notice': {
+        'guide': '새 창으로 열리는 링크에 새 창 안내를 넣으세요.',
+        'code_before': '<a href="https://www.bokjiro.go.kr" target="_blank">복지로</a>',
+        'code_after': '<a href="https://www.bokjiro.go.kr" target="_blank" title="새 창 열림">복지로</a>',
+        'wcag_ref': '3.2.5 요청에 의한 변화 (KWCAG 7.2.1 사용자 요구에 따른 실행)',
     },
     'html-has-lang': {
         'guide': 'HTML 태그에 언어 속성을 추가하세요.',

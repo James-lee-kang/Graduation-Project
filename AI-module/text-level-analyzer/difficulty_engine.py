@@ -34,13 +34,22 @@
     즉, GL은 1~12 범위인데, 이걸 0~100 범위로 선형 변환하여 점수로 사용.
   수정 제안 기준: difficulty_score 72.7 이상 (= GL 9, 2026-10-02 변경, 이전 40)
                원인 플래그(문장 길이·어려운 어휘)가 없으면 '읽기 수준 초과' 플래그를 붙임
-  페이지 점수 = 100 - (paragraph difficulty_score 평균) - 위치 의존 감점 - 길이 감점
+  페이지 점수 = 100 - (paragraph difficulty_score 평균)
                (높을수록 읽기 쉬움, 0 미만은 0)
+    (2026-10-13 변경) 예전에는 여기서 위치 의존 감점(건당 3점, 최대 15점)과 UI 텍스트
+    길이 감점(건당 2점, 최대 20점)을 더 뺐다. 두 감점은 점수에서 뺐고, 플래그와 수정
+    제안은 그대로 낸다. 이유는 analyze() 안의 주석 참고.
 
-[보조 지표]
-  - 위치 의존 표현: 건당 3점 감점 (최대 15점)
-  - UI 텍스트 길이 위반: 건당 2점 감점 (최대 20점)
-  -> 위치의존표현은 UI 텍스트 길이 위반보다 더 심각한 문제로 간주.
+[보조 지표] — 플래그와 수정 제안만 낸다. 페이지 점수에는 들어가지 않는다.
+  - 감각 의존 지시(2026-10-13 개편, 4절): "오른쪽 버튼을 누르세요"처럼 이름 없이 위치·색·모양·
+    소리로만 대상을 가리키는 안내. WCAG 1.3.3(KWCAG 5.3.3). 이름을 같이 쓴 안내, 읽는 순서상
+    "위의 표를 참고하세요"는 위반이 아니라 안 건다. 예전의 '위치 참조' 플래그(낱말만 있으면
+    걸고 건당 3점 감점)를 이 조건으로 좁혀 대체했다.
+  - 모호한 참조(2026-10-03): "해당 ~"·"여기 클릭". WCAG 2.4.4로 기록하고 감점은 없다.
+    링크 자체의 모호한 텍스트("더보기" 등)는 규칙 모듈 link-audit.js가 KWCAG 6.4.3으로 감점한다.
+  - UI 텍스트 길이 위반: 글자 수 초과 플래그와 간결화 제안(2026-10-13부터 감점 없음).
+  - GL 목표값(2026-10-13): 난이도 점수가 기준(72.7) 이상인 문단에는 metrics.gl_targets로
+    "평균 몇 어절 이하로 줄이거나 쉬운 단어 몇 % 이상으로 올리면 기준 아래인지"를 같이 낸다.
   - 명사 나열(2026-10-02): 명사로만 된 어절 4개 이상 연속이면 플래그(감점 없음).
   - 종합 난이도 v2(2026-10-02, 검증 전): (Jo 점수 + 명사 나열 점수) / 2.
     결과에 같이 기록만 하고 페이지 점수에는 아직 쓰지 않는다.
@@ -54,6 +63,7 @@
 """
 
 import json
+import math
 import re
 import sys
 import os
@@ -73,7 +83,18 @@ _VOCAB_DICT_PATH = os.path.join(os.path.dirname(__file__), 'korean_vocab_grades.
 with open(_VOCAB_DICT_PATH, 'r', encoding='utf-8') as _f:
     VOCAB_GRADES = json.load(_f)
 
-EASY_GRADES = {'A', 'B'}  # 쉬운 단어 기준: 논문의 5,000개 목록 역할
+# [2026-10-04] 웹 인터페이스 어휘. 학습용 어휘 목록은 외국인 학습자용이라 "입력", "검색",
+# "로그인", "게시판", "안내" 같은 누리집 기능 이름이 C등급이거나 목록 밖(D)이다. 짧은 글
+# 어려운 단어 플래그의 오탐 대부분("로그인 회원가입", "기관 검색 전체보기", "챗봇")이 이
+# 때문이었다. 사이트를 쓰는 것만으로 접하는 화면 요소·기능 이름 55개(web_common_words.json)를
+# 'W' 등급으로 바꿔 쉬운 단어로 센다. 기준은 빈도가 아니라 "사이트 기능의 이름"인가이며,
+# 행정·법률·의료 같은 내용 어휘는 넣지 않는다(목록 파일의 _설명 참고).
+_WEB_WORDS_PATH = os.path.join(os.path.dirname(__file__), 'web_common_words.json')
+with open(_WEB_WORDS_PATH, 'r', encoding='utf-8') as _f:
+    WEB_COMMON_WORDS = frozenset(
+        entry['word'] for entries in json.load(_f)['words'].values() for entry in entries)
+
+EASY_GRADES = {'A', 'B', 'W'}  # 쉬운 단어 기준: 논문의 5,000개 목록 역할 (+ 웹 인터페이스 어휘 W)
 
 
 # ─────────────────────────────────────────
@@ -203,9 +224,12 @@ def calc_avg_sentence_length(text):
 # 본 적용:  국립국어원 A+B등급(2888개)을 쉬운 단어로 정의하여 대체
 
 def get_word_grade(noun):
-    """명사의 어휘 등급을 반환. A/B/C/D(미등재)"""
+    """명사의 어휘 등급을 반환. A/B/C/D(미등재), W(웹 인터페이스 어휘, 2026-10-04)"""
     # D는 등급 미등재 단어
-    return VOCAB_GRADES.get(noun, 'D')
+    grade = VOCAB_GRADES.get(noun, 'D')
+    if grade in ('C', 'D') and noun in WEB_COMMON_WORDS:
+        return 'W'  # 학습용 목록에서는 어렵게 잡히지만 누리집 이용자에게 익숙한 기능 이름
+    return grade
 
 
 def calc_easy_word_ratio(text):
@@ -242,42 +266,207 @@ def calc_easy_word_ratio(text):
 
 
 # ─────────────────────────────────────────
-# 4. 보조 지표: 위치 의존 표현 탐지
+# 4. 보조 지표: 감각 의존 지시 · 모호한 참조 탐지 (2026-10-13 개편)
 # ─────────────────────────────────────────
-# r'(?<![가-힣/])위의?\s'
-#  ─────────────  ──  ─  ──
-#       ①         ②  ③  ④
+# [무엇을 잡는가]
+# WCAG 1.3.3 감각적 특성(KWCAG 5.3.3 명확한 지시사항 제공)은 모양·색·크기·위치·방향·소리
+# 같은 감각적 특성"에만" 의존해서 대상을 가리키는 안내를 문제로 본다. 화면을 못 보는 사용자에게
+# "오른쪽 버튼을 누르세요"는 단서가 없고, 색을 구별하기 어려운 사용자에게 "빨간색 버튼"도
+# 마찬가지다. 그래서 아래 세 조건이 한 문장에 함께 있을 때만 '감각 의존 지시' 플래그를 붙인다.
+#   (1) 감각 단서: 오른쪽·왼쪽·우측·좌측·옆(위치), 색 이름, 동그란·"○○ 모양"(모양), 삐 소리(소리)
+#   (2) 그 단서가 일반적인 대상 낱말(버튼·아이콘·메뉴·링크·표 등)에 바로 붙어 있다. 사이에 대상의
+#       이름이 끼어 있으면 걸리지 않는다. "오른쪽 버튼"은 걸리고 "오른쪽 '로그인' 버튼"·
+#       "오른쪽 로그인 버튼"은 안 걸린다. 이름이 함께 있으면 위치는 덧붙인 정보일 뿐이라 기준을 지킨
+#       것이다(WCAG 해설서 기법 G96: 감각 정보에 글로 된 식별 정보를 함께 제공).
+#   (3) 같은 문장에서 조작·확인을 시키는 말(누르세요·선택·이용·참고하세요 등)이 뒤따른다.
+#       "왼쪽 메뉴 닫기" 같은 버튼 이름이나 "왼쪽 사진은 ○○ 의원" 같은 설명은 지시가 아니므로 안 건다.
+# 마우스·키보드 이름("마우스 오른쪽 버튼", "오른쪽 방향키")은 화면 위치가 아니라서 뺀다.
+#
+# [일부러 안 잡는 것]
+#   - "위의 표를 참고하세요", "아래 버튼을 눌러 신청하세요": 읽는 순서상 앞뒤를 가리키는 참조.
+#     스크린리더도 같은 순서로 읽으므로 가리키는 대상이 분명하면 1.3.3을 지킨다(WCAG 해설서가
+#     "아래 링크 중 하나를 고르세요" 같은 예를 충족 사례로 든다). 다만 "화면 아래의 버튼"처럼
+#     화면 전체 기준의 위치는 읽는 순서와 무관해서 잡되 우선순위를 한 단계 낮춘다(medium).
+#   - 순위(2위), 좌측통행, 오른쪽 창문처럼 다른 뜻의 낱말.
+#   - 색으로만 뜻을 전하는 설명("빨간색으로 표시된 항목은 필수입니다")은 조작을 시키는 말이 없어
+#     안 걸린다. 이 탐지기는 오탐을 줄이는 쪽(정밀도 우선)으로 만들었고 놓치는 문장이 있다.
+#
+# [이력]
+# 2026-10-03까지는 "위(의) "·"아래(의) "·"오른쪽(의) " 같은 낱말이 문장에 있으면 '위치 참조'로
+# 보고 건당 3점(최대 15점)을 깎았다. 10개 사이트 블록 2,822개에서 진짜 사례는 0건이었고
+# (10/2 수정 전 2건은 "박스오피스 2위 하락" 오탐), 그 낱말 목록은 위반이 아닌 문장("위의 표를
+# 참고하세요", 이름을 같이 쓴 "오른쪽 상단의 '로그인' 버튼")을 잡으면서 1.3.3이 실제로 말하는 색·모양·
+# 소리 지시는 못 잡았다. 건당 3점이라는 값에도 근거가 없었다. 2026-10-13에 탐지 조건을 위처럼
+# 좁히고 페이지 점수에서 뺐다. 플래그와 수정 제안은 그대로 낸다. 점수에 다시 넣으려면 오탐률과
+# 놓친 비율을 사람 판정과 맞춰 본 뒤에 정한다.
+#
+# [심각도] 좌우·옆·색·모양·소리는 high(단서가 전혀 없음, 2026-10-03 준섭님 판단), 화면 위·아래 기준
+# 위치는 medium. 기준 번호와 우선순위는 text_standard_mapper.py가 정한다.
+#
+# [확인과 한계] 설문 쌍 116개와 시험 문장 47개로 만들었고, 10개 사이트 블록 2,822개(9/14 추출본,
+# 10/3 점검과 같은 자료)에 돌려 플래그 0건이었다(오탐 0건, 진짜 사례도 없음 — 메인 페이지 표본).
+# 이용 안내·신청 절차·FAQ처럼 지시문이 많은 페이지에서의 실제 재현율은 아직 모른다.
 
-# ① (?<![가-힣/]) → 부정 후방탐색
-#   '위' 앞에 한글이나 '/'가 오면 매칭 안 함
-#   예: '서비스위의' → 건너뜀 (앞에 '스' 있음)
-#       '위의 버튼'  → 매칭됨 (앞에 한글 없음)
+# 감각 단서가 가리킬 수 있는 일반적인 대상 낱말. 단서와 이 낱말 사이에 다른 낱말(이름)이 있으면
+# 걸리지 않는다. 긴 낱말을 먼저 둔다("팝업창"이 "팝업"보다 먼저).
+_GENERIC_TARGETS = (
+    '팝업창', '팝업', '배너', '버튼', '아이콘', '메뉴', '링크', '탭', '검색창', '입력창', '입력란', '입력칸',
+    '검색란', '체크박스', '화살표', '바로가기', '목록', '상자', '박스', '칸', '창', '표', '그림', '사진',
+    '이미지', '그래프', '도표', '양식', '서식', '항목', '영역', '문구', '글씨', '글자', '텍스트', '표시',
+    '마크', '기호',
+)
+_COLOR_WORDS = (
+    '빨간색', '빨강색', '빨간', '빨강', '붉은색', '붉은', '적색', '파란색', '파랑색', '파란', '파랑',
+    '푸른색', '푸른', '청색', '초록색', '초록', '녹색', '연두색', '노란색', '노랑색', '노란', '노랑',
+    '황색', '주황색', '주황', '보라색', '보라', '분홍색', '분홍', '핑크색', '핑크', '하늘색', '갈색',
+    '회색', '검은색', '검은', '검정색', '검정', '흑색', '흰색', '하얀색', '하얀', '흰', '백색',
+)
+# 단서와 대상 사이에 있어도 이름으로 치지 않는 말(위치 수식어, 조사, 모양·색 수식어, 차례).
+_FILLER_WORDS = (
+    '상단', '하단', '위', '아래', '가운데', '중앙', '맨', '끝', '쪽', '의', '에서', '에', '부터', '으로', '로',
+    '있는', '위치한', '보이는', '표시된', '표시한', '나오는', '나타난', '큰', '작은',
+    '동그란', '둥근', '네모난', '세모난', '색', '글씨', '글자', '배경', '바탕', '테두리',
+)
+_ORDINAL = r'(?:첫|두|세|네|다섯|여섯|일곱|여덟|아홉|열|[0-9]+)\s?번째'
 
-# ② 위 → '위' 글자
 
-# ③ 의? → '의'가 있어도 되고 없어도 됨
-#   '위 버튼'도 잡고, '위의 버튼'도 잡음
+def _alternation(words):
+    return '(?:' + '|'.join(sorted(words, key=len, reverse=True)) + ')'
 
-# ④ \s → 공백 (띄어쓰기)
-#   '위의버튼'처럼 붙어있으면 매칭 안 함
 
-# [2026-10-02] 앞 글자 제외 목록에 숫자를 추가했다. "박스오피스 2위 하락"처럼 순위를
-# 뜻하는 "N위"가 위치 참조로 잡히고 있었다(10개 사이트 실측에서 위치 참조 탐지 2건이
-# 모두 이 경우). 숫자 바로 뒤의 "위"는 순위·등급이지 화면 위치가 아니다.
-LOCATION_PATTERNS = [
-    (re.compile(r'(?<![가-힣/0-9])위의?\s'), '위치 참조: "위(의)" 사용'),
-    (re.compile(r'(?<![가-힣/0-9])아래의?\s'), '위치 참조: "아래(의)" 사용'),
-    (re.compile(r'(?<![가-힣/0-9])옆의?\s'), '위치 참조: "옆(의)" 사용'),
-    (re.compile(r'(?<![가-힣/0-9])오른쪽의?\s'), '위치 참조: "오른쪽(의)" 사용'),
-    (re.compile(r'(?<![가-힣/0-9])왼쪽의?\s'), '위치 참조: "왼쪽(의)" 사용'),
+_COLOR = _alternation(_COLOR_WORDS)
+_FILLER = '(?:' + _alternation(_FILLER_WORDS) + '|' + _COLOR + '|' + _ORDINAL + ')'
+_TARGET = _alternation(_GENERIC_TARGETS)
+_PARTICLE = r'(?:들)?(?:에서|으로|부터|까지|을|를|이|가|은|는|의|에|로|과|와|도|만)?'
+# 마우스·키보드를 가리키는 말이 바로 뒤따르면 화면 위치가 아니다.
+_NOT_DEVICE = r'(?!\s?(?:마우스|방향\s?키|화살표\s?키|키보드|Shift|Ctrl|Alt|Tab|Enter))'
+
+
+def _cue_then_generic_target(cue, before=''):
+    """단서(cue) 바로 뒤에, 이름 없이 일반 대상 낱말이 이어지는 자리를 찾는 정규식."""
+    return re.compile(
+        rf'(?<![가-힣]){before}(?P<cue>{cue}){_NOT_DEVICE}'
+        rf'(?P<fill>(?:\s*{_FILLER}){{0,8}})\s*(?P<target>{_TARGET}){_PARTICLE}(?![가-힣])')
+
+
+_HORIZONTAL_CUE = r'(?:오른쪽|왼쪽|우측|좌측|옆|우상단|우하단|좌상단|좌하단)'
+_SENSORY_GRAMMARS = (
+    # (종류, 정규식). '위치'는 좌우·옆이 화면 가장자리 기준보다 먼저다.
+    ('위치/좌우', _cue_then_generic_target(_HORIZONTAL_CUE, r'(?<!마우스)(?<!마우스 )')),
+    ('위치/화면', _cue_then_generic_target(
+        r'(?:화면|페이지|창)(?:의)?\s?(?:상단|하단|위쪽|아래쪽|위|아래|맨\s?위|맨\s?아래)')),
+    ('색', _cue_then_generic_target(_COLOR)),
+    ('모양', _cue_then_generic_target(
+        r'(?:[가-힣]{1,5}\s?모양(?:의|으로\s?된|으로\s?생긴)?|동그란|둥근|둥그런|네모난|네모|사각형|세모난|세모|삼각형|동그라미|원형)')),
+)
+
+# 대상 낱말 뒤 40자 안에 조작·확인을 시키는 말이 있어야 한다.
+_INSTRUCTION = re.compile(
+    r'누르|눌러|누른|클릭|터치|탭하|선택(?:하|해|할|합|한|시|(?![가-힣]))|고르|골라|'
+    r'(?:이용|사용|확인|입력|참고|참조|체크|드래그|스크롤)(?:하|해|할|합|한|시|(?![가-힣]))|'
+    r'찾(?:아|으|는|습)|보세요|보십시오|보시|말씀|말해|말하|녹음|'
+    r'하세요|하십시오|해\s?주세요|해주세요|바랍니다')
+_INSTRUCTION_WINDOW = 40
+# 대상 낱말 바로 뒤에 이름이 따라오면(따옴표·괄호) 이름을 함께 적은 안내다.
+_NAME_OPENERS = '\'"‘’“”「」『』()（）[]<>《》'
+
+_SOUND_CUE = re.compile(
+    r'(?<![가-힣])(?:삐\s?소리|신호음|알림음|경고음|효과음|안내음|벨\s?소리|소리)(?:가|이)?\s*'
+    r'(?:나(?:면|오면|올\s?때)|난\s?(?:후|뒤)|들리면|들린\s?(?:후|뒤)|울리면|울린\s?(?:후|뒤)|(?:후|뒤)(?![가-힣]))')
+_SOUND_INSTRUCTION = re.compile(r'누르|눌러|클릭|터치|선택|입력|말씀|말해|말하|녹음|시작')
+
+SENSORY_FLAG_PREFIX = '감각 의존 지시'
+SENSORY_KINDS = ('위치', '색', '모양', '소리')
+_SENSORY_REASON = {
+    '위치': '이름 없이 위치로만 가리킴',
+    '색': '이름 없이 색으로만 가리킴',
+    '모양': '이름 없이 모양으로만 가리킴',
+    '소리': '소리 신호에만 의존',
+}
+_QUOTE_MAX = 30
+
+
+def _sentences_of(text):
+    """공백을 정리하고 문장 끝 부호로 나눈다. 숫자 사이 마침표(3.5)는 끊지 않는다."""
+    protected = _protect_decimal_points(' '.join(str(text).split()))
+    pieces = (piece.replace(_DECIMAL_PLACEHOLDER, '.') for piece in re.split(r'[.!?。]+\s*', protected))
+    return [piece for piece in pieces if piece]
+
+
+def detect_sensory_instructions(text):
+    """
+    감각 의존 지시를 탐지하여 플래그 문구 리스트로 반환. 종류(위치·색·모양·소리)마다 최대 1개.
+
+    예) '감각 의존 지시(위치): "오른쪽 상단의 버튼" — 이름 없이 위치로만 가리킴'
+    """
+    found = {}
+    for sentence in _sentences_of(text):
+        for kind, pattern in _SENSORY_GRAMMARS:
+            if kind in found:
+                continue
+            for match in pattern.finditer(sentence):
+                after = sentence[match.end():].lstrip()
+                if after and after[0] in _NAME_OPENERS:
+                    continue   # 이름을 함께 적은 안내 ("오른쪽 버튼(저장)")
+                if not _INSTRUCTION.search(after[:_INSTRUCTION_WINDOW]):
+                    continue   # 조작을 시키는 말이 없는 설명·버튼 이름
+                found[kind] = sentence[match.start('cue'):match.end('target')]
+                break
+        if '소리' not in found:
+            for match in _SOUND_CUE.finditer(sentence):
+                if _SOUND_INSTRUCTION.search(sentence[match.end():][:_INSTRUCTION_WINDOW]):
+                    found['소리'] = match.group(0)
+                    break
+
+    flags = []
+    location = found.get('위치/좌우') or found.get('위치/화면')
+    for kind, quote in (('위치', location), ('색', found.get('색')),
+                        ('모양', found.get('모양')), ('소리', found.get('소리'))):
+        if quote:
+            shown = quote if len(quote) <= _QUOTE_MAX else quote[:_QUOTE_MAX - 1] + '…'
+            flags.append(f'{SENSORY_FLAG_PREFIX}({kind}): "{shown}" — {_SENSORY_REASON[kind]}')
+    return flags
+
+
+# "해당 ~"·"여기 클릭"은 위치가 아니라 무엇을 가리키는지 모호한 문제라 WCAG 2.4.4(링크 목적)로
+# 본다 (2026-10-03). 페이지 점수에는 처음부터 넣지 않았다. 링크 글자 자체가 "더보기" 같은
+# 모호한 말인 경우는 규칙 모듈 link-audit.js가 KWCAG 6.4.3으로 따로 잡는다.
+AMBIGUOUS_REFERENCE_PATTERNS = [
     (re.compile(r'해당\s+(버튼|메뉴|링크|항목|페이지)'), '모호한 참조: "해당 ~" 사용'),
     (re.compile(r'(여기|이곳)를?\s*클릭'), '모호한 참조: "여기/이곳 클릭" 사용'),
 ]
 
 
-def detect_location_dependency(text):
-    """위치 의존 표현을 탐지하여 플래그 리스트 반환."""
-    return [msg for pattern, msg in LOCATION_PATTERNS if pattern.search(text)]
+def detect_ambiguous_references(text):
+    """무엇을 가리키는지 모호한 표현을 탐지하여 플래그 리스트 반환."""
+    return [msg for pattern, msg in AMBIGUOUS_REFERENCE_PATTERNS if pattern.search(text)]
+
+
+def detect_reference_flags(text):
+    """감각 의존 지시와 모호한 참조를 한꺼번에 탐지 (모든 종류의 블록에 적용)."""
+    return detect_sensory_instructions(text) + detect_ambiguous_references(text)
+
+
+# 2026-10-13 이전 이름. 이 함수를 부르던 분석 스크립트가 깨지지 않도록 남긴다.
+detect_location_dependency = detect_reference_flags
+
+
+def count_flagged_texts(results, flag_prefix):
+    """
+    flag_prefix로 시작하는 플래그가 붙은 글의 수. 참고 건수일 뿐 점수에는 쓰지 않는다 (2026-10-13).
+
+    같은 글은 한 번만 센다 (2026-10-03). 한 문장이 목록·링크·문단·기타 블록에 겹쳐 추출되면
+    블록마다 플래그가 붙는다(예: 네이버 "…2위 하락" 기사 제목이 list·link·paragraph·other 4개
+    블록에 들어 있었음). 그래서 해당 플래그가 붙은 글 중 다른 해당 글을 품지 않은 가장 안쪽
+    글만 센다. 바깥 목록이 안쪽 항목 두 개를 품으면 안쪽 두 개가 각각 1건이다.
+    """
+    texts = {
+        ' '.join(str(r.get('text', '')).split())
+        for r in results
+        if any(f.startswith(flag_prefix) for f in r.get('flags', []))
+    }
+    texts.discard('')
+    return sum(1 for text in texts if not any(other != text and other in text for other in texts))
 
 
 # ─────────────────────────────────────────
@@ -454,6 +643,35 @@ def gl_to_difficulty_score(gl):
 THRESHOLD_GL = 9.0
 THRESHOLD_DIFFICULTY_SCORE = round((THRESHOLD_GL - 1) / 11 * 100, 1)  # = 72.7, 이 점수 이상이면 수정 제안 필요
 
+
+# [2026-10-13] 기준(GL 9)을 맞추려면 이 글에서 무엇을 얼마나 바꿔야 하나
+# "쉬운 단어 비율 60% 이상" 같은 따로 정한 목표는 근거가 없고(아래 EASY_WORD_RATIO_MIN 주석),
+# 글마다 맞는 목표도 다르다. 대신 기준 GL을 정한 식에서 거꾸로 계산해 목표를 낸다.
+#   GL = 4.874 + 0.591×A − 9.201×B³ ≤ GL 기준
+#   ① 어휘(B)는 그대로 두고 문장만 줄이면:       A ≤ (GL 기준 − 4.874 + 9.201×B³) / 0.591
+#   ② 문장 길이(A)는 그대로 두고 어휘만 바꾸면:  B ≥ ((4.874 + 0.591×A − GL 기준) / 9.201)^(1/3)
+# 예) 평균 12어절, 쉬운 단어 45%(난이도 92.1점) → ① 평균 8.4어절 이하 ② 쉬운 단어 68.6% 이상.
+# ①은 B가 0이어도 A가 약 7어절 이하면 기준 아래라서 문장을 나누면 늘 맞출 수 있다.
+# ②는 B가 1(전부 쉬운 단어)이어도 기준을 넘는 긴 문장이면 어휘만으로는 못 맞춘다(None).
+# 경계에서 기준을 확실히 맞추도록 ①은 소수 첫째 자리로 내림, ②는 소수 셋째 자리로 올림한다.
+# 두 값은 따로따로의 목표다(둘을 동시에 채울 필요는 없고, 섞어서 맞춰도 된다).
+def calc_gl_targets(avg_sentence_len, easy_word_ratio, threshold_gl=None):
+    """GL 기준을 맞추는 목표값 {'max_avg_sentence_length': ①, 'min_easy_word_ratio': ② 또는 None}."""
+    if threshold_gl is None:
+        threshold_gl = THRESHOLD_GL
+    max_avg_len = (threshold_gl - 4.874 + 9.201 * easy_word_ratio ** 3) / 0.591
+    need = (4.874 + 0.591 * avg_sentence_len - threshold_gl) / 9.201
+    if need <= 0:
+        min_ratio = 0.0
+    elif need > 1:
+        min_ratio = None
+    else:
+        min_ratio = math.ceil(need ** (1 / 3) * 1000) / 1000
+    return {
+        'max_avg_sentence_length': math.floor(max_avg_len * 10) / 10,
+        'min_easy_word_ratio': min_ratio,
+    }
+
 # "어려운 어휘 과다" 플래그의 쉬운 단어 비율 기준.
 # [2026-10-02] 이 플래그는 난이도 점수가 기준(THRESHOLD_DIFFICULTY_SCORE)을 넘은 문단에만
 # "원인 설명"으로 붙인다. 60%라는 값에는 근거가 없고, 설문 후보 58쌍에서 쉽게 고친
@@ -483,28 +701,32 @@ SHORT_TEXT_MIN_HARD_NOUNS = 2
 #--------------------------------------------------------------------------
 #    카테고리             적용 기준
 #--------------------------------------------------------------------------
-#    paragraph           Jo(2016) 공식 전체 + 위치 의존 탐지
+#    paragraph           Jo(2016) 공식 전체 + 감각 의존 지시·모호한 참조 탐지
 #                        (문장 길이 + 쉬운 단어 비율 → GL → difficulty_score)
 #                        단, 명사 5개 미만이면 비율/GL은 생략하고 "어려운 단어가
 #                        2개 이상인가"만 개별 단어 기준으로 보조 판정(2026-09-23, 10-02)
 #                        고유명사는 세지 않음(2026-10-02)
 #                        점수가 기준을 넘었는데 원인 플래그가 없으면 "읽기 수준 초과"
 #                        (2026-10-02). 문단은 플래그가 있으면 수정 제안 대상
+#                        [2026-10-04] 공식은 문장 끝 부호(. ? !)가 있는 문단에만 쓴다.
+#                        명사 5개 이상인데 부호가 없는 문단(메뉴·게시판 목록 덩어리)은
+#                        공식도 어휘 검사도 하지 않는다(공통 검사만). 아래 분기 주석 참고.
 #
-#    button              글자수 > 20이면 플래그 + 위치 의존 탐지
-#    link                글자수 > 30이면 플래그 + 위치 의존 탐지
-#    label               글자수 > 40이면 플래그 + 위치 의존 탐지
-#    form_guide          글자수 > 50이면 플래그 + 위치 의존 탐지
+#    button              글자수 > 20이면 플래그 + 감각 의존 지시 탐지
+#    link                글자수 > 30이면 플래그 + 감각 의존 지시 탐지
+#    label               글자수 > 40이면 플래그 + 감각 의존 지시 탐지
+#    form_guide          글자수 > 50이면 플래그 + 감각 의존 지시 탐지
 #                        (보이는 글을 그대로 담은 title·aria-label은 길이 검사 제외)
-#    heading             글자수 > 60이면 플래그 + 위치 의존 탐지
+#    heading             글자수 > 60이면 플래그 + 감각 의존 지시 탐지
 #    ※ 20/30/40/50/60글자는 근거 자료가 확인되지 않은 경험값이다(2026-10-02 기준).
 #
-#    table               평균 문장 길이 ≥ 25어절이면 플래그 + 위치 의존 탐지
-#    list                평균 문장 길이 ≥ 25어절이면 플래그 + 위치 의존 탐지
-#    alert               평균 문장 길이 ≥ 25어절이면 플래그 + 위치 의존 탐지
-#    other               평균 문장 길이 ≥ 25어절이면 플래그 + 위치 의존 탐지
+#    table               평균 문장 길이 ≥ 25어절이면 플래그 + 감각 의존 지시 탐지
+#    list                평균 문장 길이 ≥ 25어절이면 플래그 + 감각 의존 지시 탐지
+#    alert               평균 문장 길이 ≥ 25어절이면 플래그 + 감각 의존 지시 탐지
+#    other               평균 문장 길이 ≥ 25어절이면 플래그 + 감각 의존 지시 탐지
 #    ※ 문장 길이 플래그는 문장 끝 부호(. ? !)가 있는 글에만 붙인다(2026-10-02).
-#    ※ 위치 의존 탐지는 2026-10-02에 이 네 종류에도 추가해 모든 종류 공통이 됐다.
+#    ※ 감각 의존 지시·모호한 참조 탐지는 2026-10-02에 이 네 종류에도 추가해 모든 종류 공통이 됐다.
+#    ※ 2026-10-13부터 글자 수·문장 길이·감각 의존 지시 플래그는 모두 페이지 점수에 안 쓴다.
 #
 #    모든 카테고리   명사로만 된 어절이 4개 이상 연속이면 "명사 나열" 플래그
 #                   (문장 끝 부호가 있는 글만, 2026-10-02 추가, 4-2절)
@@ -573,8 +795,21 @@ def analyze_block(block):
     # ── paragraph: Jo(2016) 공식 전체 적용 ──
     if category in FULL_ANALYSIS_CATEGORIES:
         easy_ratio, easy_nouns, all_nouns, grade_detail = calc_easy_word_ratio(text)
+        is_sentence = has_sentence_terminator(text)
 
-        if easy_ratio is not None:
+        if easy_ratio is not None and not is_sentence:
+            # [2026-10-04] 명사는 5개 이상인데 문장 끝 부호가 하나도 없는 문단.
+            # 10개 사이트에서 공식을 적용한 문단 148개 중 101개가 이런 글이었다
+            # ("상단영역 바로가기 서비스 메뉴 바로가기 …" 같은 메뉴, "공지사항 … NEW
+            # 2026-09-14 …" 같은 게시판 목록). 블록 전체가 한 문장으로 계산돼 평균 문장
+            # 길이(A)가 의미가 없는데도 기준을 넘은 55개 중 31개를 차지했다. 문장 길이
+            # 플래그(sentence_length_flag)에 이미 같은 조건이 있으므로 공식에도 맞춘다.
+            # 짧은 문단 규칙(어려운 단어 2개 이상)도 적용하지 않는다. 명사가 많은 목록에
+            # 적용하면 거의 다 걸리기 때문이다. 공통 검사(위치 의존·명사 나열)는 그대로다.
+            result['metrics']['total_noun_count'] = len(all_nouns)
+            result['metrics']['jo_skipped'] = 'no_sentence_terminator'
+
+        elif easy_ratio is not None:
             # Jo(2016) 공식으로 GL 및 난이도 점수 산출
             gl = calc_gl_score(avg_sent_len, easy_ratio)
             difficulty_score = gl_to_difficulty_score(gl)
@@ -586,6 +821,9 @@ def analyze_block(block):
             result['metrics']['gl_score'] = gl
             result['difficulty_score'] = difficulty_score
             result['difficulty_score_v2'] = calc_difficulty_score_v2(difficulty_score, noun_run)
+            if difficulty_score >= THRESHOLD_DIFFICULTY_SCORE:
+                # 기준을 넘은 문단만: 무엇을 얼마나 고치면 기준 아래로 내려가는지 (calc_gl_targets 참고)
+                result['metrics']['gl_targets'] = calc_gl_targets(avg_sent_len, easy_ratio)
 
             # 위반 플래그 생성
             length_flag = sentence_length_flag(text, avg_sent_len)
@@ -631,9 +869,9 @@ def analyze_block(block):
             result['flags'].append(
                 f'읽기 수준 초과: 난이도 점수 {score}점 (기준: {THRESHOLD_DIFFICULTY_SCORE}점 = GL {THRESHOLD_GL:g})')
 
-        loc_deps = detect_location_dependency(text)
-        if loc_deps:
-            result['flags'].extend(loc_deps)
+        reference_flags = detect_reference_flags(text)
+        if reference_flags:
+            result['flags'].extend(reference_flags)
 
         # 문단은 플래그가 하나라도 있으면 수정 제안 대상이다. 기준 점수를 넘은 문단은 위에서
         # 반드시 플래그를 받으므로, "점수 기준 초과 또는 플래그 있음"과 같다.
@@ -641,38 +879,39 @@ def analyze_block(block):
         if result['flags']:
             result['needs_suggestion'] = True
 
-    # ── button, link, label, form_guide, heading: 길이 + 위치 의존 ──
+    # ── button, link, label, form_guide, heading: 길이 + 감각 의존 지시·모호한 참조 ──
     elif category in MAX_TEXT_LENGTH:
         max_len = MAX_TEXT_LENGTH[category]
         # [2026-10-02] title·aria-label이 그 요소에 보이는 글을 그대로 담고 있으면
         # (예: <a title="공고 제목 게시물로 이동">공고 제목</a>) 길이 검사는 보이는 글
         # 쪽(link 등)에서 이미 한다. 10개 사이트 실측에서 form_guide 길이 위반 10건 중
         # 8건이 이런 중복이라 같은 제목이 link와 form_guide로 두 번 감점되고 있었다.
-        # 위치 의존 표현 검사는 그대로 한다.
+        # 감각 의존 지시·모호한 참조 검사는 그대로 한다.
+        # [2026-10-13] 길이 플래그는 수정 제안만 낸다. 페이지 점수에서는 뺐다(analyze 참고).
         duplicates_visible = bool((block.get('attributes') or {}).get('duplicates_visible_text'))
         if len(text) > max_len and not duplicates_visible:
             result['flags'].append(
                 f'{category} 텍스트 길이 과다: {len(text)}글자 (기준: {max_len}글자)')
             result['needs_suggestion'] = True
 
-        loc_deps = detect_location_dependency(text)
-        if loc_deps:
-            result['flags'].extend(loc_deps)
+        reference_flags = detect_reference_flags(text)
+        if reference_flags:
+            result['flags'].extend(reference_flags)
             result['needs_suggestion'] = True
 
-    # ── table, list, alert, other: 문장 길이 + 위치 의존 ──
+    # ── table, list, alert, other: 문장 길이 + 감각 의존 지시·모호한 참조 ──
     else:
         length_flag = sentence_length_flag(text, avg_sent_len) if word_count >= 5 else None
         if length_flag:
             result['flags'].append(length_flag)
             result['needs_suggestion'] = True
 
-        # [2026-10-02] 위치 의존 표현 검사를 이 네 종류에도 적용했다. 문단과 UI 문구에는
-        # 하던 검사인데 여기만 빠져 있어서, 목록 항목의 "위의 표를 참고하세요" 같은 글을
+        # [2026-10-02] 위치 표현 검사를 이 네 종류에도 적용했다. 문단과 UI 문구에는 하던
+        # 검사인데 여기만 빠져 있어서, 목록 항목의 "오른쪽 표를 참고하세요" 같은 글을
         # 잡지 못했다. 10개 사이트에서는 해당 사례가 없어 결과 변화는 없다.
-        loc_deps = detect_location_dependency(text)
-        if loc_deps:
-            result['flags'].extend(loc_deps)
+        reference_flags = detect_reference_flags(text)
+        if reference_flags:
+            result['flags'].extend(reference_flags)
             result['needs_suggestion'] = True
 
     # ── 명사 나열: 모든 종류 공통 (문장 끝 부호가 있는 글만) ──
@@ -691,6 +930,27 @@ def analyze_block(block):
 # ─────────────────────────────────────────
 # 7. 메인: 전체 분석 실행
 # ─────────────────────────────────────────
+
+def innermost_scored_paragraphs(results):
+    """
+    공식을 적용한 문단(difficulty_score가 있는 paragraph) 중 가장 안쪽 글만 돌려준다. (2026-10-09)
+
+    제목을 품은 바깥 span(또는 div)과 그 안쪽 span이 둘 다 문단으로 수집되면, 바깥 글에 안쪽
+    글이 통째로 들어 있어서 같은 문장이 페이지 평균에 두 번 들어갔다. 10개 사이트에서
+    봉화군 17개 중 7개, 보건복지부 4개 중 1개가 이런 겹침이었다. 다른 공식 적용 문단의 글을
+    그대로 품은 바깥 글은 빼고 안쪽 글만 남긴다. 글이 완전히 같은 두 블록(서로 다른 요소)은
+    겹침이 아니므로 둘 다 남긴다. 블록 자체의 점수는 바꾸지 않고 페이지 평균에만 쓴다.
+    """
+    scored = [
+        r for r in results
+        if r['category'] == 'paragraph' and r['difficulty_score'] is not None
+    ]
+    texts = [r['text'] for r in scored]
+    return [
+        r for r in scored
+        if not any(other != r['text'] and other in r['text'] for other in texts)
+    ]
+
 
 def analyze(input_path, output_path=None):
     """result_text.json 전체를 분석하여 난이도 결과 JSON을 생성."""
@@ -713,50 +973,54 @@ def analyze(input_path, output_path=None):
             suggestion_count += 1
 
     # ── 페이지 단위 점수 산출 ──
-    # paragraph 블록들의 difficulty_score(GL 기반) 평균을 감점으로 적용
-    para_scores = [
-        r['difficulty_score'] for r in results
-        if r['category'] == 'paragraph' and r['difficulty_score'] is not None
-    ]
+    # paragraph 블록들의 difficulty_score(GL 기반) 평균을 감점으로 적용.
+    # 겹친 바깥 글은 빼고 가장 안쪽 글만 평균에 쓴다(innermost_scored_paragraphs, 2026-10-09).
+    scored_paragraphs = innermost_scored_paragraphs(results)
+    para_scores = [r['difficulty_score'] for r in scored_paragraphs]
+    # 잴 문장이 하나도 없으면(scored_paragraphs = 0) 평균 감점이 0이라 100점에 가깝게 나온다.
+    # 이 100점은 "쉽다"가 아니라 "잴 것이 없다"는 뜻이므로 scored_paragraphs로 구분한다.
     avg_difficulty = round(sum(para_scores) / len(para_scores), 1) if para_scores else 0.0
 
-    # 위치 의존 감점 (건당 3점, 최대 15점)
-    location_violations = sum(
-        1 for r in results
-        if any('위치 참조' in f or '모호한 참조' in f for f in r['flags'])
-    )
-    location_penalty = min(location_violations * 3, 15)
-
-    # UI 텍스트 길이 위반 감점 (건당 2점, 최대 20점)
-    length_violations = sum(
+    # [2026-10-13] 페이지 점수는 문단 난이도 평균만 반영한다.
+    # 예전에는 위치 의존 감점(건당 3점, 최대 15점)과 UI 텍스트 길이 감점(건당 2점, 최대 20점)을
+    # 더 뺐다. 두 감점은 건당 점수와 상한 모두 근거 없는 경험값이었고, 길이 감점은 큰 사이트에서
+    # 늘 상한 20점에 닿아 사이트를 가르지 못하는 상수였으며(링크 30자 기준은 구체적인 링크 문구를
+    # 요구하는 WCAG 2.4.4·규칙 모듈 link-audit.js와 방향이 반대이기도 했다), 위치 의존은 10개
+    # 사이트 블록 2,822개에서 진짜 사례가 0건이었다. 플래그와 수정 제안은 그대로 내고 점수에서만
+    # 뺐다. 건수는 score_breakdown에 참고로 남긴다(같은 글은 한 번만, 안쪽 글만 센다).
+    sensory_instruction_texts = count_flagged_texts(results, SENSORY_FLAG_PREFIX)
+    ui_length_flags = sum(
         1 for r in results
         if any('텍스트 길이 과다' in f for f in r['flags'])
     )
-    length_penalty = min(length_violations * 2, 20)
 
-    page_score = round(max(0.0, 100 - avg_difficulty - location_penalty - length_penalty), 1)
+    page_score = round(max(0.0, 100 - avg_difficulty), 1)
 
     # paragraph 블록 GL 평균 (발표용 참고 지표)
     para_gls = [
-        r['metrics']['gl_score'] for r in results
-        if r['category'] == 'paragraph' and r['metrics'].get('gl_score') is not None
+        r['metrics']['gl_score'] for r in scored_paragraphs
+        if r['metrics'].get('gl_score') is not None
     ]
     avg_gl = round(sum(para_gls) / len(para_gls), 2) if para_gls else None
 
     # paragraph 블록 종합 난이도 v2 평균 (검증 전 참고 지표)
     para_v2 = [
-        r['difficulty_score_v2'] for r in results
-        if r['category'] == 'paragraph' and r.get('difficulty_score_v2') is not None
+        r['difficulty_score_v2'] for r in scored_paragraphs
+        if r.get('difficulty_score_v2') is not None
     ]
     avg_v2 = round(sum(para_v2) / len(para_v2), 1) if para_v2 else None
 
     output = {
         'meta': {
             'page_score': page_score,
+            'page_score_formula': '100 - 문단 난이도 점수 평균 (위치 의존·UI 길이 감점은 2026-10-13부터 점수에서 제외)',
             'score_breakdown': {
+                'scored_paragraphs': len(scored_paragraphs),
                 'avg_difficulty_deduction': avg_difficulty,
-                'location_penalty': location_penalty,
-                'length_penalty': length_penalty,
+                # 2026-10-13: 아래 두 건수는 점수에 쓰지 않는 참고 건수다. 예전의 location_penalty,
+                # location_occurrences, length_penalty 칸은 없어졌다.
+                'sensory_instruction_texts': sensory_instruction_texts,
+                'ui_length_flags': ui_length_flags,
             },
             'readability': {
                 'avg_gl_score': avg_gl,
@@ -789,9 +1053,12 @@ def analyze(input_path, output_path=None):
 
     print(f'분석 완료: {len(results)}개 블록 분석')
     print(f'  페이지 점수: {page_score}/100')
+    print(f'    - 난이도 공식을 적용한 문단: {len(scored_paragraphs)}개'
+          + (' (잴 문장이 없어 난이도 감점은 0, 100점은 "쉽다"가 아니라 "잴 것이 없다"는 뜻)'
+             if not scored_paragraphs else ''))
     print(f'    - 난이도 감점 (GL 기반): -{avg_difficulty}')
-    print(f'    - 위치 의존 감점: -{location_penalty}')
-    print(f'    - 길이 위반 감점: -{length_penalty}')
+    print(f'    - 참고(점수에 안 씀): 감각 의존 지시 {sensory_instruction_texts}건, '
+          f'UI 글자 수 초과 {ui_length_flags}건')
     if avg_gl is not None:
         print(f'  평균 GL (학년 수준): {avg_gl}')
     print(f'  위반 플래그: {flagged_count}개')

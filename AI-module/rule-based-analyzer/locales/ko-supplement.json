@@ -1,0 +1,108 @@
+{
+  "_comment": "axe-core 4.11.4의 locales/ko.json에 번역이 없는 규칙 6개와 체크 10개의 한국어 문구(10/13). axe-locale.js가 ko.json에 없는 키만 이 파일로 채운다(ko.json에 이미 있으면 ko.json이 우선). 용어는 ko.json과 맞췄다(엘리먼트·어트리뷰트·역할(role)·명도 대비). ${data.xxx}는 axe가 측정값으로 바꿔 넣는 자리표시자라 이름을 바꾸면 안 된다. axe-core를 올린 뒤 test/axe-locale.test.js가 실패하면 새로 생긴 규칙·체크를 여기에 추가한다.",
+  "rules": {
+    "aria-braille-equivalent": {
+      "description": "aria-braillelabel과 aria-brailleroledescription에 점자가 아닌 대응 값이 있는지 확인하세요.",
+      "help": "aria-braille 어트리뷰트에는 점자가 아닌 대응 값이 있어야 합니다."
+    },
+    "aria-conditional-attr": {
+      "description": "ARIA 어트리뷰트가 엘리먼트 역할(role)의 명세에 설명된 대로 사용되었는지 확인하세요.",
+      "help": "ARIA 어트리뷰트는 엘리먼트의 역할(role)에 맞게 사용해야 합니다."
+    },
+    "aria-deprecated-role": {
+      "description": "엘리먼트가 더 이상 쓰지 않는(deprecated) 역할(role)을 사용하지 않는지 확인하세요.",
+      "help": "더 이상 쓰지 않는 ARIA 역할(role)을 사용하면 안 됩니다."
+    },
+    "aria-prohibited-attr": {
+      "description": "엘리먼트의 역할(role)에서 금지된 ARIA 어트리뷰트를 사용하지 않았는지 확인하세요.",
+      "help": "엘리먼트에는 허용된 ARIA 어트리뷰트만 사용해야 합니다."
+    },
+    "summary-name": {
+      "description": "<summary> 엘리먼트가 인식 가능한 텍스트를 가지고 있는지 확인하세요.",
+      "help": "<summary> 엘리먼트는 반드시 인식 가능한 텍스트를 가져야 합니다."
+    },
+    "target-size": {
+      "description": "조작 대상(터치·클릭 대상)이 충분한 크기와 간격을 가지고 있는지 확인하세요.",
+      "help": "모든 조작 대상은 24px 이상이거나 주변에 충분한 간격이 있어야 합니다."
+    }
+  },
+  "checks": {
+    "aria-allowed-attr-elm": {
+      "pass": "이 엘리먼트에 ARIA 어트리뷰트가 허용됩니다.",
+      "fail": {
+        "singular": "${data.nodeName} 엘리먼트에 허용되지 않는 ARIA 어트리뷰트: ${data.values}",
+        "plural": "${data.nodeName} 엘리먼트에 허용되지 않는 ARIA 어트리뷰트들: ${data.values}"
+      }
+    },
+    "braille-roledescription-equivalent": {
+      "pass": "aria-roledescription이 있는 엘리먼트에 aria-brailleroledescription이 사용되었습니다.",
+      "fail": {
+        "noRoleDescription": "aria-roledescription이 없는 엘리먼트에 aria-brailleroledescription이 사용되었습니다.",
+        "emptyRoleDescription": "aria-roledescription이 비어 있는 엘리먼트에 aria-brailleroledescription이 사용되었습니다."
+      }
+    },
+    "braille-label-equivalent": {
+      "pass": "인식 가능한 텍스트가 있는 엘리먼트에 aria-braillelabel이 사용되었습니다.",
+      "fail": "인식 가능한 텍스트가 없는 엘리먼트에 aria-braillelabel이 사용되었습니다.",
+      "incomplete": "인식 가능한 텍스트를 계산할 수 없습니다."
+    },
+    "aria-conditional-attr": {
+      "pass": "ARIA 어트리뷰트가 허용됩니다.",
+      "fail": {
+        "checkbox": "aria-checked를 제거하거나, 실제 체크박스 상태와 같은 \"${data.checkState}\"로 설정하세요.",
+        "rowSingular": "이 어트리뷰트는 treegrid의 행(row)에서는 지원되지만 ${data.ownerRole}에서는 지원되지 않습니다: ${data.invalidAttrs}",
+        "rowPlural": "이 어트리뷰트들은 treegrid의 행(row)에서는 지원되지만 ${data.ownerRole}에서는 지원되지 않습니다: ${data.invalidAttrs}"
+      }
+    },
+    "important-letter-spacing": {
+      "pass": "style 어트리뷰트의 letter-spacing이 !important로 지정되지 않았거나 최소 기준을 충족합니다.",
+      "fail": "style 어트리뷰트의 letter-spacing은 !important를 쓰지 않거나 ${data.minValue}em 이상이어야 합니다 (현재 ${data.value}em)."
+    },
+    "important-word-spacing": {
+      "pass": "style 어트리뷰트의 word-spacing이 !important로 지정되지 않았거나 최소 기준을 충족합니다.",
+      "fail": "style 어트리뷰트의 word-spacing은 !important를 쓰지 않거나 ${data.minValue}em 이상이어야 합니다 (현재 ${data.value}em)."
+    },
+    "important-line-height": {
+      "pass": "style 어트리뷰트의 line-height가 !important로 지정되지 않았거나 최소 기준을 충족합니다.",
+      "fail": "style 어트리뷰트의 line-height는 !important를 쓰지 않거나 ${data.minValue}em 이상이어야 합니다 (현재 ${data.value}em)."
+    },
+    "link-in-text-block-style": {
+      "pass": "링크가 시각적 스타일로 주변 텍스트와 구분됩니다.",
+      "incomplete": {
+        "default": "링크를 주변 텍스트와 구분하기 위해 스타일이 필요한지 확인하세요.",
+        "pseudoContent": "링크의 가상 엘리먼트 스타일만으로 주변 텍스트와 구분되는지 확인하세요."
+      },
+      "fail": "링크에 주변 텍스트와 구분되는 스타일(밑줄 등)이 없습니다."
+    },
+    "target-size": {
+      "pass": {
+        "default": "컨트롤이 충분한 크기를 가집니다 (${data.width}px × ${data.height}px, 최소 ${data.minSize}px × ${data.minSize}px 필요).",
+        "obscured": "다른 엘리먼트에 완전히 가려져 클릭할 수 없으므로 검사에서 제외되었습니다.",
+        "large": "대상이 최소 크기 ${data.minSize}px를 크게 넘습니다."
+      },
+      "fail": {
+        "default": "조작 대상의 크기가 부족합니다 (${data.width}px × ${data.height}px, 최소 ${data.minSize}px × ${data.minSize}px 필요).",
+        "partiallyObscured": "조작 대상이 일부 가려져 크기가 부족합니다 (남은 가장 작은 영역 ${data.width}px × ${data.height}px, 최소 ${data.minSize}px × ${data.minSize}px 필요)."
+      },
+      "incomplete": {
+        "default": "탭 인덱스가 음수인 엘리먼트의 크기가 부족합니다 (${data.width}px × ${data.height}px, 최소 ${data.minSize}px × ${data.minSize}px 필요). 조작 대상이 맞는지 확인하세요.",
+        "contentOverflow": "넘치는 콘텐츠 때문에 엘리먼트 크기를 정확히 판단할 수 없습니다.",
+        "partiallyObscured": "탭 인덱스가 음수인 엘리먼트가 일부 가려져 크기가 부족합니다 (남은 가장 작은 영역 ${data.width}px × ${data.height}px, 최소 ${data.minSize}px × ${data.minSize}px 필요). 조작 대상이 맞는지 확인하세요.",
+        "partiallyObscuredNonTabbable": "탭 인덱스가 음수인 이웃 엘리먼트에 일부 가려져 크기가 부족합니다 (남은 가장 작은 영역 ${data.width}px × ${data.height}px, 최소 ${data.minSize}px × ${data.minSize}px 필요). 이웃 엘리먼트가 조작 대상인지 확인하세요.",
+        "tooManyRects": "겹치는 엘리먼트가 너무 많아 대상 크기를 구할 수 없습니다."
+      }
+    },
+    "target-offset": {
+      "pass": {
+        "default": "조작 대상과 가장 가까운 이웃 사이의 간격이 충분합니다. 안전하게 클릭할 수 있는 영역의 지름이 ${data.closestOffset}px로 최소 ${data.minOffset}px 이상입니다.",
+        "large": "대상이 최소 크기 ${data.minOffset}px를 크게 넘습니다."
+      },
+      "fail": "조작 대상과 가장 가까운 이웃 사이의 간격이 부족합니다. 안전하게 클릭할 수 있는 영역의 지름이 ${data.closestOffset}px로, 최소 ${data.minOffset}px에 못 미칩니다.",
+      "incomplete": {
+        "default": "탭 인덱스가 음수인 엘리먼트와 가장 가까운 이웃 사이의 간격이 부족합니다. 안전하게 클릭할 수 있는 영역의 지름이 ${data.closestOffset}px로, 최소 ${data.minOffset}px에 못 미칩니다. 조작 대상이 맞는지 확인하세요.",
+        "nonTabbableNeighbor": "조작 대상과 가장 가까운 이웃 사이의 간격이 부족합니다. 안전하게 클릭할 수 있는 영역의 지름이 ${data.closestOffset}px로, 최소 ${data.minOffset}px에 못 미칩니다. 이웃 엘리먼트가 조작 대상인지 확인하세요.",
+        "tooManyRects": "겹치는 엘리먼트가 너무 많아 대상 크기를 구할 수 없습니다."
+      }
+    }
+  }
+}

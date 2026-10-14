@@ -10,7 +10,7 @@ difficulty_engine.py의 파이프라인에서는 difficulty_score가 계산되�
 기사 제목+요약 수준의 문장형 텍스트라, Jo(2016) 공식(평균 문장 길이 + 쉬운 단어 비율)을
 그대로 적용해도 무의미하지 않음. difficulty_engine.py의 공식 함수 자체는
 category와 무관하게 순수 텍스트 → 점수 함수이므로, 이 스크립트는 파이프라인이나
-임계값(THRESHOLD_DIFFICULTY_SCORE=40)을 전혀 건드리지 않고 같은 공식을
+임계값(THRESHOLD_DIFFICULTY_SCORE)을 전혀 건드리지 않고 같은 공식을
 study_pairs.csv의 original_text / revised_text에 "사후 적용"해서
 difficulty_score를 채워 넣는다.
 
@@ -33,7 +33,7 @@ from difficulty_engine import (
     calc_easy_word_ratio,
     calc_gl_score,
     gl_to_difficulty_score,
-    detect_location_dependency,
+    detect_reference_flags,
     longest_noun_eojeol_run,
     calc_difficulty_score_v2,
 )
@@ -57,8 +57,8 @@ def score_text(text):
     else:
         flags.append(f'명사 {len(all_nouns)}개 (5개 미만) — 어휘분석 생략, difficulty_score 계산 불가')
 
-    loc_deps = detect_location_dependency(text)
-    flags.extend(loc_deps)
+    # 2026-10-13: 위치 의존 표현 검사가 '감각 의존 지시'로 바뀌었다 (모호한 참조 플래그도 함께 나온다)
+    flags.extend(detect_reference_flags(text))
 
     # 2026-10-02: 명사 나열 길이와 종합 난이도 v2도 함께 기록 (2차 설문 검증용)
     noun_run = longest_noun_eojeol_run(text)
@@ -71,6 +71,19 @@ def score_text(text):
         'difficulty_score_v2': calc_difficulty_score_v2(difficulty_score, noun_run),
         'flags': '; '.join(flags),
     }
+
+
+def merge_flags(existing, added):
+    """기존 flags 칸 뒤에 새 플래그를 붙인다. 이미 있는 조각은 다시 붙이지 않는다.
+
+    (2026-10-09) 이 스크립트를 결과 파일에 다시 돌리면 같은 플래그가 매번 뒤에 붙어 쌓였다.
+    '; '로 이은 조각 단위로 비교하므로 두 번 돌려도 결과 파일이 같다.
+    """
+    kept = [part for part in (existing or '').split('; ') if part]
+    for part in (added or '').split('; '):
+        if part and part not in kept:
+            kept.append(part)
+    return '; '.join(kept)
 
 
 def main():
@@ -105,8 +118,7 @@ def main():
         row['noun_eojeol_run'] = orig_scores['noun_eojeol_run']
         row['difficulty_score_v2'] = orig_scores['difficulty_score_v2']
         if orig_scores['flags']:
-            existing_flags = row.get('flags', '')
-            row['flags'] = (existing_flags + '; ' if existing_flags else '') + orig_scores['flags']
+            row['flags'] = merge_flags(row.get('flags', ''), orig_scores['flags'])
 
         rev_scores = score_text(row.get('revised_text', ''))
         row['revised_difficulty_score'] = rev_scores['difficulty_score']

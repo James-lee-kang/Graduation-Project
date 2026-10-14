@@ -122,7 +122,7 @@ python contrast_analyzer.py 0,0,0 255,255,255     # 두 색의 명암비, AA/AAA
     "fail_count": 16,
     "pass_rate": 81.6,
     "avg_contrast_ratio": 5.83,
-    "min_contrast_ratio": 2.96,
+    "min_contrast_ratio": 2.95,
     "worst_text": "서비스 이용 안내",
     "skipped_unmeasured": 4
   },
@@ -131,22 +131,29 @@ python contrast_analyzer.py 0,0,0 255,255,255     # 두 색의 명암비, AA/AAA
     {
       "text": "서비스 이용 안내",
       "location": {"x": 120, "y": 340, "width": 180, "height": 22},
-      "contrast_ratio": 2.96,
-      "contrast_display": "2.96:1",
+      "contrast_ratio": 2.95,
+      "contrast_display": "2.95:1",
       "required_ratio": 4.5,
       "is_large_text": false,
       "foreground_color": [150, 150, 150],
       "background_color": [255, 255, 255],
       "fix_suggestion": {
-        "darken_text": {
+        "text_is_lighter": false,
+        "text_color": {
+          "direction": "darken",
+          "description": "전경색(글자)을 더 어둡게",
           "suggested_color": [118, 118, 118],
           "suggested_hex": "#767676",
-          "new_ratio": 4.54
+          "new_ratio": 4.54,
+          "meets_target": true
         },
-        "lighten_background": {
+        "background_color": {
+          "direction": "lighten",
+          "description": "배경색을 더 밝게",
           "suggested_color": [255, 255, 255],
           "suggested_hex": "#FFFFFF",
-          "new_ratio": 2.96
+          "new_ratio": 2.95,
+          "meets_target": false
         }
       }
     }
@@ -159,7 +166,8 @@ python contrast_analyzer.py 0,0,0 255,255,255     # 두 색의 명암비, AA/AAA
 
 - `kwcag_item`은 `mapping.js` 대조표에서 WCAG 1.4.3에 대응하는 항목을 가져온다(루트 `standard_mapping.py`를 거쳐 `node rule-based-analyzer/mapping.js` 실행).
 - `location`은 스크린샷 픽셀 좌표다. 통합 실행에서는 `run_all.py`가 위반마다 그 자리를 덮는 가장 작은 요소를 찾아 `locator`(선택자, 문서 좌표, 글자·이미지 서명)를 붙인다.
-- 예시의 `lighten_background`처럼 배경이 이미 흰색이면 더 밝게 할 수 없어 `new_ratio`가 기준에 못 미친 채로 나온다. 이럴 때는 다른 방안을 쓴다.
+- 예시의 `background_color`처럼 배경이 이미 흰색이면 더 밝게 할 수 없어 `meets_target`이 `false`이고 `new_ratio`가 기준에 못 미친 채로 나온다. 이럴 때는 다른 방안을 쓴다.
+- 수정 추천 키는 2026-10-09에 `darken_text`·`lighten_background`(방향이 이름에 고정)에서 `text_color`·`background_color`(방향은 `direction`)로 바뀌었다. 글자가 배경보다 밝으면(`text_is_lighter: true`) 글자는 `lighten`, 배경은 `darken`이다. 기준을 넘은 글자는 `fix_suggestion`이 `null`이다. 백엔드·대시보드는 이 필드를 읽지 않는다.
 - `excluded_violations`: 제외 영역 안 글자의 위반. 위반 형식에 `reason`(`AD`, `DYNAMIC`, `POPUP`)이 붙는다. 통과율 표본에는 넣지 않는다.
 - **측정하지 못한 경우.** OCR이 글자를 하나도 못 찾으면 `"status": "not_measured"`, `"reason": "NO_TEXT_DETECTED"`, 찾았지만 전부 측정 불가면 `"reason": "NO_MEASURABLE_TEXT"`이고 `pass_rate`는 `null`, `note`에 이유가 적힌다. `run_all.py`는 CV를 총점에서 빼고, 백엔드는 CV 점수를 `null`, 상태를 `NOT_MEASURED`로 저장한다.
 
@@ -247,10 +255,11 @@ Vision API는 텍스트 위치를 꼭짓점 4개로 반환한다. 4개 꼭짓점
 
 명암비가 기준(일반 4.5, 큰 글자 3.0)에 못 미치면 두 가지 방안을 낸다. 실무에서는 브랜드 가이드라인 등으로 한쪽 색을 못 바꾸는 경우가 있으므로 양쪽을 모두 제안한다.
 
-- **방안 1**: 글자색을 RGB 각 채널에서 1씩 줄여가며(더 어둡게) 기준에 닿는 색을 찾는다.
-- **방안 2**: 배경색을 RGB 각 채널에서 1씩 늘려가며(더 밝게) 기준에 닿는 색을 찾는다.
-- 끝까지 가도 닿지 않으면 검정·흰색과 그때의 명암비를 그대로 준다.
-- 글자가 배경보다 밝은 경우(어두운 배경의 흰 글자)에도 "글자를 어둡게 / 배경을 밝게"만 추천하는 한계가 있다.
+- **방향은 상대 휘도로 정한다 (2026-10-09).** 글자가 배경보다 어두우면 방안 1은 글자를 더 어둡게, 방안 2는 배경을 더 밝게 한다. 글자가 배경보다 밝으면(어두운 배너·다크 테마의 흰 글자) 반대로 방안 1은 글자를 더 밝게, 방안 2는 배경을 더 어둡게 한다.
+- RGB 세 채널을 같은 만큼씩 움직이며 기준에 처음 닿는 색을 찾는다.
+- 끝(흰색·검정)까지 가도 닿지 않으면 그 끝 색과 그때의 명암비, `meets_target: false`를 준다. 이때는 다른 방안을 쓴다.
+- **고친 이유.** 예전에는 항상 "글자를 어둡게 / 배경을 밝게"만 추천해서, 회색 배경(#808080)의 흰 글자(3.94:1)에 글자 #171717(글자와 배경을 뒤집는 색)과 배경 #FFFFFF(대비 1:1)를 추천했다. 9/27에 고쳤던 방향 전환이 9/30 저장소 통합 때 빠졌던 것이다. 지금은 같은 경우 배경 #767676(더 어둡게)을 추천하고, 글자 방안은 이미 흰색이라 `meets_target: false`다.
+- 규칙 기반 모듈의 명도 대비 개선 안내(`rule-based-analyzer/fix-hints.js`, 2026-10-13)가 같은 계산을 JavaScript로 옮겨 쓴다. 같은 두 색이면 두 모듈이 같은 추천 색을 내도록 고정 벡터로 테스트한다.
 
 ### cv_runner.py — 통합 실행기
 

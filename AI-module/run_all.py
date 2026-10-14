@@ -1033,7 +1033,7 @@ def send_to_backend(final_result: Dict) -> bool:
     나중에 수동으로 전송하거나 파일을 직접 확인할 수 있음.
     
     [엔드포인트]
-    POST http://localhost:8080/api/v1/evaluations
+    POST {API_BASE_URL}/evaluations  (기본값 http://localhost:9090/api/v1, 환경변수 API_BASE_URL로 바꿈)
     Body: result_final.json 전체
     """
     import urllib.request

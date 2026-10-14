@@ -1,6 +1,6 @@
 """
 CV 모듈 - OCR 텍스트 추출
-ai-analysis/cv/vision_ocr.py
+cv-analyzer/vision_ocr.py
 
 [역할]
   스크린샷 이미지에서 텍스트와 그 위치(바운딩박스)를 추출
@@ -236,7 +236,7 @@ def run_ocr(image_path: str,
     cv_runner.py에서 이 함수를 import하여 호출함.
     
     매개변수:
-      image_path: 사용자 제공 또는 screenshot_capture.py가 저장한 이미지 경로
+      image_path: 분석할 이미지 경로 (run_all.py의 임시 PNG 또는 직접 준 이미지)
       output_path: 결과 JSON 저장 경로 (None이면 이미지명_ocr.json으로 자동 생성)
       credentials_path: Vision API 서비스 계정 키 경로 (None이면 환경변수 사용)
     

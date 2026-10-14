@@ -15,6 +15,12 @@ cd AI-module
 
 이 한 줄이면 3개 모듈이 순서대로 실행되고, `output/result_final.json`에 최종 결과가 생성된다.
 
+문장 난이도 검증용 2차 설문 글을 고를 때는 따로 실행한다(아래 "2차 설문").
+
+```powershell
+.\.venv\Scripts\python select_survey_texts.py survey_urls.txt   # URL 목록 → output/survey2/
+```
+
 ---
 
 ## 프로젝트 구조
@@ -24,9 +30,12 @@ AI-module/
 ├── rule-based-analyzer/     # 모듈 1: 규칙 기반 코드 분석 (Node.js, 설명서 README(rule-based).md)
 ├── text-level-analyzer/     # 모듈 2: 문장 난이도 + 수정 제안 (Python, 설명서 README(text-level).md)
 ├── cv-analyzer/             # 모듈 3: 시각 명암비 분석 (Python, 설명서 README(CV).md)
-├── tests/                   # run_all.py 단위 테스트 (점수 계산, 팝업 처리, CV 측정)
+├── tests/                   # 단위 테스트 (점수 계산, 팝업 처리, CV 측정, 2차 설문 선정·분석, 가중치 분석)
 ├── output/                  # 결과 파일 (실행 시 자동 생성)
 ├── run_all.py               # 통합 실행기
+├── select_survey_texts.py   # 2차 설문 글 선정 + 구글폼 스크립트 생성 (2026-10-04)
+├── analyze_survey2.py       # 2차 설문 분석: 응답 수집 전에 고정한 방법으로 ρ·판정 (2026-10-09)
+├── weights_sensitivity.py   # 총점 가중치(5:3:2) 민감도 분석 (2026-10-13)
 ├── standard_mapping.py      # 파이썬 모듈이 mapping.js의 KWCAG 대조표를 읽어 오는 다리
 ├── requirements.txt         # Python 패키지 (버전 고정)
 ├── .gitignore
@@ -44,19 +53,53 @@ AI-module/
 
 | 파일 | 역할 |
 |------|------|
-| run.js | Playwright로 페이지를 열어 axe-core 검사 + 내부 분석용 DOM snapshot 저장. 통합 실행 시에만 CV 전용 임시 PNG 생성 |
+| run.js | Playwright로 페이지를 열어 axe-core 검사(메시지는 한국어) + 내부 분석용 DOM snapshot 저장. 통합 실행 시에만 CV 전용 임시 PNG 생성 |
+| axe-locale.js | axe-core를 한국어로 돌리는 소스 문자열(`axeSource`). axe-core 패키지의 공식 번역 `locales/ko.json`에 없는 6규칙·10체크는 `locales/ko-supplement.json`으로 채움. `AXE_LOCALE=en`이면 영어 (2026-10-13) |
+| fix-hints.js | 노드별 개선 안내: 명도 대비 추천 색(CV `suggest_fix`와 같은 계산), 조작 대상 크기·간격의 모자란 만큼. `fix_hint`와 `failure_summary` 끝의 "개선 안내" 단락으로 실림 (2026-10-13) |
 | carousel-audit.js | Swiper/Slick/Splide/generic 캐러셀의 숨은 논리 슬라이드를 제한적으로 검사하고 결과 중복 제거 |
 | excluded-regions.js | 광고와 두 번 불러올 때 내용이 바뀐 영역을 표시하고, 그 안의 위반을 점수 대상과 분리 |
 | hidden-elements.js | 분석 화면 폭에서 렌더링되지 않는 요소를 스냅샷에 표시해 텍스트 분석이 같은 기준을 쓰게 함 |
+| link-audit.js | axe에 없는 링크 검사 두 개(2026-10-03): 새 창 고지 누락(KWCAG 7.2.1), 목적을 알 수 없는 링크 텍스트(KWCAG 6.4.3). axe 결과와 같은 형태로 붙여 같은 매핑·점수·제외 처리를 탄다 |
 | cv-anchors.js | CV 캡처 시점의 보이는 요소마다 문서 좌표·선택자·내용 서명(글자, 이미지 경로)을 `result_cv_anchors.json`에 기록 |
 | popup-layers.js | 접속 직후 본문을 가리는 레이어 팝업을 찾아 따로 검사한 뒤 닫음 |
 | artifact.js | typed locator를 만들고 annotation을 포함한 내부 분석용 DOM snapshot 직렬화 |
 | adapter.js | axe-core 결과를 KWCAG 항목으로 매핑하는 어댑터 |
-| mapping.js | KWCAG 33개 항목의 매핑 데이터 (axe 규칙 ID, 심각도, 가중치). `standard_mapping.py`를 거쳐 텍스트·CV 모듈도 이 표를 쓴다 |
-| scorer.js | 100점 감점 방식 점수 계산 (심각도 × 가중치 × 위반 요소 수, 등급 없음) |
-| test/ | Node 테스트 8개 파일 (`npm test`, 실제 Chromium을 띄움) |
+| mapping.js | KWCAG 33개 항목의 매핑 데이터 (axe 규칙 ID, 심각도, 가중치). `standard_mapping.py`를 거쳐 텍스트·CV 모듈도 이 표를 쓴다. 7.3.4의 WCAG 번호는 3.3.7(2026-10-13에 3.3.9에서 바로잡음, 점수 영향 없음) |
+| scorer.js | 100점 감점 방식 점수 계산 (건당 감점 × 위반 요소 수, 등급 없음) |
+| test/ | Node 테스트 12개 파일, 78개 (`npm test`, 실제 Chromium을 띄움) |
+
+**건당 감점 (severity × weight):** 두 값은 곱해서만 쓰이므로 "요소 1개당 감점" 한 칸으로 읽는다. 33개 항목은
+4.5(critical·high 7개), 3(major·high: 5.4.3), 2(major·medium 16개), 1.5(minor·high: 8.1.1), 1(minor·medium 3개),
+0.5(minor·low 5개, 모두 수동이라 실제로 쓰인 적 없음) 여섯 값뿐이다. 감점이 위반 요소 수에 비례하므로 위반이 많은
+페이지는 0점 바닥에 붙는다(서울시). 값의 근거는 팀 판단(매핑 테이블 v2)이며, 자세한 표는 `README(rule-based).md`.
+
+**한국어 메시지와 개선 안내 (2026-10-13):** axe `help`·`failure_summary`가 한국어로 나오고, 숫자로 계산할 수 있는
+두 규칙은 노드마다 개선 안내가 붙는다. 바뀌는 것은 문장뿐이고 점수·위반 규칙·개수는 영어로 돌려도 같다(테스트).
+
+```
+개선 안내
+• 글자색을 바꾼다면: #777777 → #767676 (더 어둡게, 명도 대비 4.54:1 / 기준 4.5:1)
+• 크기를 키운다면: 현재 10px × 10px → 최소 24px × 24px (가로 14px, 세로 14px 더 필요)
+```
+
+백엔드는 `failure_summary`를 이슈 메시지로 그대로 저장한다. 대시보드는 `color-contrast` 등 10개 규칙에서
+자체 일반 안내만 보여 주므로, 명도 대비 추천 색이 화면에 보이려면 대시보드 `rule-issue-description.ts` 수정이 필요하다.
 
 **검사 예시:** 대체 텍스트 누락, heading 구조, 색 대비, 버튼 레이블 등 KWCAG 33개 항목
+
+**자체 링크 검사 (link-audit.js, 2026-10-03):** axe-core에 없는 두 규칙을 같은 스캔에서 돌린다.
+
+| 규칙 ID | KWCAG | 위반 조건 | 통과로 보는 경우 |
+|---|---|---|---|
+| `uniaccess-new-window-notice` | 7.2.1 사용자 요구에 따른 실행 | `target="_blank"`, 페이지에 같은 이름의 frame이 없는 이름 있는 target, `onclick`·`href`의 `window.open(` 으로 새 창이 열리는데 안내가 없음 | 링크 글자·화면에 숨긴 글·`title`·`aria-label`·`aria-describedby`·이미지 alt 중 하나에 "새 창", "새창", "창 열림", "새 탭", "팝업", "new window" 등이 있음 |
+| `uniaccess-ambiguous-link` | 6.4.3 적절한 링크 텍스트 | 링크의 접근 가능한 이름 전체가 "더보기", "자세히", "바로가기", "여기", "more", "+" 같은 말(기호 제외)뿐 | `aria-label`·숨긴 글로 대상을 밝힘("공지사항 더보기"), 또는 `title`·`aria-describedby`가 대상을 밝힘. "새창"뿐인 title은 대상을 밝힌 게 아님 |
+
+- 이름이 아예 없는 링크는 axe `link-name`이 잡으므로 두 규칙 모두 건너뛴다(이중 감점 방지). 화면에 그려지지 않은 링크와 `aria-hidden` 안의 링크도 axe처럼 건너뛴다.
+- 모호한 링크 판정은 링크만 보고 한다. WCAG 2.4.4(A)는 링크가 든 문단·목록 항목 같은 주변 문맥으로 목적을 알 수 있으면 통과로 보므로, 이 규칙은 그보다 엄격하고 2.4.9(AAA)에 가깝다. 국내 심사 관행에 맞춘 선택이다.
+- 위반 노드의 `failure_summary`에 수정 예시를 넣는다. 모호한 링크는 같은 구역의 가장 가까운 앞 제목을 붙여 `"공지사항 더보기"`처럼 제안한다.
+- 결과는 axe 결과와 같은 형태라 캐러셀 슬라이드별 검사, 광고·동적 영역·팝업 제외(팝업 안 링크는 `POPUP`으로 따로 보고), KWCAG 매핑, 감점(major × medium = 링크 1개당 2점)을 그대로 탄다.
+- 한계: 메인 문서만 본다(같은 출처 iframe·shadow DOM 안 링크는 검사하지 않음). CSS 아이콘으로만 새 창을 표시한 경우는 스크린리더에 전달되지 않으므로 위반으로 본다.
+- 6.4.3에 매핑된 `identical-links-same-purpose`는 AAA 태그(`wcag2aaa`)라 현재 axe 실행 범위(A·AA)에서는 돌지 않는다. 실제로 6.4.3을 채우는 규칙은 `link-name`과 `uniaccess-ambiguous-link`다.
 
 KWCAG에 매핑되지 않은 규칙 위반도 `unmapped_violations`에 규칙 ID와 노드별
 selector·HTML·locator를 보존하고 백엔드 이슈로 저장한다. 실제 axe 규칙 ID를 유지하며,
@@ -109,7 +152,7 @@ PC에서는 숨겨진 모바일 전용 공지 목록이 대표적이며, 같은 
 
 텍스트 추출기는 이 속성(`data-ua-excluded-region`)과 `data-ua-hidden`이 붙은 요소를 읽지 않고, CV 분석기는 텍스트 상자 중심이 제외 영역 안에 있으면
 통과율 표본에서 빼고 위반만 `excluded_violations`(사유 포함)에 남긴다. 백엔드는 제외 위반을
-`exclusion_reason`과 함께 저장하되 점수와 문제 수에는 넣지 않고, 최종 리포트는 별도 항목으로 보여준다.
+`exclusion_reason`과 함께 저장하되 점수와 문제 수에는 넣지 않는다(대시보드는 2026-10-06 `4af268b`부터 제외된 문제를 화면에 보여 주지 않는다).
 
 **CV 위반의 요소 연결:** CV 좌표는 스크린샷 기준이라 위쪽 콘텐츠 높이나 화면 폭이 달라지면 라이브 화면에서
 엉뚱한 곳을 가리킨다. `run_all.py`는 CV 위반 상자 중심을 덮는 가장 작은 요소(`result_cv_anchors.json`)를 찾아
@@ -127,28 +170,37 @@ PC에서는 숨겨진 모바일 전용 공지 목록이 대표적이며, 같은 
 | 파일 | 역할 |
 |------|------|
 | text_extractor.py | HTML에서 분석 대상 텍스트를 추출하고 10개 카테고리로 분류 |
-| difficulty_engine.py | MeCab 형태소 분석 기반 난이도 점수 산출. 문단은 Jo(2016) 이독성 공식(평균 문장 길이 + 쉬운 단어 비율 → 학년 수준 GL), UI 문구는 글자 수, 그 밖의 조각 글은 문장 길이를 본다. 위치 의존 표현과 명사 나열은 모든 글에서 탐지 |
-| suggestion_generator.py | 난이도 높은 문장에 대해 규칙 기반 + GPT-4o-mini 수정 제안 생성 |
+| difficulty_engine.py | MeCab 형태소 분석 기반 난이도 점수 산출. 문단은 Jo(2016) 이독성 공식(평균 문장 길이 + 쉬운 단어 비율 → 학년 수준 GL), UI 문구는 글자 수, 그 밖의 조각 글은 문장 길이를 본다. 감각 의존 지시와 명사 나열은 모든 글에서 탐지 |
+| suggestion_generator.py | 난이도 높은 문장에 대해 규칙 기반 + GPT-4o-mini 수정 제안 생성. 기준을 넘은 문단에는 GL 9가 되는 목표(평균 문장 길이·쉬운 단어 비율)를 안내 |
 | text_standard_mapper.py | 난이도 플래그마다 WCAG 2.2 번호와 대응 KWCAG 항목을 붙임(`standard_issues`) |
 | compute_pair_difficulty.py | 설문 원문·수정문 쌍에 같은 공식을 사후 적용 |
 | export_study_pairs.py | 설문용 원문·수정문 블라인드 쌍 추출 (1차 설문 때 사용) |
 | korean_vocab_grades.json | 국립국어원 학습용 어휘 등급 사전 (A·B등급 = 쉬운 단어) |
-| test_*.py | 단위 테스트 5개 파일 (`test_difficulty_engine.py`는 MeCab 필요) |
+| web_common_words.json | 웹 인터페이스 어휘 55개(입력, 검색, 로그인, 게시판, 안내 등). 학습용 목록에서 C·D지만 누리집 기능 이름이라 쉬운 단어(W)로 센다 (2026-10-04) |
+| test_*.py | 단위 테스트 5개 파일, 95개 (`test_difficulty_engine.py`는 MeCab 필요) |
 
-**위반 기준 (2026-10-02 개정):**
+**위반 기준 (2026-10-02 개정, 10-04 보완):**
 
-- 문단 난이도 72.7점 이상(= GL 9, WCAG 3.1.5의 중학교 수준). 원인을 함께 적는다: 쉬운 단어 비율 60% 미만이면 "어려운 어휘 과다", 원인 플래그가 없으면 "읽기 수준 초과".
-- 일반명사 5개 미만이라 공식을 못 쓰는 짧은 문단은 어려운 단어(학습용 어휘 C등급이나 목록 밖) 2개 이상.
+- 문단 난이도 72.7점 이상(= GL 9, WCAG 3.1.5의 중학교 수준). 공식은 문장 끝 부호(. ? !)가 있고 일반명사가 5개 이상인 문단(긴 글)에만 쓴다(2026-10-04). 부호가 없는 메뉴·게시판 목록 덩어리는 블록 전체가 한 문장으로 계산돼 공식이 의미가 없어서, 공식도 어휘 검사도 하지 않는다(`metrics.jo_skipped`). 원인을 함께 적는다: 쉬운 단어 비율 60% 미만이면 "어려운 어휘 과다", 원인 플래그가 없으면 "읽기 수준 초과".
+- 일반명사 5개 미만이라 공식을 못 쓰는 짧은 문단은 어려운 단어(학습용 어휘 C등급이나 목록 밖, 웹 인터페이스 어휘 제외) 2개 이상. 짧은 글은 문장 구조를 잴 수 없어 어휘로만 평가한다.
 - 평균 문장 길이 25어절 이상(문단·표·목록·알림·기타, 문장 끝 부호가 있는 글만).
 - 명사로만 된 어절 4개 이상 연속(명사 나열, 모든 종류, 문장 끝 부호가 있는 글만, 감점 없음).
-- 위치 의존 표현(모든 종류, "위의 버튼", "여기 클릭". 숫자 뒤 "N위"는 제외).
+- 감각 의존 지시(모든 종류, 2026-10-13). 이름 없이 위치·색·모양·소리로만 대상을 가리키며 조작을 시키는 문장("오른쪽 버튼을 누르세요", "빨간색 버튼을 클릭하세요", "삐 소리가 나면 말씀하세요"). 감각 단서 + 이름 없는 일반 대상(버튼·아이콘·메뉴 등) + 같은 문장의 지시 동사가 함께 있을 때만 잡는다. 이름을 함께 쓴 "오른쪽 '로그인' 버튼", 읽는 순서상 참조인 "위의 표를 참고하세요"는 잡지 않는다. WCAG 1.3.3(KWCAG 5.3.3), 좌우·옆·색·모양·소리는 high, 화면 위·아래 기준 위치는 medium. 10개 사이트 메인 페이지 2,822블록에서 0건(오탐 0). 2026-10-03까지의 "위치 참조"(낱말만 보고 걸던 패턴)를 대체했고, 옛 결과의 "위치 참조" 플래그도 그대로 매핑된다.
+- 모호한 참조(모든 종류, "해당 메뉴", "여기를 클릭"). 위치가 아니라 가리키는 대상이 모호한 문제라 2026-10-03부터 WCAG 2.4.4(KWCAG 6.4.3), medium으로 분리했고 페이지 감점은 없다. 링크 글자 자체가 "여기"·"더보기"뿐인 경우는 규칙 모듈 `link-audit.js`가 감점한다.
 - UI 문구 글자 수(버튼 20·링크 30·레이블 40·안내 50·제목 60자). 보이는 글을 그대로 담은 title·aria-label은 제외.
 
 고유명사는 어려운 단어로 세지 않는다. 버튼·링크 같은 UI 문구에는 어휘 검사를 하지 않는다(지금 어휘 목록으로는 오탐이 45%라 보류, 개수만 `metrics.hard_noun_count`에 기록). 플래그가 하나라도 붙은 블록이 수정 제안 대상(`needs_suggestion`)이고, 플래그마다 `standard_issues`에 기준 번호와 우선순위가 붙어 백엔드가 이슈의 기준 번호와 심각도로 저장한다. 기준별 근거와 실측은 `text-level-analyzer/README(text-level).md`에 있다.
 
-**텍스트 모듈 점수:** `page_score = 100 − 문단 난이도 평균 − 위치 의존 감점(건당 3, 최대 15) − UI 글자 수 감점(건당 2, 최대 20)`.
+**텍스트 모듈 점수 (2026-10-13):** `page_score = max(0, 100 − 문단 난이도 평균(공식을 적용한 긴 글, 가장 안쪽 문단만))`.
+위치 의존 감점(건당 3, 최대 15)과 UI 글자 수 감점(건당 2, 최대 20)은 2026-10-13에 뺐다. 위치 의존은 실사이트 사례가 0건이었고, 글자 수 감점은 큰 사이트에서 늘 상한 20점이라 사이트를 가르지 못했으며 기준(20~60자)에 근거가 없었다. 두 검사의 플래그와 수정 제안은 그대로 내고, 개수는 `meta.score_breakdown`의 `sensory_instruction_texts`·`ui_length_flags`에 참고로 남는다. 점수 식은 `meta.page_score_formula`에 적힌다.
+같은 문장이 바깥 span과 안쪽 문단에 겹쳐 잡히면 가장 안쪽 문단만 평균에 넣는다(2026-10-09, `meta.score_breakdown.scored_paragraphs`).
+공식을 적용할 문장이 없는 페이지는 100점이 된다. 평가할 문장이 적다는 뜻이지 쉽다는 뜻은 아니다(`scored_paragraphs`가 0).
+블록 단위 점수(`difficulty_score`, `difficulty_score_v2`)는 2026-10-13 변경으로 바뀌지 않았다(1,460개 블록 결과로 확인).
 
 **종합 난이도 v2 (검증 전):** `difficulty_score_v2 = (Jo 난이도 점수 + 명사 나열 점수) / 2`를 결과에 함께 기록한다. 2차 설문으로 검증하기 전까지 페이지 점수(`meta.page_score`)와 수정 제안 판정에는 쓰지 않는다.
+
+**2차 설문 (문장 난이도 검증, 2026-10-04 준비):** 이 모듈의 핵심 검증은 엔진 점수가 사람이 느끼는 어려움과 같이 움직이는지다. 공식을 적용하는 긴 글만 대상이다(짧은 글은 공식을 쓰지 않음). `select_survey_texts.py`가 공공기관 본문 페이지 URL 목록을 받아 URL마다 규칙 기반(DOM 저장)·텍스트 추출·난이도 분석만 돌리고, 조건(공식 적용 문단, 40~250자, 문장 1~3개)에 맞는 글을 GL 구간 5개(5 미만 / 5~7 / 7~9 / 9~12 / 12 이상)에서 6개씩 + 폼 공통 글 2개를 뽑는다. 폼 3개(글 12개 + 응답 확인 문항)로 나눠 `output/survey2/`에 `candidates.csv`, `selected.csv`, `selection_log.json`, `create_survey_forms_v2.gs`(script.google.com에서 실행하면 구글폼 생성)를 만든다. 같은 `--seed`면 같은 결과가 나오고, 어떤 구간이든 후보가 6개보다 적으면 경고와 함께 종료 코드 3으로 끝난다. 주 분석은 글별 체감 평균과 v2의 Spearman ρ, 성공 기준은 ρ ≥ 0.5(95% 신뢰구간이 0 밖, 글자 수보다 높음).
+응답이 모이면 `analyze_survey2.py --responses 응답1.csv 응답2.csv 응답3.csv`가 응답 수집 전에 고정한 방법(응답 확인 탈락, Fisher z 신뢰구간과 부트스트랩·순열 1만 번, 72.7 기준의 정밀도·재현율, 반분 신뢰도)으로 `output/survey2/analysis/`에 보고서를 만든다(2026-10-09). 결과를 보고 엔진을 고치지 않는다. 계획 전체는 `text-level-analyzer/README(text-level).md`의 "2차 설문" 절에 있다.
 
 ---
 
@@ -160,7 +212,7 @@ PC에서는 숨겨진 모바일 전용 공지 목록이 대표적이며, 같은 
 | 파일 | 역할 |
 |------|------|
 | vision_ocr.py | Google Vision API로 이미지 내 텍스트 + 위치(바운딩박스) 추출. MD5 캐시로 중복 API 호출 방지 |
-| contrast_analyzer.py | WCAG 명암비 공식으로 전경색/배경색 대비 계산 + AA/AAA 판정 + 수정 색상 추천 |
+| contrast_analyzer.py | WCAG 명암비 공식으로 전경색/배경색 대비 계산 + AA/AAA 판정 + 수정 색상 추천(글자가 배경보다 밝으면 방향을 바꿈, 2026-10-09) |
 | cv_runner.py | OCR → 명암비 분석 → 결과 JSON 출력 통합 실행기 |
 
 **검사 기준:** KWCAG 5.4.3 텍스트 콘텐츠의 명도 대비 (AA 기준 4.5:1, 큰 텍스트 3.0:1)
@@ -177,6 +229,11 @@ PC에서는 숨겨진 모바일 전용 공지 목록이 대표적이며, 같은 
 위반 요소의 문서 좌표와 겹치면 CV 위반 목록에서 뺀다(스크린샷 픽셀은 `deviceScaleFactor`로 나눠
 CSS px로 맞춘다). 위치를 표시할 수 있는 규칙 엔진 결과를 남기며, 뺀 건수는
 `summary.duplicate_rule_violations`에 기록한다. CV 통과율(총점)은 바꾸지 않는다.
+
+**수정 색 추천 (2026-10-09):** 상대 휘도로 방향을 정한다. 글자가 배경보다 어두우면 글자는 더 어둡게·배경은 더 밝게,
+글자가 더 밝으면(어두운 배너의 흰 글자) 그 반대다. 결과의 `fix_suggestion.text_color`·`background_color`에 `direction`,
+`suggested_hex`, `new_ratio`, `meets_target`가 들어 있고, 끝(흰색·검정)까지 가도 모자라면 `meets_target`이 false다.
+예전 키 `darken_text`·`lighten_background`는 없어졌다(백엔드·대시보드는 이 필드를 읽지 않음).
 
 ---
 
@@ -225,8 +282,23 @@ python run_all.py <URL>
 | 모듈 | 가중치 | 점수 체계 | 근거 |
 |------|--------|-----------|------|
 | 규칙 기반 | 50% | 100점 감점 방식 | KWCAG 33개 항목 대부분 커버 |
-| 난이도 분석 | 30% | 100점 감점 방식(높을수록 좋음) | 콘텐츠 품질 평가 |
+| 난이도 분석 | 30% | 100 − 문단 난이도 평균(높을수록 쉬움) | 콘텐츠 품질 평가 |
 | CV 시각 분석 | 20% | OCR 명암비 통과율 | 이미지·캔버스 렌더링 텍스트 보완 |
+
+5:3:2는 통계로 구한 값이 아니라 설계상 가치 판단(법적 기준 적합성 > 이해 용이성 > 명암비)이다. 텍스트 점수의 주성분인
+읽기 수준은 WCAG 3.1.5(AAA)이고 KWCAG 33개 항목에 없으므로, 총점은 KWCAG 준수율이 아니라 "접근성·이해 용이성 종합 지수"로
+부른다. 가중치를 바꿔도 사이트 순위·등급이 유지되는지는 `weights_sensitivity.py`로 확인한다.
+
+```powershell
+.\.venv\Scripts\python weights_sensitivity.py                  # output/_archive 아래 result_final.json 전부
+.\.venv\Scripts\python weights_sensitivity.py --exclude-warned  # 데이터 품질 경고가 있는 사이트 제외
+.\.venv\Scripts\python weights_sensitivity.py --scheme 6:2:2 --csv output\sensitivity.csv
+```
+
+이미 측정한 `result_final.json`의 모듈 점수만 읽어(브라우저·API 없음) 5:3:2, 1:1:1, 6:2:2, 4:4:2, 4:3:3과 한 모듈을 뺀
+5:3:0·5:0:2·0:3:2로 다시 합산하고, 모듈별 분산 기여율, 켄달 tau, 순위 최대 이동, 등급이 바뀐 사이트 수, 각 가중치를 ±50%
+흔든 무작위 가중치 2,000개의 순위 유지율을 보고한다. 합산·반올림·등급은 `run_all.calculate_total_score()`와 같다(테스트로 확인).
+세 모듈 점수가 다 있는 사이트만 쓰고, 텍스트 점수 공식이 2026-10-13 전후로 섞이면 경고한다.
 
 `run_all.py`가 만드는 PNG는 CV 프로세스에만 전달되는 OS 임시 파일이다. `output/`에
 저장하거나 백엔드에 올리지 않으며, CV 성공·실패와 관계없이 즉시 삭제한다. CV가
@@ -370,13 +442,13 @@ MBuster와 Cloudflare 표식은 그것만으로 차단으로 본다. Cloudflare�
 ## 테스트
 
 ```powershell
-cd rule-based-analyzer; npm test; cd ..                                  # Node 8개 파일, 43개
-.\.venv\Scripts\python -m unittest discover -s tests                   # run_all·팝업·CV 측정, 48개
-.\.venv\Scripts\python -m unittest discover -s text-level-analyzer -p "test_*.py"   # 44개 (MeCab 필요)
+cd rule-based-analyzer; npm test; cd ..                                  # Node 12개 파일, 78개
+.\.venv\Scripts\python -m unittest discover -s tests                   # run_all·팝업·CV 측정·설문 선정·설문 분석·가중치, 123개
+.\.venv\Scripts\python -m unittest discover -s text-level-analyzer -p "test_*.py"   # 95개 (MeCab 필요)
 .\.venv\Scripts\python cv-analyzer\test_contrast_formula.py            # 명암비 공식 대조
 ```
 
-2026-10-02 기준 모두 통과. Node 테스트는 가끔 파일 단위로 "Unable to deserialize cloned data" 오류가 나는데, 테스트 러너 쪽 오류라 다시 돌리면 통과한다.
+2026-10-13 기준 모두 통과(클라우드, Linux). 개인 작업본에는 `tests/test_record_result.py`(7개)가 더 있어 130개다. Node 테스트는 가끔 파일 단위로 "Unable to deserialize cloned data" 오류가 나는데, 테스트 러너 쪽 오류라 다시 돌리면 통과한다.
 
 ---
 
@@ -391,9 +463,9 @@ cd rule-based-analyzer; npm test; cd ..                                  # Node 
 | result.html | 스크립트를 제거한 UTF-8 DOM snapshot (로컬 텍스트 추출 입력, 외부 미전송) |
 | result_artifact.json | 최종 JSON의 `capture_metadata`로 통합할 URL·뷰포트·문서 크기 |
 | result_text.json | 추출된 텍스트 블록 (카테고리별 분류) |
-| result_text_difficulty.json | 블록별 난이도 점수·플래그·`standard_issues`, `meta.page_score`, 종합 난이도 v2(참고값) |
+| result_text_difficulty.json | 블록별 난이도 점수·플래그·`standard_issues`, 기준 초과 문단의 GL 목표(`metrics.gl_targets`), `meta.page_score`·`page_score_formula`, 종합 난이도 v2(참고값) |
 | result_text_suggestions.json | 블록별 수정 제안 |
-| result_cv.json | CV 텍스트별 명암비 + 수정 추천 색상 (입력 이미지 경로 미포함) |
+| result_cv.json | CV 텍스트별 명암비 + 수정 추천 색상(`text_color`·`background_color`, 방향 포함) (입력 이미지 경로 미포함) |
 | result_cv_anchors.json | CV 캡처 시점의 요소 위치·선택자·내용 서명 (CV 위반을 요소에 연결) |
 | result_popup.html | 레이어 팝업이 있을 때 닫기 전에 저장한 팝업 내용 |
 | result_popup_text.json, result_popup_text_difficulty.json | 팝업 텍스트 추출·난이도 결과 (`POPUP`, 점수 제외) |

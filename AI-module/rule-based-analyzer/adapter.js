@@ -42,6 +42,7 @@
  *
  * [사용하는 파일]
  *   - mapping.js: kwcagItems(33개 항목 정의), axeRuleToKwcag(1단계), wcagToKwcag(2단계)
+ *   - fix-hints.js: 노드별 수정 안내 계산(색 대비 추천색, 조작 대상 크기) — 10/13 추가
  *
  * [이 파일을 사용하는 파일]
  *   - run.js:     convert() 함수를 호출하여 axe-core 결과를 KWCAG 형식으로 변환
@@ -49,6 +50,7 @@
  */
 
 const { kwcagItems, axeRuleToKwcag, wcagToKwcag } = require('./mapping');
+const { buildFixHint } = require('./fix-hints');
 
 
 // ============================================================
@@ -150,7 +152,7 @@ function resolveKwcagIds(ruleId, tags) {
  * extractNodeInfo - axe-core 위반 노드에서 필요한 정보만 추출
  *
  * axe-core는 위반을 발견한 HTML 요소(노드) 하나하나에 대해 상세 정보를 제공.
- * 이 함수는 그중 우리 프로젝트에서 사용하는 4가지 정보만 추출.
+ * 이 함수는 그중 우리 프로젝트에서 사용하는 정보만 추출(아래 5가지 + locator).
  *
  * 추출 항목:
  *   selector       - 위반 요소의 CSS 선택자 (위치 식별용)
@@ -160,18 +162,23 @@ function resolveKwcagIds(ruleId, tags) {
  *   impact         - axe-core가 판정한 이 위반의 심각도 (런타임 severity)
  *                    예: 'critical', 'serious', 'moderate', 'minor'
  *                    ※ 이 값이 scorer.js에서 3단계(critical/major/minor)로 변환됨
- *   failureSummary - 위반 원인 설명 (영어)
- *                    예: 'Fix any of the following: Element does not have an alt attribute'
+ *   failureSummary - 위반 원인 설명 (10/13부터 한국어, axe-locale.js)
+ *                    예: '다음 중 하나를 해결하세요:\n  엘리먼트에 alt 어트리뷰트가 없습니다.'
+ *                    (AXE_LOCALE=en이면 'Fix any of the following: Element does not have an alt attribute')
+ *   fixHint        - 숫자가 걸린 규칙(color-contrast, target-size)만: axe가 잰 값으로
+ *                    계산한 수정 안내(추천색, 모자란 크기). 없으면 null. fix-hints.js 참고.
  *
  * @param {Object} node - axe-core 결과의 nodes 배열 내 개별 노드 객체
+ * @param {string} [ruleId] - 이 노드가 속한 axe 규칙 ID (수정 안내를 규칙별로 만들 때 사용)
  * @returns {Object} 필요한 정보만 담긴 객체
  */
-function extractNodeInfo(node) {
+function extractNodeInfo(node, ruleId) {
   return {
     selector: node.target ? node.target.join(' > ') : '',
     html: node.html || '',
     impact: node.impact || null,
     failureSummary: node.failureSummary || '',
+    fixHint: ruleId ? buildFixHint(ruleId, node) : null,
     // Preserve the typed cross-document path and scan-time geometry generated
     // from the same rendered DOM as the axe result. `selector` remains above
     // for compatibility with existing ingestion and dashboards.
@@ -309,7 +316,7 @@ function convert(axeResults) {
       helpUrl: violation.helpUrl || '', // 상세 도움말 URL (axe-core 문서 링크)
       impact: violation.impact || '',  // 런타임 심각도 (critical/serious/moderate/minor)
       wcagTags: extractWcagIds(violation.tags || []),  // 관련 WCAG 번호
-      nodes: (violation.nodes || []).map(extractNodeInfo),  // 위반 HTML 요소 목록
+      nodes: (violation.nodes || []).map(node => extractNodeInfo(node, violation.id)),  // 위반 HTML 요소 목록
     };
 
     if (kwcagIds.length > 0) {
@@ -363,7 +370,7 @@ function convert(axeResults) {
       axeRuleId: inc.id,
       description: inc.description || '',
       help: inc.help || '',
-      nodes: (inc.nodes || []).map(extractNodeInfo),
+      nodes: (inc.nodes || []).map(node => extractNodeInfo(node)),  // 보류 항목은 수정 안내를 만들지 않는다
     };
 
     if (kwcagIds.length > 0) {

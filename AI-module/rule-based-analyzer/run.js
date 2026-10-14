@@ -51,6 +51,8 @@ const { chromium } = require('playwright');
 const { AxeBuilder } = require('@axe-core/playwright');
 const { convert } = require('./adapter');  // axe 결과 → KWCAG 33개 항목 기준으로 재분류
 const { score } = require('./scorer');     // KWCAG 결과 → 100점 감점 방식 점수화
+const { koreanAxeSource } = require('./axe-locale');  // axe 메시지를 한국어로 (10/13)
+const { appendFixHint } = require('./fix-hints');     // 노드별 수정 안내(추천색 등)를 failure_summary에 덧붙임 (10/13)
 const {
   buildDomReplayArtifactMetadata,
   pauseDocumentAnimations,
@@ -61,6 +63,7 @@ const {
 const { analyzeWithCarouselStates } = require('./carousel-audit');
 const { markHiddenElements } = require('./hidden-elements');
 const { collectCvAnchors } = require('./cv-anchors');
+const { appendLinkViolations, auditLinks } = require('./link-audit');
 const {
   addPopupViolations,
   changedContentKeys,
@@ -397,7 +400,10 @@ function toApiFormat(kwcagResult, scoreResult) {
         nodes: v.nodes.map(n => ({
           selector: n.selector,        // CSS 셀렉터: 프론트엔드가 해당 요소 하이라이트할 때 사용
           html: n.html,                // 위반 요소의 outerHTML: 수정 가이드 생성 시 참조
-          failure_summary: n.failureSummary,  // axe가 제공하는 "왜 위반인지" 자연어 설명
+          // axe가 제공하는 "왜 위반인지" 자연어 설명(한국어). 숫자가 걸린 규칙은 끝에
+          // "개선 안내" 단락(추천색, 모자란 크기)이 붙는다. 백엔드는 이 필드를 그대로 저장한다.
+          failure_summary: appendFixHint(n.failureSummary, n.fixHint),
+          fix_hint: n.fixHint || null,  // 같은 안내의 구조화된 값(color-contrast, target-size만)
           locator: n.locator || null,  // 프레임/Shadow DOM 경계와 문서 좌표를 보존한 typed locator
         })),
       })),
@@ -439,7 +445,8 @@ function toApiFormat(kwcagResult, scoreResult) {
       selector: n.selector,
       html: n.html,
       impact: n.impact,
-      failure_summary: n.failureSummary,
+      failure_summary: appendFixHint(n.failureSummary, n.fixHint),
+      fix_hint: n.fixHint || null,
       locator: n.locator || null,
     })),
   }));
@@ -875,7 +882,7 @@ async function run(url, outputPath, options = {}) {
     const popupLayers = await findPopupLayers(page);
     let popupAxeResults = null;
     if (popupLayers.length > 0) {
-      popupAxeResults = await new AxeBuilder({ page })
+      popupAxeResults = await new AxeBuilder({ page, axeSource: koreanAxeSource() })
         .include(`[${POPUP_ATTRIBUTE}]`)
         .options(AXE_OPTIONS)
         .analyze()
@@ -883,6 +890,8 @@ async function run(url, outputPath, options = {}) {
           console.warn(`   레이어 팝업 검사 실패: ${error.message}`);
           return null;
         });
+      // The two link checks (link-audit.js) run on the open popups too.
+      appendLinkViolations(popupAxeResults, await auditLinks(page, { scope: `[${POPUP_ATTRIBUTE}]` }));
       await capturePopupLayers(page, popupLayers, {
         htmlPath: siblingOutputPath(output, '_popup.html'),
         cvScreenshotPath,
@@ -927,9 +936,13 @@ async function run(url, outputPath, options = {}) {
     //   withTags()와 체이닝하면 태그 제한이 풀린다. runOnly와 rules를 한 번에 넘긴다.
     console.log('3. axe-core 접근성 검사 실행 중...');
     const scanStart = Date.now();
-    const scanPage = () => new AxeBuilder({ page })
-      .options(AXE_OPTIONS)
-      .analyze();
+    //   [2026-10-03] axe가 하지 않는 링크 검사 두 개(새 창 고지 7.2.1, 모호한 링크
+    //   텍스트 6.4.3, link-audit.js)를 같은 스캔에 붙인다. axe 결과와 같은 형태라
+    //   캐러셀 슬라이드별 검사·광고/동적/팝업 제외·KWCAG 매핑·점수를 그대로 탄다.
+    const scanPage = async () => appendLinkViolations(
+      await new AxeBuilder({ page, axeSource: koreanAxeSource() }).options(AXE_OPTIONS).analyze(),
+      await auditLinks(page),
+    );
     const axeResults = await analyzeWithCarouselStates(page, scanPage);
     // page.setContent() intentionally uses an about:blank container in static
     // fallback mode. Keep the analyzed resource identity honest and stable.
@@ -997,9 +1010,10 @@ async function run(url, outputPath, options = {}) {
     }
 
     // ── 5) 어댑터 변환: axe 결과 → KWCAG 33개 항목 ──
-    //   axe-core는 WCAG 기준의 영어 결과를 반환하므로, 이를 KWCAG 2.2의 한국
-    //   항목 번호 체계(예: 5.1.1 "대체 텍스트 제공")로 재분류해야 발표·대시보드
-    //   에서 의미가 전달된다. adapter.js의 mapping.js가 이 매핑을 담당.
+    //   axe-core는 WCAG 기준의 결과(메시지는 axe-locale.js로 한국어)를 반환하므로,
+    //   이를 KWCAG 2.2의 한국 항목 번호 체계(예: 5.1.1 "대체 텍스트 제공")로
+    //   재분류해야 발표·대시보드에서 의미가 전달된다. adapter.js의 mapping.js가
+    //   이 매핑을 담당.
     console.log('6. KWCAG 매핑 변환 중...');
     const { included, excluded } = await partitionAxeResultsByRegion(page, axeResults);
     addPopupViolations(excluded, popupAxeResults);
@@ -1160,6 +1174,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  AXE_OPTIONS,
   TargetPageUnavailableError,
   assessTargetPage,
   challengeSignals,

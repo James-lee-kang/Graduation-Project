@@ -137,6 +137,66 @@ class CvMeasurementTests(unittest.TestCase):
         self.assertEqual(displayed_ratio(21.0), 21.0)
         self.assertEqual(displayed_ratio(4.5), 4.5)
 
+    def test_fix_direction_follows_which_color_is_lighter(self):
+        analyzer = ContrastAnalyzer()
+        # 흰 글자 / 회색 배경(3.94:1): 글자는 더 밝힐 수 없고, 배경을 어둡게 해야 한다.
+        # 예전에는 항상 "글자 어둡게 / 배경 밝게"만 추천해 글자색 #171717(글자와 배경이 뒤집힘),
+        # 배경색 #FFFFFF(글자와 같은 색, 1:1)가 나왔다.
+        light_on_gray = analyzer.suggest_fix((255, 255, 255), (128, 128, 128))
+        self.assertTrue(light_on_gray["needed"])
+        self.assertTrue(light_on_gray["text_is_lighter"])
+        self.assertEqual(light_on_gray["current_ratio"], 3.94)
+        text_option, background_option = light_on_gray["option_1"], light_on_gray["option_2"]
+        self.assertEqual((text_option["direction"], background_option["direction"]), ("lighten", "darken"))
+        self.assertEqual(text_option["suggested_fg"], [255, 255, 255])
+        self.assertFalse(text_option["meets_target"], "흰색보다 밝게 할 수는 없다")
+        self.assertTrue(background_option["meets_target"])
+        suggested_bg = tuple(background_option["suggested_bg"])
+        self.assertGreaterEqual(contrast_ratio((255, 255, 255), suggested_bg), 4.5)
+        self.assertTrue(all(new < old for new, old in zip(suggested_bg, (128, 128, 128))))
+
+        # 밝은 바탕의 어두운 글자는 예전과 같은 방향이다. 어느 방안이든 글자·배경의 밝기 순서가 뒤집히지 않는다.
+        dark_on_white = analyzer.suggest_fix((119, 119, 119), (255, 255, 255))
+        self.assertFalse(dark_on_white["text_is_lighter"])
+        self.assertEqual((dark_on_white["option_1"]["direction"], dark_on_white["option_2"]["direction"]),
+                         ("darken", "lighten"))
+        self.assertTrue(dark_on_white["option_1"]["meets_target"])
+        self.assertFalse(dark_on_white["option_2"]["meets_target"], "흰색보다 밝은 배경은 없다")
+        for fg, bg in (((130, 130, 130), (120, 120, 120)), ((100, 100, 100), (120, 120, 120)),
+                       ((200, 200, 200), (255, 255, 255)), ((60, 60, 60), (0, 0, 0))):
+            fix = analyzer.suggest_fix(fg, bg)
+            for option, kind in ((fix["option_1"], "fg"), (fix["option_2"], "bg")):
+                if not option["meets_target"]:
+                    continue
+                new_fg = tuple(option["suggested_fg"]) if kind == "fg" else fg
+                new_bg = tuple(option["suggested_bg"]) if kind == "bg" else bg
+                self.assertEqual(sum(new_fg) > sum(new_bg), fix["text_is_lighter"], (fg, bg, kind))
+                self.assertGreaterEqual(contrast_ratio(new_fg, new_bg), 4.5)
+        self.assertFalse(analyzer.suggest_fix((0, 0, 0), (255, 255, 255))["needed"])
+
+    def test_fix_suggestion_in_the_result_json_names_the_target_and_direction(self):
+        analyzer = ContrastAnalyzer()
+        violation = {
+            "text": "문의하기", "bbox": {"x": 1, "y": 2, "width": 3, "height": 4},
+            "ratio": 3.94, "ratio_display": "3.94:1", "threshold": 4.5, "is_large_text": False,
+            "foreground": [255, 255, 255], "background": [128, 128, 128],
+            "fix_suggestion": analyzer.suggest_fix((255, 255, 255), (128, 128, 128)),
+        }
+        fix = cv_runner.format_violation(violation)["fix_suggestion"]
+        self.assertEqual(set(fix), {"text_is_lighter", "text_color", "background_color"})
+        self.assertTrue(fix["text_is_lighter"])
+        self.assertEqual(fix["text_color"]["direction"], "lighten")
+        self.assertFalse(fix["text_color"]["meets_target"])
+        self.assertEqual(fix["background_color"]["direction"], "darken")
+        self.assertEqual(fix["background_color"]["suggested_hex"], "#767676")
+        self.assertEqual(fix["background_color"]["suggested_color"], [118, 118, 118])
+        self.assertTrue(fix["background_color"]["meets_target"])
+        self.assertNotIn("darken_text", fix)
+        self.assertNotIn("lighten_background", fix)
+        # 이미 기준을 넘으면 추천이 없다.
+        violation["fix_suggestion"] = analyzer.suggest_fix((0, 0, 0), (255, 255, 255))
+        self.assertIsNone(cv_runner.format_violation(violation)["fix_suggestion"])
+
     def test_boxes_without_a_distinct_text_color_are_not_measured(self):
         uniform = Image.new("RGB", (120, 60), (0, 128, 0))
         self.assertIsNone(measure_text_colors(uniform, (30, 20, 60, 20)))
