@@ -87,7 +87,7 @@ python text_extractor.py ../output/result_popup.html ../output/popup_text.json -
 python -m unittest discover -s text-level-analyzer -p "test_*.py"   # run_all.py가 있는 폴더에서, 95개 (2026-10-13)
 ```
 
-`test_difficulty_engine.py`는 MeCab과 한국어 사전이 있어야 돌아간다. LLM 테스트는 실제 API를 부르지 않는다. `FrozenFormulaTest`는 대표 글 5개의 블록 점수(`difficulty_score`, `difficulty_score_v2`, 평균 문장 길이, 쉬운 단어 비율, GL)와 기준값을 숫자로 고정한다. 2차 설문의 검증 대상이 실수로 바뀌면 바로 실패한다(사전이 다르면 값이 달라질 수 있으니 이 PC에서 한 번 확인).
+`test_difficulty_engine.py`는 MeCab과 한국어 사전이 있어야 돌아간다. LLM 테스트는 실제 API를 부르지 않는다. `FrozenFormulaTest`는 대표 글 5개의 블록 점수(`difficulty_score`, `difficulty_score_v2`, 평균 문장 길이, 쉬운 단어 비율, GL)와 기준값을 숫자로 고정한다. 2차 설문의 검증 대상이 실수로 바뀌면 바로 실패한다. 2026-10-14 확인: 이 PC 사전(`C:/mecab`)은 문장 안의 "누리집"을 `누리`+`집`으로 쪼개고 클라우드 사전은 한 단어로 본다. 공식은 같고 단어 수만 하나 달라 블록 점수가 60.4 → 61.6이 되므로, 쪼개는 사전에서는 그 값을 기대한다. 텍스트 점수는 사전 버전에 따라 조금 달라질 수 있으니 측정은 한 PC에서 하고 사전을 밝힌다.
 
 ---
 

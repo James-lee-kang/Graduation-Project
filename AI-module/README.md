@@ -448,7 +448,7 @@ cd rule-based-analyzer; npm test; cd ..                                  # Node 
 .\.venv\Scripts\python cv-analyzer\test_contrast_formula.py            # 명암비 공식 대조
 ```
 
-2026-10-13 기준 모두 통과(클라우드, Linux). 개인 작업본에는 `tests/test_record_result.py`(7개)가 더 있어 130개다. Node 테스트는 가끔 파일 단위로 "Unable to deserialize cloned data" 오류가 나는데, 테스트 러너 쪽 오류라 다시 돌리면 통과한다.
+2026-10-13 기준 모두 통과(클라우드, Linux). 2026-10-14에 Windows PC에서도 모두 통과했다. 처음 설치하는 PC는 `pip install -r requirements.txt`와 `rule-based-analyzer`에서 `npm ci`를 먼저 한다(빠뜨리면 패키지 없음, axe 버전 차이로 실패). 텍스트 점수 고정 테스트는 형태소 사전에 따라 "누리집" 분할이 달라 사전별 값을 둔다. 개인 작업본에는 `tests/test_record_result.py`(7개)가 더 있어 130개다. Node 테스트는 가끔 파일 단위로 "Unable to deserialize cloned data" 오류가 나는데, 테스트 러너 쪽 오류라 다시 돌리면 통과한다.
 
 ---
 

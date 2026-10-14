@@ -319,6 +319,8 @@ KWCAG에 매핑되지 않은 unmapped 위반은 minor × medium (건당 1점)으
 
 실제 설치 버전은 `package-lock.json`에 고정되어 있다(@axe-core/playwright 4.11.3, axe-core 4.11.4, playwright 1.61.0). `npm install` 대신 `npm ci`로 설치하면 같은 버전이 깔린다. 한국어 번역은 이 axe-core에 들어 있는 `locales/ko.json`을 쓴다(axe-core를 따로 추가하지 않음).
 
+**반드시 이 폴더 안에서 `npm ci`.** 2026-10-14에 이 폴더에 `node_modules`가 없어 상위 폴더에 깔린 axe-core 4.11.1을 쓰고 있었던 것을 찾았다. 4.11.1에는 보충 번역의 일부 체크(`aria-allowed-attr-elm` 등)가 없어 `axe-locale.test.js` 3개가 실패했다(검사 자체는 모르는 ID를 빼고 돌아가서 깨지지 않음). `npm ci` 후 `npm ls axe-core`가 4.11.4인지 확인한다. 9/20 로컬 재테스트는 4.11.1이었고, 9/14도 같은 설치본이었을 가능성이 크다.
+
 ---
 
 ## 자동화 검사 범위
