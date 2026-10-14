@@ -66,7 +66,27 @@ def write_valid_rule_outputs(output_dir, target_url, score=88):
     return rule_result
 
 
+class _CoarseClockSafeTime:
+    """
+    run_all은 각 단계 시작 시각(time.time_ns)보다 늦게 쓰인 파일만 이번 실행의 결과로 받는다.
+    윈도우는 파일 수정 시각이 시스템 시계 틱(약 15ms) 단위로 찍혀, 가짜 명령이 곧바로 쓴 파일이
+    단계 시작보다 몇 ms 이르게 보일 수 있다. 실제 실행은 단계마다 수백 ms~수 초가 걸려 영향이 없다.
+    테스트에서만 단계 시작 시각을 1초 앞당긴다. 1시간 전 파일을 거부하는 테스트는 그대로 통한다.
+    """
+
+    def time_ns(self):
+        return time.time_ns() - 1_000_000_000
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
 class RunAllPipelineTests(unittest.TestCase):
+    def setUp(self):
+        patcher = patch.object(run_all, "time", _CoarseClockSafeTime())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_total_score_excludes_non_scoring_and_malformed_module_json(self):
         invalid_results = [
             (

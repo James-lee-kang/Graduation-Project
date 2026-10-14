@@ -592,14 +592,33 @@ class FrozenFormulaTest(unittest.TestCase):
         (SentenceLengthTest.LONG_SENTENCE, (100.0, 58.4, 31.0, 0.318, 22.9)),
     )
 
+    # 형태소 사전 버전에 따라 '누리집'을 한 단어(NNG)로 보기도 하고 '누리'+'집'으로 쪼개기도 한다.
+    # 클라우드 검증 환경의 사전은 한 단어, 윈도우 PC의 C:/mecab 사전은 둘로 쪼갠다 (2026-10-14 확인).
+    # 공식은 같고 단어 수만 하나 달라지므로, 쪼개는 사전에서는 그 사전으로 낸 값을 기대한다.
+    SPLIT_DICT_CASES = {
+        CASES[1][0]: (61.6, 30.8, 5.67, 0.364, 7.78),
+    }
+
+    @classmethod
+    def _dict_splits_nurijip(cls):
+        # '누리집' 한 단어만 넣으면 사전이 달리 볼 수 있어, 실제 사례 문장 안에서 확인한다.
+        morphemes = [m for m, _ in de.parse_morphemes(cls.CASES[1][0])]
+        return '누리집' not in morphemes and '누리' in morphemes
+
     def test_block_scores_are_unchanged(self):
-        for text, (score, v2, avg_len, easy, gl) in self.CASES:
-            result = de.analyze_block(block(text))
-            metrics = result['metrics']
-            self.assertEqual((score, v2, avg_len, easy, gl),
-                             (result['difficulty_score'], result['difficulty_score_v2'],
-                              metrics['avg_sentence_length'], metrics['easy_word_ratio'], metrics['gl_score']),
-                             text[:30])
+        # 값은 형태소 사전(mecab-ko-dic)의 단어 쪼개기에 달려 있다. 사전 버전이 다르면 어긋날 수 있어서
+        # 사례마다 따로 보고한다 (한 사례가 틀려도 나머지 결과가 보이게).
+        for text, expected in self.CASES:
+            if text in self.SPLIT_DICT_CASES and self._dict_splits_nurijip():
+                expected = self.SPLIT_DICT_CASES[text]
+            score, v2, avg_len, easy, gl = expected
+            with self.subTest(text=text[:30]):
+                result = de.analyze_block(block(text))
+                metrics = result['metrics']
+                self.assertEqual((score, v2, avg_len, easy, gl),
+                                 (result['difficulty_score'], result['difficulty_score_v2'],
+                                  metrics['avg_sentence_length'], metrics['easy_word_ratio'], metrics['gl_score']),
+                                 text[:30])
 
     def test_thresholds_are_unchanged(self):
         self.assertEqual((25, 0.6, 72.7, 9.0, 2, 4),

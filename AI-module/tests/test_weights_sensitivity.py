@@ -450,7 +450,7 @@ class ResultFileTests(unittest.TestCase):
             ws.load_site_result(write_result(self.root, "nocv", make_result(self.url("nocv"), 90, 80, None))),
         ]
         kept, excluded = ws.select_sites(records)
-        self.assertEqual(["ok"], [r["path"].split("/")[-2] for r in kept])
+        self.assertEqual(["ok"], [Path(r["path"]).parent.name for r in kept])
         self.assertEqual(1, len(excluded))
         self.assertIn("CV", excluded[0]["reason"])
         self.assertIn("점수가 없음", excluded[0]["reason"])
@@ -465,7 +465,7 @@ class ResultFileTests(unittest.TestCase):
         self.assertEqual(90.0, kept[0]["scores"]["rule_based"])
         self.assertEqual(1, len(excluded))
         self.assertIn("더 최근", excluded[0]["reason"])
-        self.assertTrue(excluded[0]["record"]["path"].endswith("dup_old/result_final.json"))
+        self.assertTrue(Path(excluded[0]["record"]["path"]).as_posix().endswith("dup_old/result_final.json"))
 
     def test_exclude_warned_drops_sites_with_data_quality_warnings(self):
         empty = ws.load_site_result(write_result(self.root, "empty", make_result(self.url("empty"), 90, 100, 70, blocks=0)))
