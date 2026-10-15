@@ -3,6 +3,7 @@ import type { AnalyzerType, IssueResultModel, SeverityLevel } from "@/types/acce
 
 import { formatIssueCodeLabel, normalizeIssueCode, severityChartItems } from "./constants";
 import { getIssueCoordinateBox } from "./issue-locator";
+import { nameCriterion } from "./kwcag-criteria";
 import type { LocatorCheckState, LocatorIssueState, RecentIssueRow, SeverityChartItem } from "./types";
 
 export const analyzerLabels: Record<AnalyzerType, string> = {
@@ -13,8 +14,6 @@ export const analyzerLabels: Record<AnalyzerType, string> = {
 
 const analyzerOrder: AnalyzerType[] = ["RULE_BASED", "AI_TEXT", "CV_VISION"];
 const severityRank: Record<SeverityLevel, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
-// One critical issue outweighs several minor ones when ordering fix units.
-const severityWeight: Record<SeverityLevel, number> = { CRITICAL: 8, HIGH: 4, MEDIUM: 2, LOW: 1 };
 
 function compareRows(left: RecentIssueRow, right: RecentIssueRow): number {
   return severityRank[left.severity.key] - severityRank[right.severity.key] || left.issue.id - right.issue.id;
@@ -64,11 +63,6 @@ export function canShowOnPage(status: ReportLocationStatus): boolean {
   return status === "on-page" || status === "other-state";
 }
 
-/** Critical and high findings: the ones the summary asks to fix first. */
-export function countUrgent(summary: ReportSummary): number {
-  return summary.severities.reduce((total, item) => total + (severityRank[item.key] <= severityRank.HIGH ? item.count : 0), 0);
-}
-
 export type ReportSummary = {
   total: number;
   severities: Array<SeverityChartItem & { count: number }>;
@@ -93,75 +87,9 @@ export function summarizeReport(rows: readonly RecentIssueRow[]): ReportSummary 
   };
 }
 
-export type ReportLocationSummary = Record<ReportLocationStatus, number>;
-
-export function summarizeReportLocations(
-  rows: readonly RecentIssueRow[],
-  locationOf: (row: RecentIssueRow) => ReportLocationStatus
-): ReportLocationSummary {
-  const summary: ReportLocationSummary = {
-    checking: 0, disconnected: 0, "on-page": 0, "other-state": 0, "page-setting": 0, unavailable: 0
-  };
-  for (const row of rows) summary[locationOf(row)] += 1;
-  return summary;
-}
-
-export type ReportFixUnit = {
-  key: string;
-  title: string;
-  code: string;
-  codeLabel: string;
-  severity: SeverityChartItem;
-  count: number;
-  analyzers: AnalyzerType[];
-};
-
 // The key a criterion group and a fix unit's "목록에서 보기" link share.
 export function criterionCode(issueCode: string): string {
   return normalizeIssueCode(issueCode) || "기타";
-}
-
-// A fix unit groups issues a developer resolves with the same change: one
-// engine rule, or one criterion/title pair when the engine has no rule id.
-function fixUnitKey(row: RecentIssueRow): string {
-  const code = normalizeIssueCode(row.issue.issueCode);
-  return row.issue.ruleId
-    ? `rule:${row.issue.ruleId}:${code}`
-    : `${row.analyzerType ?? "UNKNOWN"}:${code}:${row.issue.issueTitle}`;
-}
-
-export function buildFixPriorities(rows: readonly RecentIssueRow[], limit = 5): ReportFixUnit[] {
-  const units = new Map<string, RecentIssueRow[]>();
-  for (const row of rows) {
-    const key = fixUnitKey(row);
-    const group = units.get(key);
-    if (group) group.push(row);
-    else units.set(key, [row]);
-  }
-  return [...units.entries()]
-    .map(([key, group]) => {
-      const code = normalizeIssueCode(group[0]!.issue.issueCode);
-      return {
-        unit: {
-          key,
-          title: mostFrequent(group.map((row) => row.issue.issueTitle)),
-          code: criterionCode(code),
-          codeLabel: formatIssueCodeLabel(code),
-          severity: highestSeverity(group),
-          count: group.length,
-          analyzers: analyzerOrder.filter((analyzer) => group.some((row) => row.analyzerType === analyzer))
-        },
-        weight: group.reduce((total, row) => total + severityWeight[row.severity.key], 0)
-      };
-    })
-    .sort((left, right) =>
-      right.weight - left.weight ||
-      severityRank[left.unit.severity.key] - severityRank[right.unit.severity.key] ||
-      right.unit.count - left.unit.count ||
-      left.unit.title.localeCompare(right.unit.title, "ko")
-    )
-    .slice(0, Math.max(0, limit))
-    .map(({ unit }) => unit);
 }
 
 export type ReportCriterionGroup = {
@@ -208,7 +136,9 @@ export function groupByCriterion(rows: readonly RecentIssueRow[]): ReportCriteri
     .map(([code, group]) => ({
       code,
       codeLabel: formatIssueCodeLabel(code),
-      title: mostFrequent(group.map((row) => row.issue.issueTitle)),
+      // The criterion's own name keeps the list in step with the 33-criteria
+      // overview; engine titles (often English for axe rules) are the fallback.
+      title: nameCriterion(code) ?? mostFrequent(group.map((row) => row.issue.issueTitle)),
       severity: highestSeverity(group),
       severityCounts: summarizeReport(group).severities.filter((item) => item.count > 0),
       analyzers: analyzerOrder.filter((analyzer) => group.some((row) => row.analyzerType === analyzer)),

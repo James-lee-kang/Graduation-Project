@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { getApiErrorMessage } from "@/services/backend-api";
 import type { DashboardSidebarSelection } from "@/services/dashboard-route";
+import { selectRepresentativeRequestByTarget } from "@/services/evaluation-request-selection";
 import {
   buildRecentAnalyzedPages,
   getQuickAnalysisRegistryServerSnapshot,
@@ -55,6 +56,15 @@ const SIDEBAR_NAV_ITEM_INACTIVE =
 const SIDEBAR_SECTION_HEADING =
   "sidebar-section-heading min-w-0 break-keep tracking-[0.01em] text-[color:var(--dashboard-text-muted)]";
 
+export type SidebarListState = "loading" | "error" | "ready";
+
+// An empty list only means "none" once the dashboard data has loaded.
+function getEmptyListCopy(listState: SidebarListState, emptyCopy: string): string {
+  if (listState === "loading") return "불러오는 중...";
+  if (listState === "error") return "목록을 불러오지 못했습니다.";
+  return emptyCopy;
+}
+
 export function SidebarProjectsSection({
   organizations,
   evaluationRequests = [],
@@ -63,7 +73,8 @@ export function SidebarProjectsSection({
   onSelectPage,
   onSelectRecentPage,
   actions,
-  quickAnalysisResultsOverride
+  quickAnalysisResultsOverride,
+  listState = "ready"
 }: {
   organizations: OrganizationModel[];
   evaluationRequests?: EvaluationRequestModel[];
@@ -73,6 +84,8 @@ export function SidebarProjectsSection({
   onSelectRecentPage: (pageId: number) => void;
   actions: SidebarProjectActions | null;
   quickAnalysisResultsOverride?: readonly QuickAnalysisResultRecord[];
+  /** Whether the lists are known yet; "error" means they could not be loaded. */
+  listState?: SidebarListState;
 }) {
   const readOnly = actions === null;
   const projects = useMemo(() => organizations.filter((organization) => !organization.systemManaged), [organizations]);
@@ -107,13 +120,7 @@ export function SidebarProjectsSection({
     setAcknowledgedAnalyses(next);
     try { localStorage.setItem(ANALYSIS_ACKNOWLEDGED_KEY, JSON.stringify(next)); } catch { /* Keep the dismissal for this session. */ }
   };
-  const pageAnalysisRequests = useMemo(() => {
-    const priority = (request: EvaluationRequestModel) => request.status === "IN_PROGRESS" ? 2 : request.status === "PENDING" ? 1 : 0;
-    const sorted = [...evaluationRequests].sort((a, b) => priority(b) - priority(a) || Date.parse(b.requestedAt) - Date.parse(a.requestedAt) || b.id - a.id);
-    const byTarget = new Map<number, EvaluationRequestModel>();
-    for (const request of sorted) if (!byTarget.has(request.evaluationTargetId)) byTarget.set(request.evaluationTargetId, request);
-    return byTarget;
-  }, [evaluationRequests]);
+  const pageAnalysisRequests = useMemo(() => selectRepresentativeRequestByTarget(evaluationRequests), [evaluationRequests]);
   const autoExpandedPageProjectId = useRef<number | null>(null);
   const hasQuickAnalysisResultsOverride = quickAnalysisResultsOverride !== undefined;
   const staticQuickAnalysisResults = quickAnalysisResultsOverride ?? EMPTY_QUICK_ANALYSIS_RESULTS;
@@ -598,7 +605,7 @@ export function SidebarProjectsSection({
             })}
           </ul>
         ) : (
-          <p className="sidebar-tree-empty-copy">프로젝트가 없습니다.</p>
+          <p className="sidebar-tree-empty-copy">{getEmptyListCopy(listState, "프로젝트가 없습니다.")}</p>
         )}
       </div>
 
@@ -608,7 +615,7 @@ export function SidebarProjectsSection({
         </div>
         <div className="sidebar-tree-recent-list flex flex-col">
           {recentAnalyzedPages.length === 0 ? (
-            <p className="sidebar-tree-empty-copy">분석한 페이지가 없습니다.</p>
+            <p className="sidebar-tree-empty-copy">{getEmptyListCopy(listState, "분석한 페이지가 없습니다.")}</p>
           ) : (
             recentAnalyzedPages.map((page) => {
               const isActive = selection?.kind === "recentPage" && selection.id === page.pageId;

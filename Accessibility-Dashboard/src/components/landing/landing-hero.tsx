@@ -49,8 +49,8 @@ export function LandingHero({ onEnterApp }: { onEnterApp: EnterAppHandler }) {
   return (
     <>
       <section className="ua-hero" aria-labelledby="ua-hero-title">
-        <h1 className="ua-hero__title" id="ua-hero-title">복잡한 웹 접근성,<br />이제 한눈에.</h1>
-        <p className="ua-hero__lede">페이지 주소 하나면 충분해요. 세 가지 분석기가 문제를 찾아 <b>실제 페이지 위에</b> 표시하고, 고칠 방법까지 알려 줘요.</p>
+        <h1 className="ua-hero__title" id="ua-hero-title">공공 서비스의 웹 접근성,<br />이제 한눈에.</h1>
+        <p className="ua-hero__lede">주소만 넣으면 돼요. 문제를 찾아 <b>그 자리에 바로</b> 보여 주고, 고치는 방법도 알려 줘요.</p>
         <div className="ua-hero__actions">
           <a className="ua-button" href="/analyze" onClick={onEnterApp}>새 페이지 분석</a>
         </div>
@@ -58,7 +58,8 @@ export function LandingHero({ onEnterApp }: { onEnterApp: EnterAppHandler }) {
       <div className="ua-dive" ref={diveRef} aria-hidden="true">
         <div className="ua-dive__sticky">
           <div className="ua-dive__frame" ref={frameRef}>
-            <img src={OPENING_STILL} width="1800" height="1013" alt="" decoding="async" />
+            {/* lazy: phones hide this card, so they never fetch it; desktops get it from the preload in index.html. */}
+            <img src={OPENING_STILL} width="1800" height="1013" alt="" decoding="async" loading="lazy" />
           </div>
         </div>
       </div>

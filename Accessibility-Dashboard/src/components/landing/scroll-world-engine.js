@@ -263,8 +263,11 @@ export function mountScrollWorld(container, config, options = {}) {
     // Every scene's copy stays in the accessibility tree (reading order =
     // story order). Only its pointer and Tab reachability follow the scroll.
     c.dataset.swActive = 'false';
-    const headingTag = i === 0 ? 'h1' : 'h2';
-    const headingId = i === 0 ? 'ua-hero-title' : `sw-title-${s.id || i + 1}`;
+    // The first scene titles the page only when the engine owns <main>; a host
+    // page with its own hero (externalMain) keeps its h1 and gets h2s here.
+    const isPageTitle = i === 0 && !externalMain;
+    const headingTag = isPageTitle ? 'h1' : 'h2';
+    const headingId = isPageTitle ? 'ua-hero-title' : `sw-title-${s.id || i + 1}`;
     const headingClass = 'sw-copy__title';
     c.innerHTML =
       (config.showSectionNumbers === false ? '' : `<span class="sw-copy__num">${pad(i + 1)} / ${pad(N)}</span>`) +
@@ -340,6 +343,8 @@ export function mountScrollWorld(container, config, options = {}) {
   function onActionClick(event) {
     const action = event.currentTarget.dataset.swAction;
     if (action !== 'enter-app' || typeof options.onEnterApp !== 'function') return;
+    // New tab / window / download stay with the browser, as for the page's own links.
+    if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     options.onEnterApp();
   }
@@ -436,7 +441,9 @@ export function mountScrollWorld(container, config, options = {}) {
       const local = clamp((y - s.start) / (s.end - s.start), 0, 1);
       s.target = s.linger ? lingerEase(local, s.linger) : local;
       if (s.kind === 'dive' && s.layout === 'card') {
-        const prevFull = s.si === 0 || (SECTIONS[s.si - 1].layout || 'full') !== 'card';
+        // A card grows out of the full-screen scene before it; a film that opens
+        // on a card (phones skip the opening) shows it as a card from the start.
+        const prevFull = s.si > 0 && (SECTIONS[s.si - 1].layout || 'full') !== 'card';
         s.cardT = prevFull ? smooth(clamp(local / CARD.in)) : 1;
         applyCard(s);
       }
@@ -458,7 +465,7 @@ export function mountScrollWorld(container, config, options = {}) {
       const pr = clamp((y - seg.start) / (seg.end - seg.start), 0, 1);
       const before = y < seg.start, after = y > seg.end;
       let cop;
-      if (i === 0) cop = after ? 0 : smooth(1 - pr / 0.62);            // greets on landing
+      if (i === 0 && (SECTIONS[i].layout || 'full') !== 'card') cop = after ? 0 : smooth(1 - pr / 0.62);  // greets on landing
       else if (i === N - 1) cop = before ? 0 : smooth(pr / 0.4);       // holds CTA at the end
       else if ((SECTIONS[i].layout || 'full') === 'card')                 // card copy: enter after the box settles, hold, leave late
         cop = (before || after) ? 0 : smooth(clamp(Math.min(pr / Math.max(CARD.in, 0.2), (1 - pr) / 0.15)));
@@ -732,7 +739,7 @@ function injectCSS() {
   #sw-section-opening .sw-copy__title{color:#fff;font-size:min(6vw,clamp(3.375rem,2.52rem + 2.8005vw,5.85rem));white-space:nowrap;text-shadow:none;}
   .sw-copy__tags{list-style:none;display:flex;flex-wrap:wrap;gap:8px;margin:24px 0 0;padding:0;}
   .sw-copy__tags li{font-size:.82rem;font-weight:600;color:#fff;padding:7px 14px;border-radius:999px;background:var(--sw-ink);border:1px solid var(--sw-ink);}
-  .sw-copy__cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:28px;pointer-events:auto;}
+  .sw-copy__cta{display:flex;flex-wrap:wrap;gap:12px;margin-top:28px;}
   .sw-btn{display:inline-flex;min-height:48px;align-items:center;justify-content:center;text-decoration:none;font-weight:700;font-size:.95rem;padding:13px 24px;border-radius:999px;transition:background-color .2s;}
   .sw-btn--primary{color:#fff;background:var(--sw-accent);} .sw-btn--primary:hover{background:var(--primary-hover);}
   .sw-btn--ghost{color:var(--sw-ink);border:1.5px solid color-mix(in srgb,var(--sw-ink) 25%,transparent);}

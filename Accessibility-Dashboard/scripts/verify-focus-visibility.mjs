@@ -103,6 +103,10 @@ try {
       const name = `${viewport.width}-${theme}`;
       await page.goto(`${baseUrl}/projects/1`);
       await page.locator(".dashboard-project-card").waitFor();
+      // Phones keep the sidebar in a drawer behind the menu button.
+      const openMenu = page.getByRole("button", { name: "메뉴 열기", exact: true });
+      const isDrawer = await openMenu.isVisible();
+      if (isDrawer) await openMenu.click();
       // The disclosure state lives on the separate chevron toggle.
       const projectToggle = page.locator(".sidebar-tree-toggle").first();
       if (await projectToggle.getAttribute("aria-expanded") === "false") await projectToggle.click();
@@ -110,6 +114,10 @@ try {
         await tabTo(page, page.locator(selector).first(), `${name} sidebar ${selector}`);
       }
       await page.locator(".dashboard-sidebar").screenshot({ path: `${output}/${name}-sidebar.png` });
+      if (isDrawer) {
+        await page.keyboard.press("Escape");
+        await openMenu.waitFor();
+      }
       const card = page.getByRole("button", { name: "CI Fixture Page 상세 보기", exact: true });
       await tabTo(page, card, `${name} page card`);
       await page.locator(".dashboard-project-card").screenshot({ path: `${output}/${name}-card.png` });
@@ -123,21 +131,24 @@ try {
       const panel = page.getByRole("region", { name: "화면에 표시되지 않은 문제", exact: true });
       const toggle = panel.locator(".site-unavailable-locator-panel__group-toggle").first();
       const line = panel.locator(".site-unavailable-locator-panel__line").first();
-      await line.waitFor({ timeout: 10_000 }).catch(async error => {
+      await toggle.waitFor({ timeout: 10_000 }).catch(async error => {
         console.error(JSON.stringify({ body: (await page.locator('body').innerText()).slice(0, 2000), errors,
           requests: fixture.journal, frames: page.frames().map(frame => frame.url()) }));
         throw error;
       });
       // Group headers and finding lines are ordinary buttons in tab order.
+      // Groups start closed; Enter opens one and its finding lines follow it.
       await tabTo(page, toggle, `${name} issue group`);
+      assert.equal(await toggle.getAttribute("aria-expanded"), "false", "groups start closed");
+      await page.keyboard.press("Enter");
+      assert.equal(await toggle.getAttribute("aria-expanded"), "true", "Enter on a group header must open the group");
+      await line.waitFor();
       await page.keyboard.press("Tab");
       await assertVisibleFocus(line, `${name} issue line`);
       await panel.screenshot({ path: `${output}/${name}-issue-groups.png` });
       await toggle.focus();
       await page.keyboard.press("Enter");
-      assert.equal(await toggle.getAttribute("aria-expanded"), "false", "Enter on a group header must close the group");
-      await page.keyboard.press("Enter");
-      assert.equal(await toggle.getAttribute("aria-expanded"), "true", "Enter again must reopen the group");
+      assert.equal(await toggle.getAttribute("aria-expanded"), "false", "Enter again must close the group");
       assert.deepEqual(errors, [], `${name}: no page errors`);
       fixture.assertIsolated();
       await context.close();

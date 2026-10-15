@@ -1,3 +1,4 @@
+import { Minus, Plus } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 
 import type { SeverityLevel } from "@/types/accessibility-domain";
@@ -62,11 +63,15 @@ function filterKey(entry: Entry): string {
  * and lists one short line per finding. Chips filter by why a finding is not
  * on screen; findings in another screen state are one of those reasons.
  */
+// One shared empty list, so a panel without recoverable findings keeps its
+// memoized entries between renders.
+const NO_ROWS: RecentIssueRow[] = [];
+
 export function UnavailableLocatorPanel({
   checkState,
   hasHiddenIssues = false,
   mode = "unavailable",
-  recoverableRows = [],
+  recoverableRows = NO_ROWS,
   onSelectIssue,
   onShowLocation,
   issueStates,
@@ -93,7 +98,10 @@ export function UnavailableLocatorPanel({
     return ordered.length > 1 ? [[ALL_FILTER, entries.length] as const, ...ordered] : [];
   }, [entries, mode]);
   const activeFilter = filters.some(([key]) => key === filter) ? filter : ALL_FILTER;
-  const shown = activeFilter === ALL_FILTER ? entries : entries.filter((entry) => filterKey(entry) === activeFilter);
+  const shown = useMemo(
+    () => activeFilter === ALL_FILTER ? entries : entries.filter((entry) => filterKey(entry) === activeFilter),
+    [activeFilter, entries]
+  );
 
   const entryById = useMemo(() => new Map(entries.map((entry) => [entry.row.issue.id, entry])), [entries]);
   const groups = useMemo(() => groupByCriterion(shown.map((entry) => entry.row))
@@ -247,7 +255,9 @@ function LocatorGroup({ group, expanded, visibleCount, entryById, mode, onToggle
           {group.codeLabel && <span className="site-unavailable-locator-panel__code">{group.codeLabel}</span>}
           <span className="site-unavailable-locator-panel__group-name">{group.title}</span>
           <span className="site-unavailable-locator-panel__group-count">{group.rows.length.toLocaleString("ko-KR")}건</span>
-          <span className="site-unavailable-locator-panel__plus" aria-hidden="true">{expanded ? "−" : "+"}</span>
+          <span className="site-unavailable-locator-panel__plus" aria-hidden="true">
+            {expanded ? <Minus size={14} /> : <Plus size={14} />}
+          </span>
         </button>
       </h4>
       <div ref={bodyRef} id={listId} hidden={!mounted} data-state={expanded ? "open" : "closing"}

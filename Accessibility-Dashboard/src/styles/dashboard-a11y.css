@@ -157,14 +157,25 @@
   outline-offset: -2px;
 }
 
-/* Recent rows keep their analysis status icon left of the more button. */
+/* Recent rows: at rest the analysis status icon sits at the row's edge, as in
+   the project tree, and the label runs up to it. While the more button shows
+   (hover, focus, open menu) the icon steps left of it and the label makes room. */
 .bridge-dashboard .sidebar-row-has-more > [data-analysis-status] {
+  right: 0.25rem;
+  transition: right 150ms ease;
+}
+
+.bridge-dashboard .sidebar-row-has-more:is(:hover, :focus-within, :has(> .sidebar-row-more[aria-expanded="true"])) > [data-analysis-status] {
   right: 1.875rem;
 }
 
 /* More specific than the tree row padding-inline rule so labels truncate
    before the status icon and the more button instead of running under them. */
 .bridge-dashboard .dashboard-sidebar .sidebar-row-has-more > .sidebar-nav-link.sidebar-tree-child-row {
+  padding-right: 2rem;
+}
+
+.bridge-dashboard .dashboard-sidebar .sidebar-row-has-more:is(:hover, :focus-within, :has(> .sidebar-row-more[aria-expanded="true"])) > .sidebar-nav-link.sidebar-tree-child-row {
   padding-right: 3.5rem;
 }
 
@@ -176,10 +187,19 @@
   .bridge-dashboard .sidebar-row-more {
     opacity: 1;
   }
+
+  /* The more button always shows, so the icon and label always leave it room. */
+  .bridge-dashboard .sidebar-row-has-more > [data-analysis-status] {
+    right: 1.875rem;
+  }
+
+  .bridge-dashboard .dashboard-sidebar .sidebar-row-has-more > .sidebar-nav-link.sidebar-tree-child-row {
+    padding-right: 3.5rem;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .bridge-dashboard .sidebar-row-more {
+  .bridge-dashboard :is(.sidebar-row-more, .sidebar-row-has-more > [data-analysis-status]) {
     transition: none;
   }
 }
@@ -217,4 +237,182 @@
     flex-direction: column;
     align-items: center;
   }
+}
+
+/*
+ * Sidebar containment. Desktop paints the rail in isolation; phones drop it
+ * because the drawer and its backdrop are fixed to the viewport, and paint
+ * containment would clip them to the bar.
+ */
+@media (min-width: 768px) {
+  .dashboard-sidebar {
+    contain: layout paint style;
+  }
+}
+
+/*
+ * Phone navigation: the sidebar is a sticky bar (account + menu button) and
+ * its content opens as a drawer under it. useMobileSidebarDrawer in
+ * dashboard-surface-hooks.ts uses the same 767px breakpoint.
+ */
+@media (max-width: 767px) {
+  .bridge-dashboard {
+    --dashboard-mobile-bar-height: 3.5rem;
+  }
+
+  .bridge-dashboard .dashboard-sidebar {
+    position: sticky;
+    top: 0;
+    z-index: 30;
+    flex-direction: row;
+    align-items: center;
+    height: var(--dashboard-mobile-bar-height);
+    padding-block: 0;
+    overflow: visible;
+  }
+
+  .bridge-dashboard .dashboard-sidebar .dashboard-header-account {
+    flex: 1;
+    min-width: 0;
+    margin-top: 0;
+  }
+
+  .bridge-dashboard .dashboard-sidebar .dashboard-sidebar-toggle {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+
+  .bridge-dashboard .dashboard-sidebar .reference-sidebar-content {
+    display: none;
+  }
+
+  .bridge-dashboard.dashboard-mobile-drawer-open .dashboard-sidebar .reference-sidebar-content {
+    position: fixed;
+    top: var(--dashboard-mobile-bar-height);
+    bottom: 0;
+    left: 0;
+    z-index: 2;
+    display: flex;
+    width: min(20rem, 86vw);
+    margin-top: 0;
+    padding: 0.75rem var(--dashboard-sidebar-padding-inline) 1.5rem;
+    /* The rail colour is translucent; lay it over the opaque card surface. */
+    background: linear-gradient(var(--dashboard-drawer-bg), var(--dashboard-drawer-bg)), var(--card);
+    box-shadow: 12px 0 32px rgb(0 0 0 / 18%);
+    overscroll-behavior: contain;
+  }
+
+  .dashboard-mobile-drawer-backdrop {
+    position: fixed;
+    inset: var(--dashboard-mobile-bar-height) 0 0;
+    z-index: 1;
+    background: rgb(0 0 0 / 40%);
+  }
+}
+
+@media (max-width: 767px) and (prefers-reduced-motion: no-preference) {
+  .bridge-dashboard.dashboard-mobile-drawer-open .dashboard-sidebar .reference-sidebar-content {
+    animation: dashboard-mobile-drawer-in 180ms ease-out;
+  }
+
+  .dashboard-mobile-drawer-backdrop {
+    animation: dashboard-mobile-drawer-fade 180ms ease-out;
+  }
+}
+
+@keyframes dashboard-mobile-drawer-in {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes dashboard-mobile-drawer-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (max-width: 767px) and (forced-colors: active) {
+  .bridge-dashboard.dashboard-mobile-drawer-open .dashboard-sidebar .reference-sidebar-content {
+    border-right: 1px solid CanvasText;
+  }
+}
+
+/*
+ * Status and error cards in the dashboard body (load failures, route
+ * fallbacks). A theme card surface with greys; only the error title is red.
+ */
+.dashboard-status-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.75rem;
+  border: 1px solid var(--dashboard-card-border, var(--border));
+  border-radius: 28px;
+  padding: 1.25rem;
+  background: var(--dashboard-card-bg, var(--card));
+  color: var(--dashboard-text-muted, var(--muted-foreground));
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.dashboard-status-card-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  color: var(--dashboard-text-strong, var(--foreground));
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.dashboard-status-card[role="alert"] .dashboard-status-card-title {
+  color: var(--dashboard-danger-text);
+}
+
+.dashboard-status-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.dashboard-status-card-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 2rem;
+  border: 0;
+  border-radius: 9999px;
+  padding: 0.375rem 0.875rem;
+  background: var(--dashboard-sidebar-item-hover-bg, #e5e5ea);
+  color: var(--dashboard-text-strong, var(--foreground));
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.dashboard-status-card-button--primary {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.dashboard-status-card-button:hover:not(:disabled) {
+  filter: brightness(0.95);
+}
+
+.dark .dashboard-status-card-button:hover:not(:disabled) {
+  filter: brightness(1.15);
+}
+
+.dashboard-status-card-button:focus-visible {
+  outline: 2px solid var(--dashboard-accent, var(--ring));
+  outline-offset: 2px;
+}
+
+.dashboard-status-card-button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+@media (forced-colors: active) {
+  .dashboard-status-card { border-color: CanvasText; }
+  .dashboard-status-card-button { border: 1px solid ButtonText; }
 }

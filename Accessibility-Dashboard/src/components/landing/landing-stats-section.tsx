@@ -8,15 +8,15 @@ const COUNT_MS = 900;
 type Stat = { label: string; value: string; count?: number; unit?: string; accent?: boolean; body: string };
 
 const STATS: readonly Stat[] = [
-  { label: "분석기", value: "3", count: 3, unit: "개", body: "규칙 기반, 텍스트 난이도, 시각 명암비가 한 페이지를 세 번 읽어요." },
-  { label: "KWCAG 2.2 검사 항목", value: String(criteria.length), count: criteria.length, unit: "개", body: "국내 웹 접근성 표준의 모든 항목을 한 장의 리포트에 정리해요." },
-  { label: "자동 검사 항목", value: String(automated), count: automated, unit: "개", accent: true, body: `나머지 ${criteria.length - automated}개는 사람이 직접 확인할 항목으로 따로 안내해요.` },
-  { label: "점수 비중", value: "50·30·20", body: "규칙, 난이도, 명암비 결과를 이 비중으로 합산해 총점을 매겨요." }
+  { label: "분석기", value: "3", count: 3, unit: "개", body: "규칙, 문장, 색을 세 가지 방법으로 검사해요." },
+  { label: "KWCAG 2.2 기준", value: String(criteria.length), count: criteria.length, unit: "개", body: "국내 기준을 빠짐없이 한 장에 모아요." },
+  { label: "자동 검사", value: String(automated), count: automated, unit: "개", accent: true, body: `나머지 ${criteria.length - automated}개는 사람이 직접 봐야 한다고 알려 줘요.` },
+  { label: "점수 계산", value: "50·30·20", body: "세 결과를 이 비율로 더해요." }
 ];
 
 /**
  * 검사 범위를 큰 숫자로. 항목 수는 landing-kwcag.ts 표에서 계산한다.
- * 숫자는 섹션이 화면에 들어올 때마다 0에서 빠르게 차오른다. 모션 축소 설정에서는 바로 최종 값을 보여 준다.
+ * 숫자는 섹션이 처음 화면에 들어올 때 한 번만 0에서 빠르게 차오른다. 모션 축소 설정에서는 바로 최종 값을 보여 준다.
  * 보조 기술에는 차오르는 중간 값 대신 최종 값만 전달한다.
  */
 export function LandingStatsSection() {
@@ -39,9 +39,11 @@ export function LandingStatsSection() {
       };
       raf = requestAnimationFrame(tick);
     };
+    // 처음 화면에 들어올 때 한 번만 차오르고, 그 뒤로는 최종 값 그대로 둔다
     const observer = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting) run();
-      else if (entry.boundingClientRect.top > 0) { cancelAnimationFrame(raf); setProgress(0); }
+      if (!entry.isIntersecting) return;
+      observer.disconnect();
+      run();
     }, { threshold: 0.4 });
     observer.observe(grid);
     return () => { observer.disconnect(); cancelAnimationFrame(raf); };

@@ -88,6 +88,9 @@
     background: var(--background);
     color: var(--foreground);
     letter-spacing: -0.012em;
+    /* Wrap Korean at spaces, not inside words; a word wider than its box still breaks. */
+    word-break: keep-all;
+    overflow-wrap: break-word;
   }
 
   button,
@@ -160,7 +163,7 @@
   }
 
   .bridge-dashboard.dashboard-project-detail {
-    --dashboard-top-height: clamp(124px, calc(12vh + 16px), 132px);
+    --dashboard-top-height: clamp(100px, calc(10vh + 12px), 124px); /* heading row only; the add action shares it */
     --dashboard-project-content-max-width: clamp(100rem, 80vw, 187.5rem);
     --dashboard-project-content-gap: clamp(0.5rem, calc(-0.5rem + 0.8333vw), 1.5rem);
     --dashboard-project-grid-gap: clamp(0.75rem, calc(-0.25rem + 0.8333vw), 1.75rem);
@@ -182,13 +185,17 @@
     transform: translateX(-50%);
   }
 
+  /* "페이지 추가" sits at the end of the heading row, level with the title. */
+  .bridge-dashboard.dashboard-project-detail .dashboard-project-header-actions {
+    display: flex;
+    flex: none;
+    align-self: flex-end;
+  }
+
+  /* Fallback spot when the heading row is not rendered (never in the app shell). */
   .bridge-dashboard.dashboard-project-detail .dashboard-project-add-action {
-    right: max(
-    var(--dashboard-side-gutter),
-    calc(
-      (100% - var(--dashboard-sidebar-width) - var(--dashboard-project-content-max-width)) / 2
-    )
-  );
+    display: flex;
+    justify-content: flex-end;
   }
 
   .bridge-dashboard.dashboard-project-detail .dashboard-project-grid {
@@ -222,6 +229,15 @@
   .bridge-dashboard.dashboard-project-detail .dashboard-project-card-status {
     font-size: clamp(0.75rem, 0.469vw, 1.125rem);
     line-height: 1.35;
+  }
+
+  /* WCAG 2.5.8: the address link gets a 24px target; the negative margin
+     cancels the padding so the card layout does not move. */
+  .bridge-dashboard.dashboard-project-detail a.dashboard-project-card-url {
+    box-sizing: border-box;
+    min-height: 24px;
+    padding-block: 4px;
+    margin-block: -4px;
   }
 
   .bridge-dashboard.dashboard-project-detail .dashboard-project-card-score {
@@ -276,21 +292,10 @@
     height: clamp(0.8125rem, 0.4688vw, 1.125rem);
   }
 
-  .bridge-dashboard.dashboard-project-detail .dashboard-project-breadcrumb {
+  .bridge-dashboard.dashboard-project-detail .dashboard-project-eyebrow {
     height: clamp(1rem, 0.5208vw, 1.25rem);
-    gap: clamp(0.125rem, 0.1042vw, 0.25rem);
     font-size: clamp(0.75rem, 0.4167vw, 1rem);
     line-height: 1.25;
-  }
-
-  .bridge-dashboard.dashboard-project-detail .dashboard-project-breadcrumb-label {
-    height: 100%;
-  }
-
-  .bridge-dashboard.dashboard-project-detail .dashboard-project-breadcrumb-chevron {
-    width: clamp(0.625rem, 0.3125vw, 0.75rem);
-    height: clamp(0.625rem, 0.3125vw, 0.75rem);
-    transform: translateY(clamp(-0.0625rem, -0.026vw, 0rem));
   }
 
   .bridge-dashboard.theme-light {
@@ -358,12 +363,7 @@
     }
   }
 
-  .bridge-dashboard .dashboard-sidebar-wordmark {
-    width: clamp(118px, 11vw, 148px);
-    height: auto;
-    color: var(--dashboard-text-strong);
-    display: block;
-  }
+  
 
   .bridge-dashboard .dashboard-sidebar .dashboard-header-account {
     margin-left: var(--dashboard-account-offset-x);
@@ -453,6 +453,21 @@
   .bridge-dashboard .dashboard-account-menu {
     width: var(--dashboard-account-menu-width);
     border: 1px solid #cbd5e1;
+    background: var(--dashboard-card-bg);
+  }
+
+  /* Menu rows hover like sidebar rows: a neutral grey from the sidebar tokens. */
+  .bridge-dashboard .dashboard-account-menu-item {
+    color: var(--dashboard-text-strong);
+  }
+
+  .bridge-dashboard .dashboard-account-menu-item:hover,
+  .bridge-dashboard .dashboard-account-menu-trigger:hover {
+    background: var(--dashboard-sidebar-item-hover-bg);
+  }
+
+  .bridge-dashboard .dashboard-account-menu-icon {
+    color: var(--dashboard-text-secondary);
   }
 
   .bridge-dashboard .dashboard-account-menu-item {
@@ -469,11 +484,13 @@
 
   .bridge-dashboard.theme-dark .dashboard-account-menu {
     border-color: #52525b;
+    background: var(--dashboard-nested-surface);
     box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
   }
 
+  .bridge-dashboard.theme-dark .dashboard-account-menu-item:hover,
   .bridge-dashboard.theme-dark .dashboard-account-menu-trigger:hover {
-    background: rgba(148, 163, 184, 0.14);
+    background: rgba(255, 255, 255, 0.08);
   }
 
   .bridge-dashboard.theme-dark .dashboard-account-menu-trigger:focus-visible,
@@ -904,9 +921,17 @@
     position: static;
   }
 
+  /* On phones the action wraps below the (possibly long) title. */
   .bridge-dashboard.dashboard-project-detail .dashboard-project-header-content {
     position: static;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
     transform: none;
+  }
+
+  .bridge-dashboard.dashboard-project-detail .dashboard-project-header-actions {
+    align-self: flex-end;
   }
 
   .bridge-dashboard.dashboard-project-detail .dashboard-project-title {
@@ -914,9 +939,6 @@
   }
 
   .bridge-dashboard.dashboard-project-detail .dashboard-project-add-action {
-    position: static;
-    display: flex;
-    justify-content: flex-end;
     margin-bottom: 0.75rem;
   }
 
@@ -1116,10 +1138,6 @@
   background-color: var(--dashboard-hover-surface);
 }
 
-.bridge-dashboard.theme-dark .bg-slate-50 {
-  background-color: var(--dashboard-nested-surface);
-}
-
 .bridge-dashboard.theme-dark .bg-slate-100,
 .bridge-dashboard.theme-dark .bg-slate-100\/60,
 .bridge-dashboard.theme-dark .bg-slate-100\/70 {
@@ -1128,18 +1146,13 @@
 
 .bridge-dashboard.theme-dark .border-slate-200,
 .bridge-dashboard.theme-dark .border-slate-200\/70,
-.bridge-dashboard.theme-dark .border-slate-200\/80,
-.bridge-dashboard.theme-dark .border-slate-300 {
+.bridge-dashboard.theme-dark .border-slate-200\/80 {
   border-color: var(--dashboard-nested-border);
 }
 
 .bridge-dashboard.theme-dark .text-slate-950,
 .bridge-dashboard.theme-dark .text-slate-900 {
   color: var(--dashboard-text-strong);
-}
-
-.bridge-dashboard.theme-dark .text-slate-800 {
-  color: #e5e5e5;
 }
 
 .bridge-dashboard.theme-dark .text-slate-700 {
@@ -1180,10 +1193,6 @@
   background-color: var(--dashboard-sidebar-item-hover-bg);
   border-color: var(--dashboard-sidebar-item-hover-border);
   color: var(--dashboard-sidebar-hover-text);
-}
-
-.bridge-dashboard.theme-dark .project-list-row:hover {
-  background-color: var(--project-table-row-hover-bg);
 }
 
 .bridge-dashboard.theme-light aside.dashboard-sidebar {
@@ -1362,17 +1371,8 @@
   color: #64748b;
 }
 
-.bridge-dashboard.theme-light .project-list-head {
-  background-color: var(--project-table-head-bg);
-  border-color: rgba(226, 232, 240, 0.8);
-}
-
 .bridge-dashboard.theme-light .project-list-row:hover {
   background-color: var(--project-table-row-hover-bg);
-}
-
-.bridge-dashboard.theme-light .project-list-table .site-status-badge {
-  border: none;
 }
 
 .bridge-dashboard.theme-light .project-list-table .site-status-badge-finished {
@@ -1380,51 +1380,21 @@
   color: #059669;
 }
 
-.bridge-dashboard.theme-light .project-list-table .site-status-badge-running {
-  background-color: rgba(14, 165, 233, 0.1);
-  color: #0284c7;
-}
-
 .bridge-dashboard.theme-light .project-list-table .site-status-badge-failed {
   background-color: rgba(244, 63, 94, 0.1);
   color: #e11d48;
-}
-
-.bridge-dashboard.theme-light .project-list-table .site-status-badge-idle {
-  background-color: #f1f5f9;
-  color: #64748b;
 }
 
 .bridge-dashboard.theme-light .project-list-icon-action:hover {
   background-color: rgba(15, 23, 42, 0.065);
 }
 
-.bridge-dashboard.theme-light .project-list-table td,
-.bridge-dashboard.theme-light .project-list-table p,
-.bridge-dashboard.theme-light .project-list-table span,
-.bridge-dashboard.theme-light .project-list-table button {
-  color: var(--dashboard-text-primary);
-}
-
 .bridge-dashboard.theme-light .project-list-table .project-list-updated {
   color: var(--dashboard-text-secondary);
 }
 
-.bridge-dashboard.theme-dark .project-list-table th,
-.bridge-dashboard.theme-dark .project-list-table td,
-.bridge-dashboard.theme-dark .project-list-table p,
-.bridge-dashboard.theme-dark .project-list-table span,
-.bridge-dashboard.theme-dark .project-list-table button {
-  color: var(--dashboard-text-primary);
-}
-
 .bridge-dashboard.theme-dark .project-list-table .site-status-badge {
   border: none;
-}
-
-.bridge-dashboard.theme-dark .project-list-table .site-status-badge-finished {
-  background-color: rgba(16, 185, 129, 0.1);
-  color: #34d399;
 }
 
 .bridge-dashboard.theme-dark .project-list-table .site-status-badge-running {
@@ -1432,19 +1402,9 @@
   color: #38bdf8;
 }
 
-.bridge-dashboard.theme-dark .project-list-table .site-status-badge-failed {
-  background-color: rgba(244, 63, 94, 0.1);
-  color: #fb7185;
-}
-
 .bridge-dashboard.theme-dark .project-list-table .site-status-badge-idle {
   background-color: rgba(148, 163, 184, 0.14);
   color: #94a3b8;
-}
-
-.bridge-dashboard.theme-dark .project-list-head {
-  background-color: var(--project-table-head-bg);
-  border-color: var(--dashboard-nested-border);
 }
 
 .bridge-dashboard.theme-dark .project-list-table .project-list-updated {
