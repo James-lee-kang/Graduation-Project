@@ -55,6 +55,7 @@ const { koreanAxeSource } = require('./axe-locale');  // axe 메시지를 한국
 const { appendFixHint } = require('./fix-hints');     // 노드별 수정 안내(추천색 등)를 failure_summary에 덧붙임 (10/13)
 const {
   buildDomReplayArtifactMetadata,
+  enrichAxeResultsWithLocators,
   pauseDocumentAnimations,
   pausePageVirtualTime,
   revalidateAxeLocators,
@@ -157,6 +158,14 @@ function challengeSignals({
   return [...new Set(signals)];
 }
 
+// 주소만 보고 차단 화면이라고 확정할 수 있는 신호. 정상 페이지 주소에는 나오지 않는다.
+const SAME_ORIGIN_URL_BLOCK_SIGNALS = new Set(['MBUSTER']);
+
+function isSecurityGateUrl(url) {
+  return challengeSignals({ url: url || '' })
+    .some(signal => SAME_ORIGIN_URL_BLOCK_SIGNALS.has(signal));
+}
+
 async function detectCrossOriginBotChallenge(page, initialUrl) {
   const currentUrl = page.url();
   const initialOrigin = urlOrigin(initialUrl);
@@ -224,8 +233,12 @@ async function detectCrossOriginBotChallenge(page, initialUrl) {
   const signals = challengeSignals({ url: currentUrl, ...state });
   const strongSignals = new Set(['AUTOMATION_REASON', 'STCLAB', 'CAPTCHA', 'WEBDRIVER', 'MBUSTER', 'CLOUDFLARE']);
   const sameDocumentChallenge = signals.includes('BOT_MANAGER_WAIT_OVERLAY');
+  // 2026-10-14 동작검증: plus.gov.kr → plus.gov.kr/mbuster/Mbuster_T처럼 차단 관문이
+  // 같은 사이트 안에 있으면 출처가 같아서 위 조건에 걸리지 않았고, 관문 화면을 채점해
+  // 95.6점이 나왔다. 주소만으로 확정되는 신호는 출처와 상관없이 차단으로 본다.
+  const sameOriginUrlBlock = signals.some(signal => SAME_ORIGIN_URL_BLOCK_SIGNALS.has(signal));
   return {
-    detected: sameDocumentChallenge || (crossOrigin && (
+    detected: sameDocumentChallenge || sameOriginUrlBlock || (crossOrigin && (
       signals.some(signal => strongSignals.has(signal)) || signals.length >= 2
     )),
     currentUrl,
@@ -234,8 +247,11 @@ async function detectCrossOriginBotChallenge(page, initialUrl) {
 }
 
 function usableInitialHtml(snapshot) {
+  // 서버가 첫 요청부터 차단 관문으로 보내면 최초 2xx 응답 자체가 관문 화면이다.
+  // 그 HTML을 정적 fallback으로 채점하면 안 된다.
   return Boolean(
     snapshot
+      && !isSecurityGateUrl(snapshot.url)
       && snapshot.status >= 200
       && snapshot.status < 300
       && /(?:text\/html|application\/xhtml\+xml)/i.test(snapshot.contentType || '')
@@ -616,7 +632,10 @@ async function sendToBackend(requestId, apiData) {
 // a good score. Such a page is reported as unavailable instead. The content
 // threshold follows the live report's document health.
 const DOCUMENT_CONTENT_MIN_TEXT_LENGTH = 20;
-const DOCUMENT_CONTENT_GRACE_MS = 15000;
+// 15초 → 45초 (2026-10-14): 홈택스(WebSquare)는 load 뒤 15~30초가 지나야 본문이 그려져
+// 5초 안정화 + 15초로는 빈 페이지(EMPTY)로 판정됐다. 본문이 보이는 즉시 대기를 끝내므로
+// 보통 페이지의 시간과 점수는 그대로이고, 끝내 비어 있는 페이지만 30초 더 기다린다.
+const DOCUMENT_CONTENT_GRACE_MS = 45000;
 const DOCUMENT_CONTENT_POLL_MS = 1000;
 // A security check that keeps the original URL replaces the page with a short
 // notice. Normal pages that embed a CAPTCHA field keep their own text and links.
@@ -794,6 +813,24 @@ async function run(url, outputPath, options = {}) {
     && options.cvScreenshotPath.trim()
     ? options.cvScreenshotPath
     : null;
+  // 진단용 스위치 (2026-10-16, 봉화군청 axe 480초 초과 원인 찾기). 기본은 모두 켜짐이고
+  // run_all.py는 이 값을 넘기지 않으므로 평소 점수에는 영향이 없다. CLI: --no-popup,
+  // --no-carousel, --no-link-audit, --no-compare. 끈 검사는 result.json의 meta.diagnostics에 남는다.
+  const audits = {
+    popup: options.popupAudit !== false,
+    carousel: options.carouselAudit !== false,
+    linkAudit: options.linkAudit !== false,
+    compareLoad: options.compareLoad !== false,
+  };
+  const disabledAudits = Object.entries(audits).filter(([, on]) => !on).map(([name]) => name);
+  if (disabledAudits.length > 0) {
+    console.log(`   [진단] 꺼진 검사: ${disabledAudits.join(', ')} — 점수를 다른 결과와 비교하지 마세요.`);
+  }
+  // 단계별 경과 시간. 검사가 멈추면 마지막으로 찍힌 줄이 멈춘 단계다.
+  const runStartedAt = Date.now();
+  const logElapsed = (label) => {
+    console.log(`   [시간 +${((Date.now() - runStartedAt) / 1000).toFixed(1)}초] ${label}`);
+  };
 
   try {
     console.log('2. 페이지 로딩 중...');
@@ -841,8 +878,10 @@ async function run(url, outputPath, options = {}) {
       }, null, 2), 'utf-8');
       throw new TargetPageUnavailableError(documentHealth);
     };
-    if (initialSnapshot) {
-      const challenge = await detectCrossOriginBotChallenge(page, initialSnapshot.url);
+    // 최초 응답을 못 잡은 경우(크기 초과 등)에도 차단 관문 주소는 걸러야 하므로
+    // 감지는 항상 돌리고, 정적 fallback만 최초 응답이 있을 때로 한정한다.
+    {
+      const challenge = await detectCrossOriginBotChallenge(page, initialSnapshot?.url || url);
       if (challenge.detected && usableInitialHtml(initialSnapshot)) {
         console.log('   [정적 fallback] 봇/보안 대기 화면을 감지했습니다.');
         console.log(`   [정적 fallback] ${challenge.signals.join(', ')}: ${challenge.currentUrl}`);
@@ -852,7 +891,8 @@ async function run(url, outputPath, options = {}) {
         analysisFinalUrl = withoutUrlFragment(initialSnapshot.url);
         replaySourceMode = 'INITIAL_RESPONSE_STATIC';
       } else if (challenge.detected) {
-        console.log('   [수집 실패] 봇/보안 대기 화면을 감지했지만 사용할 수 있는 최초 2xx HTML이 없습니다.');
+        console.log('   [수집 실패] 봇/보안 대기 화면을 감지했지만 사용할 수 있는 최초 2xx HTML이 없습니다(없거나 그 자체가 차단 화면).');
+        console.log(`   [수집 실패] ${challenge.signals.join(', ')}: ${challenge.currentUrl}`);
         reportUnavailablePage({
           status: 'BLOCKED', http_status: mainDocumentStatus,
           has_body: true, visible_text_length: 0, visible_content_count: 0,
@@ -879,7 +919,8 @@ async function run(url, outputPath, options = {}) {
     // snapshot and the CV image all see the page as a visitor does after
     // closing the popup. Popup content is never DYNAMIC even when the
     // comparison load still shows it. See popup-layers.js.
-    const popupLayers = await findPopupLayers(page);
+    logElapsed('본문 확인 끝, 레이어 팝업 찾는 중');
+    const popupLayers = audits.popup ? await findPopupLayers(page) : [];
     let popupAxeResults = null;
     if (popupLayers.length > 0) {
       popupAxeResults = await new AxeBuilder({ page, axeSource: koreanAxeSource() })
@@ -891,7 +932,9 @@ async function run(url, outputPath, options = {}) {
           return null;
         });
       // The two link checks (link-audit.js) run on the open popups too.
-      appendLinkViolations(popupAxeResults, await auditLinks(page, { scope: `[${POPUP_ATTRIBUTE}]` }));
+      if (audits.linkAudit) {
+        appendLinkViolations(popupAxeResults, await auditLinks(page, { scope: `[${POPUP_ATTRIBUTE}]` }));
+      }
       await capturePopupLayers(page, popupLayers, {
         htmlPath: siblingOutputPath(output, '_popup.html'),
         cvScreenshotPath,
@@ -909,6 +952,7 @@ async function run(url, outputPath, options = {}) {
     // products, rotating ads). The static fallback reproduces one saved
     // response, so it has nothing to compare against.
     let comparisonSignatures = null;
+    logElapsed('레이어 팝업 처리 끝, 두 번째 로딩 비교 대기');
     if (replaySourceMode === 'RENDERED_DOM' && options.compareLoad !== false) {
       comparisonSignatures = earlyComparison && earlyComparisonUrl === analysisFinalUrl
         ? await earlyComparison
@@ -939,11 +983,24 @@ async function run(url, outputPath, options = {}) {
     //   [2026-10-03] axe가 하지 않는 링크 검사 두 개(새 창 고지 7.2.1, 모호한 링크
     //   텍스트 6.4.3, link-audit.js)를 같은 스캔에 붙인다. axe 결과와 같은 형태라
     //   캐러셀 슬라이드별 검사·광고/동적/팝업 제외·KWCAG 매핑·점수를 그대로 탄다.
-    const scanPage = async () => appendLinkViolations(
-      await new AxeBuilder({ page, axeSource: koreanAxeSource() }).options(AXE_OPTIONS).analyze(),
-      await auditLinks(page),
-    );
-    const axeResults = await analyzeWithCarouselStates(page, scanPage);
+    let scanCount = 0;
+    const scanPage = async () => {
+      scanCount += 1;
+      logElapsed(`axe 검사 ${scanCount}회차 시작${scanCount > 1 ? ' (캐러셀 슬라이드)' : ''}`);
+      const axeResult = await new AxeBuilder({ page, axeSource: koreanAxeSource() }).options(AXE_OPTIONS).analyze();
+      if (!audits.linkAudit) return axeResult;
+      logElapsed(`링크 검사 ${scanCount}회차 시작`);
+      return appendLinkViolations(axeResult, await auditLinks(page));
+    };
+    let axeResults;
+    if (audits.carousel) {
+      axeResults = await analyzeWithCarouselStates(page, scanPage);
+    } else {
+      axeResults = await scanPage();
+      await enrichAxeResultsWithLocators(page, axeResults);
+      axeResults.carouselAudit = { version: 'carousel-state-v1', skipped_by_option: true };
+    }
+    logElapsed(`axe 검사 끝 (총 ${scanCount}회)`);
     // page.setContent() intentionally uses an about:blank container in static
     // fallback mode. Keep the analyzed resource identity honest and stable.
     axeResults.url = analysisFinalUrl;
@@ -987,14 +1044,26 @@ async function run(url, outputPath, options = {}) {
         try {
           // This raster exists only as an inter-module CV input in the OS temp
           // directory. It is never persisted evidence or part of ingestion.
-          const cvImage = await page.screenshot({
+          const takeCvImage = (timeout) => page.screenshot({
             type: 'png',
             fullPage: true,
             caret: 'hide',
             animations: 'disabled',
             scale: 'css',
-            timeout: 60000,
+            timeout,
           });
+          let cvImage;
+          try {
+            cvImage = await takeCvImage(30000);
+          } catch (firstError) {
+            // 2026-10-14: 보건복지부·plus.gov.kr에서 전체 페이지 캡처가 시간 초과로 실패했다
+            // (가상 시간을 멈춘 상태라 새 화면이 그려지지 않는 것으로 추정). 가상 시간을 풀고
+            // 한 번 더 찍는다. 그 사이 화면이 조금 바뀔 수 있어(캐러셀 등) 로그에 남긴다.
+            console.warn(`   CV 이미지 첫 캡처 실패, 가상 시간을 풀고 다시 찍습니다: ${firstError.message.split('\n')[0]}`);
+            await releaseVirtualTime();
+            cvImage = await takeCvImage(60000);
+            console.log('   CV 이미지 재캡처 성공 (가상 시간 해제 후)');
+          }
           fs.writeFileSync(cvScreenshotPath, cvImage);
           console.log(`   CV 전용 임시 이미지 생성: ${cvScreenshotPath}`);
           // Elements under CV boxes, from the same page state as the image, so
@@ -1020,6 +1089,9 @@ async function run(url, outputPath, options = {}) {
     const kwcagResult = convert(included);
     kwcagResult.meta.replaySource = replaySourceMode;
     kwcagResult.meta.carouselAudit = axeResults.carouselAudit;
+    if (disabledAudits.length > 0) {
+      kwcagResult.meta.diagnostics = { disabled_audits: disabledAudits };
+    }
 
     // ── 6) 점수화 ──
     //   scorer.js: 100점 만점에서 심각도 × 가중치 배수로 감점.
@@ -1157,7 +1229,7 @@ async function run(url, outputPath, options = {}) {
 if (require.main === module) {
   const args = process.argv.slice(2);
   if (args.length === 0) {
-    console.log('사용법: node run.js <URL> [출력파일.json]');
+    console.log('사용법: node run.js <URL> [출력파일.json] [--no-popup] [--no-carousel] [--no-link-audit] [--no-compare]');
     console.log('예시:   node run.js https://www.gov.kr result.json');
     process.exit(1);
   }
@@ -1168,7 +1240,15 @@ if (require.main === module) {
     ? args[cvScreenshotIndex + 1]
     : null;
   const outputArgument = args[1] && !args[1].startsWith('--') ? args[1] : undefined;
-  run(args[0], outputArgument, { cvScreenshotPath }).catch((error) => process.exit(
+  // 진단용 스위치 (2026-10-16). 예: node run.js https://www.bonghwa.go.kr out.json --no-carousel
+  const runOptions = {
+    cvScreenshotPath,
+    popupAudit: !args.includes('--no-popup'),
+    carouselAudit: !args.includes('--no-carousel'),
+    linkAudit: !args.includes('--no-link-audit'),
+    compareLoad: !args.includes('--no-compare'),
+  };
+  run(args[0], outputArgument, runOptions).catch((error) => process.exit(
     error instanceof TargetPageUnavailableError ? TARGET_PAGE_UNAVAILABLE_EXIT_CODE : 1,
   ));
 }
@@ -1178,6 +1258,7 @@ module.exports = {
   TargetPageUnavailableError,
   assessTargetPage,
   challengeSignals,
+  isSecurityGateUrl,
   detectCrossOriginBotChallenge,
   loadStaticInitialResponseFallback,
   run,

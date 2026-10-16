@@ -68,7 +68,7 @@ import time
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 
 # ── 설정 ─────────────────────────────────────────────────────────────────────
@@ -196,7 +196,9 @@ NO_SCORABLE_RESULT_EXIT_CODE = 3
 # Most local analyzers finish quickly, while the browser-based rule scan may
 # need extra time for a slow public page, static fallback, and axe traversal.
 DEFAULT_STEP_TIMEOUT_SECONDS = 120
-RULE_BASED_STEP_TIMEOUT_SECONDS = 240
+# 240 → 480 (2026-10-14): 봉화군청이 팝업·캐러셀 검사까지 240초를 넘겼다. 멈춘 프로세스만
+# 이 시간에 걸리므로 정상 사이트의 시간과 결과는 그대로다.
+RULE_BASED_STEP_TIMEOUT_SECONDS = 480
 PROCESS_TERMINATION_WAIT_SECONDS = 5
 WINDOWS_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200)
 POSIX_SIGTERM = getattr(signal, "SIGTERM", 15)
@@ -480,6 +482,22 @@ def get_rule_result_url(rule_result: Optional[Dict]) -> str:
     return ""
 
 
+# 같은 사이트 안에 있는 차단 관문 주소 (2026-10-16 추가, 10/14 동작검증에서 발견). plus.gov.kr → plus.gov.kr/mbuster/Mbuster_T는
+# 호스트가 같아 아래 호스트 비교에 걸리지 않았고, 관문 화면이 95.6점으로 채점됐다.
+# run.js의 MBUSTER 신호와 같은 패턴이다(run.js가 먼저 막고, 여기는 이중 확인).
+SECURITY_GATE_URL_PATTERN = re.compile(r"/mbuster(?:[/?#]|$)", re.IGNORECASE)
+
+
+def is_security_gate_url(url: Any) -> bool:
+    if not isinstance(url, str) or not url:
+        return False
+    try:
+        decoded = unquote(url)
+    except Exception:
+        decoded = url
+    return bool(SECURITY_GATE_URL_PATTERN.search(decoded))
+
+
 def validate_target_navigation(requested_url: str, rule_result: Optional[Dict]) -> bool:
     analyzed_url = get_rule_result_url(rule_result)
     if not analyzed_url:
@@ -488,7 +506,11 @@ def validate_target_navigation(requested_url: str, rule_result: Optional[Dict]) 
 
     requested_host = normalized_host(requested_url)
     analyzed_host = normalized_host(analyzed_url)
-    blocked_or_error = analyzed_url.startswith("chrome-error://") or "botmanager" in analyzed_host
+    blocked_or_error = (
+        analyzed_url.startswith("chrome-error://")
+        or "botmanager" in analyzed_host
+        or is_security_gate_url(analyzed_url)
+    )
 
     if blocked_or_error or not analyzed_host or requested_host != analyzed_host:
         print("  [blocked] requested page was not analyzed.")

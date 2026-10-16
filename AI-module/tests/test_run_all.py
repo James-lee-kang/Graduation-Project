@@ -417,6 +417,22 @@ class RunAllPipelineTests(unittest.TestCase):
         self.assertEqual([command[0] for command in commands], ["node"])
         send_to_backend.assert_not_called()
 
+    def test_same_site_security_gate_is_not_the_requested_page(self):
+        # 2026-10-14: plus.gov.kr → plus.gov.kr/mbuster/Mbuster_T(같은 호스트)를 채점해 95.6점이 나왔다.
+        def rule(url):
+            return {"metadata": {"url": url}}
+        with redirect_stdout(io.StringIO()):
+            self.assertFalse(run_all.validate_target_navigation(
+                "https://plus.gov.kr", rule("https://plus.gov.kr/mbuster/Mbuster_T")))
+            self.assertFalse(run_all.validate_target_navigation(
+                "https://www.gov.kr", rule("https://plus.gov.kr/mbuster?returnUrl=%2F")))
+            self.assertTrue(run_all.validate_target_navigation(
+                "https://plus.gov.kr", rule("https://plus.gov.kr/main/index")))
+            self.assertTrue(run_all.validate_target_navigation(
+                "https://plus.gov.kr", rule("https://plus.gov.kr/mbusterguide")))
+        self.assertTrue(run_all.is_security_gate_url("https://plus.gov.kr/%6Dbuster/Mbuster_T"))
+        self.assertFalse(run_all.is_security_gate_url(None))
+
     def test_page_without_content_exits_as_unavailable_without_scoring(self):
         target_url = "https://example.test/fixture"
         with tempfile.TemporaryDirectory() as directory:

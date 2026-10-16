@@ -30,12 +30,13 @@ AI-module/
 ├── rule-based-analyzer/     # 모듈 1: 규칙 기반 코드 분석 (Node.js, 설명서 README(rule-based).md)
 ├── text-level-analyzer/     # 모듈 2: 문장 난이도 + 수정 제안 (Python, 설명서 README(text-level).md)
 ├── cv-analyzer/             # 모듈 3: 시각 명암비 분석 (Python, 설명서 README(CV).md)
-├── tests/                   # 단위 테스트 (점수 계산, 팝업 처리, CV 측정, 2차 설문 선정·분석, 가중치 분석)
+├── tests/                   # 단위 테스트 (점수 계산, 팝업 처리, CV 측정, 2차 설문 선정·분석, 가중치 분석, 결과 기록)
 ├── output/                  # 결과 파일 (실행 시 자동 생성)
 ├── run_all.py               # 통합 실행기
 ├── select_survey_texts.py   # 2차 설문 글 선정 + 구글폼 스크립트 생성 (2026-10-04)
 ├── analyze_survey2.py       # 2차 설문 분석: 응답 수집 전에 고정한 방법으로 ρ·판정 (2026-10-09)
 ├── weights_sensitivity.py   # 총점 가중치(5:3:2) 민감도 분석 (2026-10-13)
+├── record_result.py         # 동작검증 결과를 기록표에 적고 output/_archive/에 백업 (weights_sensitivity.py가 사용, 2026-10-16 추가)
 ├── standard_mapping.py      # 파이썬 모듈이 mapping.js의 KWCAG 대조표를 읽어 오는 다리
 ├── requirements.txt         # Python 패키지 (버전 고정)
 ├── .gitignore
@@ -66,7 +67,9 @@ AI-module/
 | adapter.js | axe-core 결과를 KWCAG 항목으로 매핑하는 어댑터 |
 | mapping.js | KWCAG 33개 항목의 매핑 데이터 (axe 규칙 ID, 심각도, 가중치). `standard_mapping.py`를 거쳐 텍스트·CV 모듈도 이 표를 쓴다. 7.3.4의 WCAG 번호는 3.3.7(2026-10-13에 3.3.9에서 바로잡음, 점수 영향 없음) |
 | scorer.js | 100점 감점 방식 점수 계산 (건당 감점 × 위반 요소 수, 등급 없음) |
-| test/ | Node 테스트 12개 파일, 78개 (`npm test`, 실제 Chromium을 띄움) |
+| test/ | Node 테스트 12개 파일, 81개 (`npm test`, 실제 Chromium을 띄움) |
+
+**검사가 멈출 때 (진단용 스위치, 2026-10-16).** `node run.js <URL> [출력.json] [--no-popup] [--no-carousel] [--no-link-audit] [--no-compare]`. 각각 레이어 팝업 처리, 캐러셀 슬라이드별 추가 검사, 자체 링크 검사 2개, 동적 영역용 두 번째 로딩을 끈다. 콘솔에 `[시간 +N초] axe 검사 3회차 시작 (캐러셀 슬라이드)`처럼 단계별 경과 시간이 찍혀 멈춘 단계를 알 수 있다. 끄면 `result.json`의 `meta.diagnostics.disabled_audits`에 남고, 그 점수는 다른 결과와 비교하지 않는다. 기본값은 모두 켜짐이고 `run_all.py`는 스위치를 넘기지 않아 평소 결과는 그대로다. 봉화군청(2026-10-14 axe 480초 초과) 원인 찾기용이다.
 
 **건당 감점 (severity × weight):** 두 값은 곱해서만 쓰이므로 "요소 1개당 감점" 한 칸으로 읽는다. 33개 항목은
 4.5(critical·high 7개), 3(major·high: 5.4.3), 2(major·medium 16개), 1.5(minor·high: 8.1.1), 1(minor·medium 3개),
@@ -259,17 +262,20 @@ python run_all.py <URL>
 | 상태 | 판정 |
 |---|---|
 | `HTTP_ERROR` | 리다이렉트 뒤 최종 문서 응답이 4xx·5xx. 본문이 있어도 오류 화면으로 본다 |
-| `EMPTY` | 보이는 글자 20자 미만이고 보이는 이미지·링크·입력 요소도 없음. 늦게 채워지는 본문을 위해 최대 15초 더 확인한다 |
-| `BLOCKED` | 출처와 관계없이, 보이는 글자 600자 이하·링크 4개 이하의 짧은 문서에 보안 확인·자동 접근 차단 문구가 있음. 출처가 바뀐 봇 확인 화면에서 쓸 초기 HTML이 없을 때도 해당한다 |
+| `EMPTY` | 보이는 글자 20자 미만이고 보이는 이미지·링크·입력 요소도 없음. 늦게 채워지는 본문을 위해 최대 45초 더 확인한다(본문이 보이면 바로 진행. 2026-10-14에 15 → 45초, 홈택스는 접속 15~30초 뒤에 본문이 그려짐) |
+| `BLOCKED` | 출처와 관계없이, 보이는 글자 600자 이하·링크 4개 이하의 짧은 문서에 보안 확인·자동 접근 차단 문구가 있음. 봇 확인 화면(출처가 바뀐 경우, 또는 같은 사이트 안의 `/mbuster/` 관문)에서 쓸 초기 HTML이 없거나 초기 응답 자체가 관문일 때도 해당한다 |
 
 본문 측정은 열린 Shadow DOM 안의 글자와 요소도 포함한다. CAPTCHA 입력칸이 있는 일반 페이지는 자체 본문과 링크가
 있어 차단 화면으로 보지 않는다. `run_all.py`는 세 상태를 대상 페이지 접근 실패(종료 코드 2, 백엔드
 `TARGET_PAGE_UNAVAILABLE`)로 처리하며 점수로 저장하지 않는다.
 
-외부 명령의 기본 제한 시간은 120초이며, 느린 공공 사이트의 로딩·정적 fallback·axe 검사를
-포함하는 규칙 기반 Step 1만 240초까지 기다린다. 제한 시간을 넘기면 Windows에서는
+외부 명령의 기본 제한 시간은 120초이며, 느린 공공 사이트의 로딩·정적 fallback·axe 검사(팝업·캐러셀 슬라이드마다 반복)를
+포함하는 규칙 기반 Step 1만 480초까지 기다린다(2026-10-14에 240 → 480초). 제한 시간을 넘기면 Windows에서는
 해당 프로세스 트리, macOS/Linux에서는 별도 프로세스 그룹을 종료해 Chromium 자식
 프로세스가 남지 않게 한다.
+
+CV용 전체 페이지 캡처는 30초 안에 끝나지 않으면, 캡처 직전에 멈춰 둔 페이지 시간을 풀고 60초 제한으로 한 번 더 찍는다(2026-10-14,
+보건복지부에서 확인). 그래도 실패하면 CV 없이 규칙·텍스트를 62.5:37.5로 합산한다.
 
 ---
 
@@ -427,6 +433,11 @@ CAPTCHA 우회나 `navigator.webdriver` 위장은 수행하지 않는다.
 Cloudflare 대기 화면 표식(`_cf_chl_`, `cf-chl-`, "Just a moment...", "Checking if the site connection is secure")을 함께 본다.
 MBuster와 Cloudflare 표식은 그것만으로 차단으로 본다. Cloudflare·DataDome 태그가 심긴 정상 페이지는 차단으로 보지 않는다.
 
+**같은 사이트 안의 차단 관문 (2026-10-16).** MBuster 주소(`/mbuster` 다음이 `/`·`?`·`#`·끝)는 출처가 같아도 차단으로 본다.
+2026-10-14 동작검증에서 plus.gov.kr이 같은 사이트의 `plus.gov.kr/mbuster/Mbuster_T`로 넘어갔는데, 출처가 같아 감지되지 않았고
+관문 화면이 95.6점으로 채점됐다. 이제 `run.js`가 점수 전에 `BLOCKED`(종료 코드 2)로 멈추고, 초기 응답 주소가 관문이면
+그 HTML을 정적 fallback에 쓰지 않는다. `run_all.py`의 `validate_target_navigation`도 분석 주소의 `/mbuster/`를 한 번 더 확인한다.
+
 ### 프론트엔드에 내려줄 때
 
 대시보드에 필요한 데이터는 전부 `result_final.json` 안에 있음:
@@ -439,16 +450,32 @@ MBuster와 Cloudflare 표식은 그것만으로 차단으로 본다. Cloudflare�
 
 ---
 
+## 알려진 한계 (2026-10-16)
+
+2026-10-14 11개 사이트 동작검증(정상 종료 10/11, 올바른 판정 9/11) 뒤 남은 것이다. 자세한 수치와 할 일은 개인 저장소 README 10-15절·11장.
+
+| 한계 | 내용 |
+|---|---|
+| 일부 사이트에서 검사 멈춤 | 봉화군청은 axe 검사가 480초 안에 끝나지 않는다(9/14에는 39초). 원인 미확인, 위 진단용 스위치로 PC에서 확인 예정 |
+| 글이 없는 페이지의 텍스트 100점 | 공식 적용 문단이 0개면 텍스트 점수가 100이고 기록표 경고로만 표시된다. "측정 불가"로 빼려면 `run_all.py`·백엔드 `TextScoreStatus`·대시보드 `textStatus`를 함께 바꿔야 해서 팀 합의 전까지 유지 |
+| 텍스트 표본이 작음 | 메인 페이지는 공식 적용 문단이 사이트당 0~9개라 문단 하나가 점수를 크게 움직인다. 본문 페이지로 표본을 늘리는 것은 후속 과제 |
+| 전체 페이지 캡처 실패 가능 | 재캡처로도 실패하면 CV가 빠진다(위) |
+| 같은 사이트 안의 다른 관문 | `/mbuster/` 말고는 주소 목록이 없다. 주소가 그대로인 보안 화면은 `BLOCKED` 문구 판정이 맡는다 |
+| 등급은 가중치에 민감, 측정은 한 번 | 순위는 비율을 바꿔도 거의 같지만 등급은 자주 바뀐다(6곳 분석). 같은 날 반복 측정의 편차는 재지 않았다 |
+| 자동 접근 차단 | 정부24 대표·홍익대처럼 자동 브라우저를 막는 사이트는 우회하지 않고 점수 없이 사유만 남긴다 |
+
+---
+
 ## 테스트
 
 ```powershell
-cd rule-based-analyzer; npm test; cd ..                                  # Node 12개 파일, 78개
-.\.venv\Scripts\python -m unittest discover -s tests                   # run_all·팝업·CV 측정·설문 선정·설문 분석·가중치, 123개
+cd rule-based-analyzer; npm test; cd ..                                  # Node 12개 파일, 81개
+.\.venv\Scripts\python -m unittest discover -s tests                   # run_all·팝업·CV 측정·설문 선정·설문 분석·가중치·기록, 133개
 .\.venv\Scripts\python -m unittest discover -s text-level-analyzer -p "test_*.py"   # 95개 (MeCab 필요)
 .\.venv\Scripts\python cv-analyzer\test_contrast_formula.py            # 명암비 공식 대조
 ```
 
-2026-10-13 기준 모두 통과(클라우드, Linux). 2026-10-14에 Windows PC에서도 모두 통과했다. 처음 설치하는 PC는 `pip install -r requirements.txt`와 `rule-based-analyzer`에서 `npm ci`를 먼저 한다(빠뜨리면 패키지 없음, axe 버전 차이로 실패). 텍스트 점수 고정 테스트는 형태소 사전에 따라 "누리집" 분할이 달라 사전별 값을 둔다. 개인 작업본에는 `tests/test_record_result.py`(7개)가 더 있어 130개다. Node 테스트는 가끔 파일 단위로 "Unable to deserialize cloned data" 오류가 나는데, 테스트 러너 쪽 오류라 다시 돌리면 통과한다.
+2026-10-16 기준 모두 통과(클라우드, Linux. 10/14에 Windows PC에서도 모두 통과, 10/16 추가분은 PC에서 다시 확인 필요). 처음 설치하는 PC는 `pip install -r requirements.txt`와 `rule-based-analyzer`에서 `npm ci`를 먼저 한다(빠뜨리면 패키지 없음, axe 버전 차이로 실패). 텍스트 점수 고정 테스트는 형태소 사전에 따라 "누리집" 분할이 달라 사전별 값을 둔다. `record_result.py`(동작검증 결과를 기록표에 적는 스크립트)와 그 테스트는 2026-10-16부터 여기에도 있다. `weights_sensitivity.py`가 import하는데 없어서 가중치 분석과 그 테스트가 실패하고 있었다. 기록표 `site_test_tracker.csv`는 개인 작업본에만 있다. Node 테스트는 가끔 파일 단위로 "Unable to deserialize cloned data" 오류가 나는데, 테스트 러너 쪽 오류라 다시 돌리면 통과한다.
 
 ---
 

@@ -7,6 +7,7 @@ const { chromium } = require('playwright');
 const {
   challengeSignals,
   detectCrossOriginBotChallenge,
+  isSecurityGateUrl,
   usableInitialHtml,
 } = require('../run');
 
@@ -106,4 +107,52 @@ test('detects a cross-origin redirect to the MBuster block page', async () => {
   } finally {
     await browser.close();
   }
+});
+
+test('detects a same-origin MBuster gate (plus.gov.kr → plus.gov.kr/mbuster/Mbuster_T)', async () => {
+  // 2026-10-14 동작검증: 같은 사이트 안의 관문이라 출처 비교에 걸리지 않고 95.6점으로 채점됐다.
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.route('https://plus.gov.kr/**', (route) => route.fulfill({
+      status: 200,
+      contentType: 'text/html; charset=utf-8',
+      body: '<!doctype html><html lang="ko"><head><title>정부24</title></head><body><p>잠시 후 다시 이용해 주세요.</p></body></html>',
+    }));
+    await page.goto('https://plus.gov.kr/mbuster/Mbuster_T');
+    const challenge = await detectCrossOriginBotChallenge(page, 'https://plus.gov.kr/');
+    assert.equal(challenge.detected, true);
+    assert.deepEqual(challenge.signals, ['MBUSTER']);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('does not treat an ordinary same-origin page as a gate', async () => {
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.route('https://plus.gov.kr/**', (route) => route.fulfill({
+      status: 200,
+      contentType: 'text/html; charset=utf-8',
+      body: '<!doctype html><html lang="ko"><head><title>정부24</title></head><body><main><h1>민원 서비스</h1></main></body></html>',
+    }));
+    await page.goto('https://plus.gov.kr/main/index');
+    const challenge = await detectCrossOriginBotChallenge(page, 'https://plus.gov.kr/');
+    assert.equal(challenge.detected, false);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('never replays an initial response that is itself the MBuster gate', () => {
+  const gateHtml = `<!doctype html><html lang="ko"><head><title>정부24</title></head>
+    <body><p>자동 접근이 감지되어 잠시 후 다시 이용해 주세요. 이 문장은 100자를 넘기기 위한 채움 문장입니다.</p></body></html>`;
+  const base = { status: 200, contentType: 'text/html; charset=utf-8', html: gateHtml };
+  assert.equal(usableInitialHtml({ ...base, url: 'https://plus.gov.kr/mbuster/Mbuster_T' }), false);
+  assert.equal(usableInitialHtml({ ...base, url: 'https://plus.gov.kr/mbuster?returnUrl=%2F' }), false);
+  assert.equal(usableInitialHtml({ ...base, url: 'https://plus.gov.kr/' }), true);
+  assert.equal(isSecurityGateUrl('https://plus.gov.kr/mbuster/Mbuster_T'), true);
+  assert.equal(isSecurityGateUrl('https://plus.gov.kr/mbusterguide'), false);
+  assert.equal(isSecurityGateUrl(''), false);
 });

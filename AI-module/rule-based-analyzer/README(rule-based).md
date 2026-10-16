@@ -37,10 +37,11 @@ rule-based-analyzer/
 cd rule-based-analyzer
 npm ci                       # package-lock.json 버전 그대로 설치
 npx playwright install chromium
-node run.js <URL> [출력파일.json] [--cv-screenshot <PNG 경로>]
+node run.js <URL> [출력파일.json] [--cv-screenshot <PNG 경로>] [--no-popup] [--no-carousel] [--no-link-audit] [--no-compare]
 
 # 예시
 node run.js https://www.mohw.go.kr result.json
+node run.js https://www.bonghwa.go.kr r_diag.json --no-carousel   # 검사가 멈출 때 (아래)
 npm run scan -- https://www.mohw.go.kr result.json   # 위와 같음
 ```
 
@@ -58,6 +59,17 @@ npm run scan -- https://www.mohw.go.kr result.json   # 위와 같음
 
 종료 코드는 정상 0, 대상 페이지가 아님(`HTTP_ERROR`, `EMPTY`, `BLOCKED`) 2, 그 밖의 실패 1이다.
 
+**검사가 멈출 때 (진단용 스위치, 2026-10-16).** 봉화군청은 2026-10-14에 axe 검사가 480초 안에 끝나지 않았다. 원인을 찾으려고 스위치 네 개를 넣었다. 기본값은 모두 켜짐이고 `run_all.py`는 스위치를 넘기지 않으므로 평소 결과는 그대로다.
+
+| 스위치 | 끄는 것 |
+|---|---|
+| `--no-popup` | 레이어 팝업 찾기·팝업 검사·닫기 |
+| `--no-carousel` | 캐러셀 숨은 슬라이드별 추가 axe 검사(첫 화면 검사 한 번만) |
+| `--no-link-audit` | 자체 링크 검사 2개 |
+| `--no-compare` | 동적 영역용 두 번째 로딩 |
+
+실행하면 `[시간 +N초] axe 검사 3회차 시작 (캐러셀 슬라이드)`처럼 단계별 경과 시간이 찍힌다. 멈추면 마지막 줄이 멈춘 단계다. 먼저 스위치 없이 돌려 멈춘 단계를 보고, 그 단계의 스위치를 하나씩 꺼서 끝나는지 본다. 스위치를 끈 결과는 `result.json`의 `meta.diagnostics.disabled_audits`에 남고, 점수를 다른 결과와 비교하지 않는다.
+
 메시지(`help`, `failure_summary`)는 기본이 한국어다. axe 영어 원문이 필요하면 `AXE_LOCALE=en`(PowerShell: `$env:AXE_LOCALE="en"`)을 주고 실행한다. 점수와 위반 규칙·개수는 같다.
 
 > 실제 서비스에서는 `run_all.py`가 이 파일을 호출하여 결과를 `output/` 폴더에 저장한다.  
@@ -73,8 +85,8 @@ npm run scan -- https://www.mohw.go.kr result.json   # 위와 같음
 | 2 | 페이지 로딩. 최초 응답 HTML을 따로 기록해 두고 `load`까지 최대 60초 대기 |
 | 3 | 동적 영역 비교용 두 번째 로딩을 미리 시작. 첫 로딩과 같은 설정이지만 **쿠키·저장소가 빈 새 브라우저 컨텍스트**에서 연다(2026-10-01) |
 | 4 | 안정화 대기 (5초 + `document.readyState` 최대 10초) |
-| 5 | 봇 대기 화면 감지. 다른 출처의 보안 확인 화면(MBuster, Cloudflare, STCLab, CAPTCHA 등)이나 BotManager 대기 화면이면, 최초 응답 HTML이 쓸 만할 때만 스크립트를 빼고 다시 열어 정적 DOM을 분석한다(`INITIAL_RESPONSE_STATIC`). CAPTCHA 우회나 webdriver 위장은 하지 않는다 |
-| 6 | 대상 페이지 판정(`assessTargetPage`). `HTTP_ERROR`(4xx·5xx), `EMPTY`(보이는 글자 20자 미만, 이미지·링크·입력 없음), `BLOCKED`(짧은 문서에 차단 문구)면 점수를 내지 않고 종료 코드 2 |
+| 5 | 봇 대기 화면 감지. 다른 출처의 보안 확인 화면(MBuster, Cloudflare, STCLab, CAPTCHA 등)이나 BotManager 대기 화면, 같은 사이트 안이라도 MBuster 관문 주소(`/mbuster/`, 2026-10-16)면, 최초 응답 HTML이 쓸 만할 때만 스크립트를 빼고 다시 열어 정적 DOM을 분석한다(`INITIAL_RESPONSE_STATIC`). 최초 응답이 없거나 그 주소가 관문이면 `BLOCKED`. CAPTCHA 우회나 webdriver 위장은 하지 않는다. (2026-10-14 plus.gov.kr → `plus.gov.kr/mbuster/Mbuster_T`가 같은 출처라 걸러지지 않고 95.6점이 나와서 고침) |
+| 6 | 대상 페이지 판정(`assessTargetPage`). 늦게 그려지는 본문을 최대 45초 기다린 뒤(2026-10-14에 15 → 45초, 홈택스) `HTTP_ERROR`(4xx·5xx), `EMPTY`(보이는 글자 20자 미만, 이미지·링크·입력 없음), `BLOCKED`(짧은 문서에 차단 문구)면 점수를 내지 않고 종료 코드 2 |
 | 7 | 레이어 팝업. 화면의 20% 이상을 덮는 고정 위치 레이어를 찾아 팝업만 axe와 링크 검사(`link-audit.js`)로 검사하고, 내용과 CV 이미지를 저장한 뒤 닫는다 |
 | 8 | 두 번째 로딩의 내용 서명(글자, 이미지 주소, iframe 주소)을 받는다 |
 | 9 | 애니메이션 정지 (axe와 스냅샷이 같은 화면 상태를 보게) |
@@ -82,7 +94,7 @@ npm run scan -- https://www.mohw.go.kr result.json   # 위와 같음
 | 11 | 제외 영역 표시: 광고(`AD`)와 두 로딩에서 바뀐 영역(`DYNAMIC`)에 `data-ua-excluded-region` |
 | 12 | 숨김 요소 표시: 이 화면 폭에서 안 그려지는 요소에 `data-ua-hidden` |
 | 13 | DOM 스냅샷(`result.html`)과 캡처 메타데이터(`result_artifact.json`) 저장, 위반 요소 위치(locator) 계산 |
-| 14 | `--cv-screenshot`이 있으면 전체 페이지 이미지와 `result_cv_anchors.json` 저장 |
+| 14 | `--cv-screenshot`이 있으면 전체 페이지 이미지와 `result_cv_anchors.json` 저장. 첫 캡처 30초 안에 안 끝나면 멈춰 둔 페이지 시간을 풀고 60초 제한으로 다시 찍는다(2026-10-14) |
 | 15 | 위반을 점수 대상과 제외 영역(`AD`, `DYNAMIC`)으로 나누고 팝업 위반을 `POPUP`으로 붙인 뒤 `adapter.convert()`(노드별 개선 안내 계산 포함) → `scorer.score()` → `toApiFormat()`(`failure_summary` 끝에 "개선 안내", `fix_hint`) |
 | 16 | `result.json`, `result_api.json` 저장, 콘솔에 점수와 위반 많은 항목 출력 |
 
@@ -287,13 +299,13 @@ KWCAG에 매핑되지 않은 unmapped 위반은 minor × medium (건당 1점)으
 
 ## 테스트
 
-`npm test`(`node --test test/*.test.js`)로 12개 파일, 78개 테스트를 돌린다(2026-10-13 기준). 대부분 로컬 테스트 서버에 가짜 페이지를 띄우고 실제 Chromium으로 `run.js`를 돌려 결과를 확인한다.
+`npm test`(`node --test test/*.test.js`)로 12개 파일, 81개 테스트를 돌린다(2026-10-16 기준). 대부분 로컬 테스트 서버에 가짜 페이지를 띄우고 실제 Chromium으로 `run.js`를 돌려 결과를 확인한다.
 
 | 파일 | 확인하는 것 |
 |---|---|
 | `artifact.test.js` | locator 경로, DOM 스냅샷, 캡처 메타데이터 |
 | `carousel-audit.test.js` | 캐러셀 숨은 슬라이드 검사와 원상 복구 |
-| `challenge-detection.test.js` | 봇 대기 화면 신호(MBuster, Cloudflare 포함), 태그만 심긴 정상 페이지 오탐 없음 |
+| `challenge-detection.test.js` | 봇 대기 화면 신호(MBuster, Cloudflare 포함), 태그만 심긴 정상 페이지 오탐 없음, 같은 사이트 안 `/mbuster/` 관문 감지와 관문 응답을 정적 대체에 안 쓰기(2026-10-16) |
 | `document-content.test.js` | `EMPTY`, `HTTP_ERROR`, `BLOCKED` 판정 |
 | `excluded-regions.test.js` | 광고·동적 영역 분리, "[광고]" 대체 텍스트 광고, 쿠키를 보고 재방문자에게 다른 문구를 주는 고정 요소가 `DYNAMIC`으로 빠지지 않음 |
 | `hidden-elements.test.js` | 숨김 요소 표시 |
