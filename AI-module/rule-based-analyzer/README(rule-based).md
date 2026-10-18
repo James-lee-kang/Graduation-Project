@@ -59,7 +59,7 @@ npm run scan -- https://www.mohw.go.kr result.json   # 위와 같음
 
 종료 코드는 정상 0, 대상 페이지가 아님(`HTTP_ERROR`, `EMPTY`, `BLOCKED`) 2, 그 밖의 실패 1이다.
 
-**검사가 멈출 때 (진단용 스위치, 2026-10-16).** 봉화군청은 2026-10-14에 axe 검사가 480초 안에 끝나지 않았다. 원인을 찾으려고 스위치 네 개를 넣었다. 기본값은 모두 켜짐이고 `run_all.py`는 스위치를 넘기지 않으므로 평소 결과는 그대로다.
+**검사가 멈출 때 (진단용 스위치, 2026-10-16).** 봉화군청은 2026-10-14에 axe 검사가 480초 안에 끝나지 않았다. 원인을 찾으려고 스위치 네 개를 넣었다. 이것으로 찾은 원인은 캐러셀 슬라이드를 바꾼 뒤 사라진 위반 요소의 위치를 찾을 때마다 Playwright 기본 대기 30초가 걸린 것이었고, `artifact.js`에서 고쳤다(요소가 없으면 바로 "찾지 못함", 위치·스타일 읽기는 2초 상한). 기본값은 모두 켜짐이고 `run_all.py`는 스위치를 넘기지 않으므로 평소 결과는 그대로다.
 
 | 스위치 | 끄는 것 |
 |---|---|
@@ -97,6 +97,8 @@ npm run scan -- https://www.mohw.go.kr result.json   # 위와 같음
 | 14 | `--cv-screenshot`이 있으면 전체 페이지 이미지와 `result_cv_anchors.json` 저장. 첫 캡처 30초 안에 안 끝나면 멈춰 둔 페이지 시간을 풀고 60초 제한으로 다시 찍는다(2026-10-14) |
 | 15 | 위반을 점수 대상과 제외 영역(`AD`, `DYNAMIC`)으로 나누고 팝업 위반을 `POPUP`으로 붙인 뒤 `adapter.convert()`(노드별 개선 안내 계산 포함) → `scorer.score()` → `toApiFormat()`(`failure_summary` 끝에 "개선 안내", `fix_hint`) |
 | 16 | `result.json`, `result_api.json` 저장, 콘솔에 점수와 위반 많은 항목 출력 |
+
+**검사 도중 차단 화면 (2026-10-18).** 5번 감지는 로딩 직후 한 번 돈다. 그 뒤(7~14번 도중) 오류가 나면, 렌더링된 페이지를 분석하던 중일 때만 주소가 바뀌기를 최대 3초·새 문서를 최대 10초 기다린 뒤 같은 감지(`detectChallengeAfterFailure`)를 한 번 더 돌린다. 봇 확인 화면이면 `BLOCKED`(종료 코드 2), 아니면 원래 오류(종료 코드 1). 2026-10-18 재측정에서 홍익대가 axe 검사 중 `cdn-botmanager.stclab.com`으로 넘어가 "Execution context was destroyed"로 끝나고 "분석 실패"가 된 것이 계기다.
 
 **Playwright는 run.js 한 곳에서만 실행**  
 모듈마다 브라우저를 따로 띄우면 리소스가 낭비되고 렌더링 시점이 달라 데이터가 어긋난다. run.js에서 axe와 locator가 본 같은 일시정지 DOM을 정적 HTML로 저장하고, 다른 모듈은 그 파일을 읽는다. CV 이미지는 `--cv-screenshot`을 줄 때만 만든다.
@@ -299,13 +301,13 @@ KWCAG에 매핑되지 않은 unmapped 위반은 minor × medium (건당 1점)으
 
 ## 테스트
 
-`npm test`(`node --test test/*.test.js`)로 12개 파일, 81개 테스트를 돌린다(2026-10-16 기준). 대부분 로컬 테스트 서버에 가짜 페이지를 띄우고 실제 Chromium으로 `run.js`를 돌려 결과를 확인한다.
+`npm test`(`node --test test/*.test.js`)로 12개 파일, 84개 테스트를 돌린다(2026-10-18 기준). 대부분 로컬 테스트 서버에 가짜 페이지를 띄우고 실제 Chromium으로 `run.js`를 돌려 결과를 확인한다.
 
 | 파일 | 확인하는 것 |
 |---|---|
-| `artifact.test.js` | locator 경로, DOM 스냅샷, 캡처 메타데이터 |
+| `artifact.test.js` | locator 경로, DOM 스냅샷, 캡처 메타데이터, 검사 뒤 사라진 요소는 기다리지 않고 "찾지 못함"(2026-10-16) |
 | `carousel-audit.test.js` | 캐러셀 숨은 슬라이드 검사와 원상 복구 |
-| `challenge-detection.test.js` | 봇 대기 화면 신호(MBuster, Cloudflare 포함), 태그만 심긴 정상 페이지 오탐 없음, 같은 사이트 안 `/mbuster/` 관문 감지와 관문 응답을 정적 대체에 안 쓰기(2026-10-16) |
+| `challenge-detection.test.js` | 봇 대기 화면 신호(MBuster, Cloudflare 포함), 태그만 심긴 정상 페이지 오탐 없음, 같은 사이트 안 `/mbuster/` 관문 감지와 관문 응답을 정적 대체에 안 쓰기(2026-10-16), 검사 도중 다른 출처의 봇 확인 화면으로 바뀌면 `BLOCKED`·같은 사이트 평범한 페이지면 원래 오류(2026-10-18) |
 | `document-content.test.js` | `EMPTY`, `HTTP_ERROR`, `BLOCKED` 판정 |
 | `excluded-regions.test.js` | 광고·동적 영역 분리, "[광고]" 대체 텍스트 광고, 쿠키를 보고 재방문자에게 다른 문구를 주는 고정 요소가 `DYNAMIC`으로 빠지지 않음 |
 | `hidden-elements.test.js` | 숨김 요소 표시 |

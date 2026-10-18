@@ -246,6 +246,28 @@ async function detectCrossOriginBotChallenge(page, initialUrl) {
   };
 }
 
+// 2026-10-17 재측정: 홍익대는 본문 확인(+8.5초) 뒤 axe 검사 도중 봇 확인 화면
+// (cdn-botmanager.stclab.com)으로 넘어가 "Execution context was destroyed"로 끝났다.
+// 종료 코드 1이라 run_all은 "점수 없음"(3)으로 처리했다. 10/14에는 같은 이동이 로딩
+// 단계에서 잡혀 "대상 페이지 아님"(2)이었으니, 결과가 이동 시점에 따라 갈렸다.
+// 검사가 실패하면 페이지가 그사이 차단 화면으로 바뀌었는지 한 번 더 본다.
+// 바뀌었으면 분석 실패가 아니라 대상 페이지 아님(BLOCKED)이다.
+async function detectChallengeAfterFailure(page, analyzedUrl, { navigationWaitMs = 3000, loadWaitMs = 10000 } = {}) {
+  if (!analyzedUrl || page.isClosed()) return null;
+  // 오류가 난 순간에는 이동이 막 시작돼 page.url()이 아직 옛 주소일 수 있다.
+  // 주소가 바뀌기를 잠깐 기다린 뒤(안 바뀌면 그대로 진행) 새 문서가 뜰 때까지 기다려야
+  // 본문 신호(STCLAB 등)를 읽을 수 있다. 이 대기는 검사가 실패했을 때만 든다.
+  const sameUrl = (value) => {
+    try { return withoutUrlFragment(value) === analyzedUrl; } catch { return false; }
+  };
+  if (sameUrl(page.url())) {
+    await page.waitForURL((value) => !sameUrl(value.href), { timeout: navigationWaitMs, waitUntil: 'commit' })
+      .catch(() => {});
+  }
+  await page.waitForLoadState('load', { timeout: loadWaitMs }).catch(() => {});
+  return detectCrossOriginBotChallenge(page, analyzedUrl);
+}
+
 function usableInitialHtml(snapshot) {
   // 서버가 첫 요청부터 차단 관문으로 보내면 최초 2xx 응답 자체가 관문 화면이다.
   // 그 HTML을 정적 fallback으로 채점하면 안 된다.
@@ -832,6 +854,9 @@ async function run(url, outputPath, options = {}) {
     console.log(`   [시간 +${((Date.now() - runStartedAt) / 1000).toFixed(1)}초] ${label}`);
   };
 
+  // catch에서 "검사 도중 차단 화면으로 바뀌었는지" 확인할 때 쓰므로 try 밖에 둔다.
+  let analysisFinalUrl = null;
+  let replaySourceMode = 'RENDERED_DOM';
   try {
     console.log('2. 페이지 로딩 중...');
     // waitUntil: 'load' — 문서와 초기 종속 리소스의 load 이벤트까지 대기
@@ -868,8 +893,7 @@ async function run(url, outputPath, options = {}) {
     
     await page.waitForFunction(() => document.readyState === 'complete', { timeout: 10000 }).catch(() => {});
 
-    let analysisFinalUrl = withoutUrlFragment(page.url());
-    let replaySourceMode = 'RENDERED_DOM';
+    analysisFinalUrl = withoutUrlFragment(page.url());
     // Record why no score was produced; run_all.py reads only this marker and
     // never ingests it as an analysis result.
     const reportUnavailablePage = (documentHealth) => {
@@ -1208,6 +1232,27 @@ async function run(url, outputPath, options = {}) {
 
     return kwcagResult;
   } catch (err) {
+    // 검사 도중 차단 화면으로 바뀐 경우(2026-10-17 홍익대)는 대상 페이지 아님으로 돌린다.
+    // 정적 fallback은 이미 차단을 감지하고 저장된 최초 응답을 분석하는 중이라 제외한다.
+    if (!(err instanceof TargetPageUnavailableError)
+        && analysisFinalUrl
+        && replaySourceMode === 'RENDERED_DOM') {
+      const challenge = await detectChallengeAfterFailure(page, analysisFinalUrl).catch(() => null);
+      if (challenge?.detected) {
+        console.log(`   [수집 실패] 검사 도중 봇/보안 확인 화면으로 바뀌었습니다 (원래 오류: ${err.message})`);
+        console.log(`   [수집 실패] ${challenge.signals.join(', ')}: ${challenge.currentUrl}`);
+        const documentHealth = {
+          status: 'BLOCKED', http_status: null,
+          has_body: true, visible_text_length: 0, visible_content_count: 0,
+        };
+        fs.writeFileSync(siblingOutputPath(output, '_api.json'), JSON.stringify({
+          metadata: { url: analysisFinalUrl, document_health: documentHealth },
+        }, null, 2), 'utf-8');
+        const unavailable = new TargetPageUnavailableError(documentHealth);
+        console.error('검사 중 오류 발생:', unavailable.message);
+        throw unavailable;
+      }
+    }
     // 페이지 로딩 실패, axe 실행 오류 등 — 메시지만 출력하고 상위로 재throw
     // (CLI 진입부에서 exit code 1로 종료)
     console.error('검사 중 오류 발생:', err.message);
@@ -1259,6 +1304,7 @@ module.exports = {
   assessTargetPage,
   challengeSignals,
   isSecurityGateUrl,
+  detectChallengeAfterFailure,
   detectCrossOriginBotChallenge,
   loadStaticInitialResponseFallback,
   run,

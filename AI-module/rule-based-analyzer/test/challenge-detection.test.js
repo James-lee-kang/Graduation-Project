@@ -156,3 +156,101 @@ test('never replays an initial response that is itself the MBuster gate', () => 
   assert.equal(isSecurityGateUrl('https://plus.gov.kr/mbusterguide'), false);
   assert.equal(isSecurityGateUrl(''), false);
 });
+
+// 2026-10-17 재측정: 홍익대는 본문 확인 뒤 axe 검사 도중 다른 출처의 봇 확인 화면으로
+// 넘어가 "Execution context was destroyed"로 끝났다(분석 실패, 종료 코드 1).
+// 검사 도중 차단 화면으로 바뀐 것은 대상 페이지 아님(BLOCKED, 종료 코드 2)이어야 한다.
+test('a page that turns into a cross-origin bot check during the axe scan is BLOCKED, not a failure', async () => {
+  const http = require('node:http');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { TargetPageUnavailableError, run } = require('../run');
+
+  // 127.0.0.1과 localhost는 출처가 다르다. 본문 페이지는 axe가 주입되는 순간
+  // (window.axe가 생기는 순간) 다른 출처의 봇 확인 화면으로 이동한다.
+  const server = http.createServer((request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    if (request.url.startsWith('/challenge')) {
+      response.end(`<!doctype html><html lang="ko"><head><title>BotManager</title></head><body>
+        <div id="bm">stclab botmanager challenge</div></body></html>`);
+      return;
+    }
+    const port = server.address().port;
+    response.end(`<!doctype html><html lang="ko"><head><title>대학교</title></head><body>
+      <main><h1>대학교 홈페이지</h1><p>입학 안내와 학사 공지를 확인하세요.</p>
+      <a href="/notice">공지사항</a></main>
+      <script>
+        const timer = setInterval(() => {
+          if (window.axe) {
+            clearInterval(timer);
+            location.href = 'http://localhost:${port}/challenge/index.html';
+          }
+        }, 1);
+      </script></body></html>`);
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mid-scan-challenge-'));
+  try {
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    const output = path.join(directory, 'result.json');
+    await assert.rejects(
+      run(`${origin}/`, output, { settleMs: 0, contentGraceMs: 0, compareLoad: false, carouselAudit: false }),
+      (error) => error instanceof TargetPageUnavailableError,
+    );
+    const marker = JSON.parse(fs.readFileSync(path.join(directory, 'result_api.json'), 'utf8'));
+    assert.equal(marker.metadata.url, `${origin}/`);
+    assert.equal(marker.metadata.document_health.status, 'BLOCKED');
+    assert.equal(marker.score, undefined, 'the marker must not carry a score');
+    assert.equal(fs.existsSync(output), false);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+// 반대로 같은 사이트의 평범한 페이지로 넘어간 것은 차단이 아니다. 원래 오류 그대로
+// 분석 실패(종료 코드 1)로 남아야 한다.
+test('a mid-scan move to an ordinary same-site page stays an analysis failure', async () => {
+  const http = require('node:http');
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { TargetPageUnavailableError, run } = require('../run');
+
+  const server = http.createServer((request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    if (request.url.startsWith('/other')) {
+      response.end(`<!doctype html><html lang="ko"><head><title>다른 안내</title></head><body>
+        <main><h1>다른 안내 페이지</h1><p>평범한 본문입니다.</p></main></body></html>`);
+      return;
+    }
+    response.end(`<!doctype html><html lang="ko"><head><title>대학교</title></head><body>
+      <main><h1>대학교 홈페이지</h1><p>입학 안내와 학사 공지를 확인하세요.</p></main>
+      <script>
+        const timer = setInterval(() => {
+          if (window.axe) { clearInterval(timer); location.href = '/other'; }
+        }, 1);
+      </script></body></html>`);
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mid-scan-move-'));
+  try {
+    const output = path.join(directory, 'result.json');
+    await assert.rejects(
+      run(`http://127.0.0.1:${server.address().port}/`, output,
+        { settleMs: 0, contentGraceMs: 0, compareLoad: false, carouselAudit: false }),
+      (error) => !(error instanceof TargetPageUnavailableError) && /Execution context was destroyed/.test(error.message),
+    );
+    assert.equal(fs.existsSync(path.join(directory, 'result_api.json')), false);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

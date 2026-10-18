@@ -526,3 +526,33 @@ test('falls back to nonblank initial HTML after a cross-origin bot challenge wit
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('a node that disappeared after the scan is marked unresolved without waiting', async () => {
+  // 2026-10-16 봉화군청: Swiper 슬라이드를 바꿀 때마다 사라진 요소 하나에 Playwright 기본
+  // 대기(30초)가 걸려 규칙 검사가 841초 걸렸다. 결과는 같고 기다리지만 않아야 한다.
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage();
+  try {
+    await page.setContent('<!doctype html><html lang="ko"><body><div id="kept">남은 요소</div></body></html>');
+    const results = {
+      violations: [{
+        nodes: [
+          { target: ['#gone'], html: '<div id="gone">사라진 요소</div>' },
+          { target: ['#kept'], html: '<div id="kept">남은 요소</div>' },
+        ],
+      }],
+    };
+    const started = Date.now();
+    await enrichAxeResultsWithLocators(page, results);
+    const elapsed = Date.now() - started;
+    const [gone, kept] = results.violations[0].nodes.map(node => node.locator);
+    assert.ok(elapsed < 5000, `took ${elapsed}ms`);
+    assert.equal(gone.visible, false);
+    assert.equal(gone.x, null);
+    assert.equal(gone.pathSteps.length > 0, true);
+    assert.equal(kept.visible, true);
+    assert.equal(typeof kept.x, 'number');
+  } finally {
+    await browser.close();
+  }
+});

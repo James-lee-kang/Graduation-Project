@@ -2,6 +2,10 @@
 
 const MAX_FRAME_URL_LENGTH = 2048;
 const MAX_HTML_SNIPPET_LENGTH = 32000;
+// 위반 요소를 다시 찾을 때 기다리는 최대 시간. 요소는 검사 직후라 이미 DOM에 있으므로
+// 기다릴 이유가 없다. Playwright 기본값(30초)을 쓰면, 그 사이 사라진 요소 하나마다 30초씩
+// 멈춘다(2026-10-16 봉화군청: Swiper 캐러셀 슬라이드를 바꿀 때마다 약 43초, 검사 841초).
+const LOCATOR_WAIT_MS = 2000;
 
 function asSelectorList(component) {
   if (typeof component === 'string') {
@@ -311,7 +315,7 @@ async function clipRectToOverflowAncestors(targetLocator, topLevelBox) {
       current = nextComposedParent(current);
     }
     return { elementRect, clippedRect, complexClip: false };
-  });
+  }, undefined, { timeout: LOCATOR_WAIT_MS });
 
   if (!local.clippedRect || local.complexClip) {
     return null;
@@ -347,7 +351,7 @@ async function resolveAxeNodeLocator(page, node) {
       }
 
       if (index < target.length - 1) {
-        const frameElement = await locator.elementHandle();
+        const frameElement = await locator.elementHandle({ timeout: LOCATOR_WAIT_MS });
         const childFrame = frameElement ? await frameElement.contentFrame() : null;
         if (!childFrame) {
           break;
@@ -362,8 +366,16 @@ async function resolveAxeNodeLocator(page, node) {
     targetLocator = null;
   }
 
+  // 검사 뒤 사라진 요소(캐러셀이 슬라이드를 복제·재배치한 경우 등)는 바로 "찾지 못함"으로
+  // 처리한다. 예전에는 아래 호출들이 각각 30초씩 기다린 뒤 실패해 결과는 같고 시간만 들었다.
+  if (targetLocator && await targetLocator.count().catch(() => 0) === 0) {
+    targetLocator = null;
+  }
+
   if (targetLocator && hasAuditAttribute(target)) {
-    const structural = await targetLocator.evaluate(structuralSelectorWithinRoot).catch(() => null);
+    const structural = await targetLocator
+      .evaluate(structuralSelectorWithinRoot, undefined, { timeout: LOCATOR_WAIT_MS })
+      .catch(() => null);
     if (structural) {
       const last = target.length - 1;
       target[last] = Array.isArray(target[last])
@@ -391,7 +403,7 @@ async function resolveAxeNodeLocator(page, node) {
 
   try {
     const [box, styleVisible, scroll, carouselContext] = await Promise.all([
-      targetLocator.boundingBox(),
+      targetLocator.boundingBox({ timeout: LOCATOR_WAIT_MS }),
       targetLocator.isVisible().catch(() => false),
       page.evaluate(() => ({ x: window.scrollX, y: window.scrollY })),
       targetLocator.evaluate(element => {
@@ -425,7 +437,7 @@ async function resolveAxeNodeLocator(page, node) {
           current = nextComposedParent(current);
         }
         return null;
-      }).catch(() => null),
+      }, undefined, { timeout: LOCATOR_WAIT_MS }).catch(() => null),
     ]);
 
     if (carouselContext) {

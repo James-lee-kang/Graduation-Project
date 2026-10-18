@@ -27,10 +27,12 @@
            step5 CV         : modules.cv_visual.status가 success면 O (not_measured·failed는 X)
          result_final.json이 없으면(파이프라인이 중간에 죽었거나 차단·빈 문서) 중간 산출물
          파일이 있는지로 판정한다.
-       - total_score, grade를 그대로 기록
+       - total_score, grade를 그대로 기록. 단 규칙 점수가 없는 진단용 결과(run_all 종료 코드 3,
+         total_score 0)는 평가가 아니므로 비워 둔다(10/17)
        - 경고 칸(data_quality_warning=Y, warning_detail)에는 점수가 나왔어도 믿기 어려운 경우를 적는다:
            규칙 결과 없음 / 텍스트 블록 0개 / 난이도 공식을 적용한 문단 0개 /
-           CV 측정 불가 / 정적 fallback(봇 대기 화면 → 최초 응답 HTML만 분석) /
+           CV 측정 불가 / CV 측정 실패·텍스트 난이도 결과 없음(빠진 모듈 몫을 나머지가 나눠 가진
+           총점, 10/17) / 정적 fallback(봇 대기 화면 → 최초 응답 HTML만 분석) /
            대상 페이지 아님(차단·빈 문서·HTTP 오류, document_health.status)
        - notes에는 [자동] 태그로 레이어 팝업·제외 영역 개수, 분석 중단 사유,
          "모듈 상태와 점수가 앞뒤가 안 맞는" 경우를 남긴다(조용히 넘어가지 않도록).
@@ -334,9 +336,22 @@ def data_quality_warnings(output_dir: Path, final_data, rule_api, requested_url=
                     warnings.append('난이도 공식을 적용한 문단 0개: 난이도 감점이 0이라 만점에 가까운 점수는 '
                                     '"쉽다"가 아니라 "잴 문장이 없다"는 뜻입니다')
 
-        if get_path(modules, 'cv_visual', 'status') == 'not_measured':
+        cv_status = get_path(modules, 'cv_visual', 'status')
+        if cv_status == 'not_measured':
             reason = get_path(modules, 'cv_visual', 'reason') or 'NO_TEXT_DETECTED'
             warnings.append(f'CV 측정 불가: 잴 수 있는 글자가 없어 점수에서 빠졌습니다 ({reason})')
+
+        # 2026-10-17 재측정: 건보·복지부는 CV 캡처가 시간 초과로 실패해 규칙·텍스트만으로
+        # 총점을 냈는데(62.5:37.5로 재분배) 경고 칸이 N이었다. 가중치 분석은 이런 사이트를
+        # "CV 없음"으로 빼므로 기록표와도 맞춘다. 규칙 결과가 없으면 위의 "규칙 결과 없음"이
+        # 이미 붙고 점수 자체가 없으므로 여기서는 규칙 점수가 있을 때만 본다.
+        if rule_has_score(modules.get('rule_based')):
+            if not difficulty_is_valid(difficulty):
+                warnings.append('텍스트 난이도 결과 없음: 난이도 분석이 실패해 규칙·CV만으로 총점을 냈습니다'
+                                '(가중치 재분배, 다른 사이트 총점과 바로 비교하지 마세요)')
+            if cv_status not in ('success', 'not_measured'):
+                warnings.append('CV 측정 실패: 명암비 분석이 끝나지 않아(캡처 시간 초과 등) CV 없이 총점을 냈습니다'
+                                '(가중치 재분배, 다른 사이트 총점과 바로 비교하지 마세요)')
 
     legacy = final_data.get('data_quality_warnings') if isinstance(final_data, dict) else None
     if isinstance(legacy, list):   # 9월 형식의 결과(백업 폴더의 옛 결과)에 남아 있던 경고
@@ -450,6 +465,13 @@ def main(argv=None):
             auto_notes.append(f'[자동] 분석 중단: 다른 주소로 이동 ({moved_to})')
         else:
             auto_notes.append('[자동] result_final.json 없음(파이프라인이 끝까지 못 돌았을 가능성)')
+    elif not is_number(get_path(final_data, 'score_breakdown', 'module_scores', 'rule_based')):
+        # 2026-10-17 재측정(홍익대): run_all.py는 규칙 점수가 없으면 진단용 result_final.json
+        # (total_score 0, grade F)을 남기고 종료 코드 3으로 멈춘다. 이 0점은 평가 결과가 아니므로
+        # 기록표에 옮기지 않는다(옮기면 "0점 F"로 보인다).
+        target['total_score'] = ''
+        target['grade'] = ''
+        auto_notes.append('[자동] 점수 없음: 규칙 기반 결과가 없어 진단용 결과만 남았습니다(run_all 종료 코드 3)')
     else:
         target['total_score'] = final_data.get('total_score', '')
         target['grade'] = final_data.get('grade', '')

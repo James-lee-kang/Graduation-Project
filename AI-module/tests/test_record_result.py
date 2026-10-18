@@ -171,6 +171,28 @@ class RecordResultTests(unittest.TestCase):
         self.assertIn("NO_TEXT_DETECTED", row["warning_detail"])
         self.assertNotIn("[자동경고]", row["notes"], "result_cv.json은 있어도 측정 불가는 불일치가 아니다")
 
+    def test_failed_cv_or_text_module_is_warned_but_the_score_is_kept(self):
+        # 10/17 건보·복지부: CV 캡처 시간 초과 → 규칙·텍스트만으로 총점(62.5:37.5). 점수는 그대로
+        # 기록하되, 다른 사이트와 바로 비교할 수 없다는 경고를 붙인다.
+        cases = (
+            (dict(cv_result=None), "step5_cv", "CV 측정 실패", "텍스트 난이도 결과 없음"),
+            (dict(diff=None), "step3_difficulty", "텍스트 난이도 결과 없음", "CV 측정 실패"),
+        )
+        for kwargs, step, expected, other in cases:
+            with self.subTest(expected=expected):
+                final = final_result(**kwargs)
+                self.write_complete_run(final)
+                self.record()
+                row = self.row()
+                self.assertEqual(row[step], "X")
+                self.assertEqual(row["step1_rule_based"], "O")
+                self.assertEqual(row["total_score"], str(final["total_score"]))
+                self.assertNotEqual(row["total_score"], "")
+                self.assertEqual(row["data_quality_warning"], "Y")
+                self.assertIn(expected, row["warning_detail"])
+                self.assertNotIn(other, row["warning_detail"])
+                self.assertNotIn("규칙 결과 없음", row["warning_detail"])
+
     def test_empty_text_and_no_formula_paragraphs_are_warned_separately(self):
         button = {"text": "로그인", "category": "button", "difficulty_score": None, "flags": [], "metrics": {}}
         cases = (
@@ -221,6 +243,10 @@ class RecordResultTests(unittest.TestCase):
         self.assertEqual(row["step1_rule_based"], "X")
         self.assertEqual(row["data_quality_warning"], "Y")
         self.assertIn("규칙 결과 없음", row["warning_detail"])
+        # 10/17 홍익대: run_all은 이때 total_score 0인 진단용 결과를 남기고 종료 코드 3으로 멈춘다.
+        # 그 0점을 기록표에 옮기면 "0점 F"로 보이므로 비워 둔다.
+        self.assertEqual((row["total_score"], row["grade"]), ("", ""))
+        self.assertIn("[자동] 점수 없음", row["notes"])
         # 트래커에 없는 주소는 --allow-new 없이는 아무것도 하지 않는다.
         before = self.tracker.read_bytes()
         self.assertEqual(self.record(url="https://typo.test")[0], 1)

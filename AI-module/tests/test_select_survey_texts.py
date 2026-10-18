@@ -106,6 +106,18 @@ class SelectSurveyTextsTest(unittest.TestCase):
         self.assertIn("function createForms()", script)
         self.assertNotIn("candidate_id", script.split("const TEXT_DATA")[1].split("function")[0])
         self.assertIn('"form3"', script)
+        self.assertNotIn("**${", script)   # 구글 폼은 마크다운을 그리지 않는다
+        onelink = (root / "create_survey_form_onelink.gs").read_text(encoding="utf-8")
+        self.assertIn("function createOneLinkForm()", onelink)
+        self.assertIn("PageNavigationType.SUBMIT", onelink)
+        self.assertIn(sst.ONELINK_CONSENT_QUESTION, onelink)       # 1페이지 동의 문항(10/17)
+        self.assertIn("function createLotteryForm()", onelink)    # 추첨 응모는 별도 폼
+        self.assertIn("checkSettings();", onelink)                # 【…】 칸을 안 채우면 멈춤
+        self.assertIn("휴대전화 번호", onelink)                    # 추첨 응모는 이름+번호(10/17), 이메일은 받지 않음
+        self.assertIn("requireTextMatchesPattern", onelink)
+        self.assertNotIn("requireTextIsEmail", onelink)
+        for label in sst.ONELINK_GROUP_CHOICES:
+            self.assertIn(label, onelink)
 
     def test_warns_and_exits_3_when_a_bin_is_short(self):
         directory = tempfile.TemporaryDirectory()
@@ -119,6 +131,43 @@ class SelectSurveyTextsTest(unittest.TestCase):
         self.assertEqual(3, sst.main(["--skip-run", "--out", str(root)]))
         log = json.loads((root / "selection_log.json").read_text(encoding="utf-8"))
         self.assertTrue(any("GL12+" in w for w in log["warnings"]))
+
+    def test_rerun_skips_done_urls_and_numbers_new_ones_after_existing(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        sites = Path(directory.name) / "sites"
+        first = sites / "01_a.go.kr"
+        first.mkdir(parents=True)
+        (first / "url.txt").write_text("https://a.go.kr/1", encoding="utf-8")
+        (first / "result_text_difficulty.json").write_text("{}", encoding="utf-8")
+        failed = sites / "02_b.go.kr"
+        failed.mkdir()
+        (failed / "url.txt").write_text("https://b.go.kr/1", encoding="utf-8")   # 결과 없음 = 다시 돌림
+        plan = sst.plan_site_dirs(["https://a.go.kr/1", "https://b.go.kr/1", "https://a.go.kr/2"], sites)
+        self.assertEqual([(first, True), (failed, False), (sites / "03_a.go.kr", False)],
+                         [(d, done) for _, d, done in plan])
+        fresh = sst.plan_site_dirs(["https://x.go.kr/", "https://x.go.kr/"], Path(directory.name) / "none")
+        self.assertEqual(["01_x.go.kr", "02_x.go.kr"], [d.name for _, d, _ in fresh])
+
+    def test_not_prose_filter_drops_fragments_only(self):
+        fragments = ["<그림 3. 서울복지포털 내 ‘복지서비스 검색’ 화면(검색 조건 모두 부합)>",
+                     "나.침.반 안전교육(나를 지키고 침착하게 대처하기 위해 반드시 익혀야하는 대처요령)",
+                     "9. 사회보험 적용여부(해당란에 체크) ※ 주15시간이상 월60시간 이상 근무 의무가입 대상",
+                     "• 준비운동: 물에 들어가기 전에는 충분한 준비운동을 하고 들어가야 해요.",
+                     "규칙놀이터에서는 직접 만든 규칙에 따라 즐겁게 놀이하는 시간을 가진다. ⓒ노윤지",
+                     "가. 신청 대상은 관내에 주민등록을 둔 만 65세 이상 어르신입니다.",
+                     "서울시는 어린이 포털 사이트(http://kid.seoul.go.kr)를 8월 14일 전면 개편하였다.",
+                     "자료는 이메일(admin@seoul.go.kr)로 보내 주세요.",
+                     "서울복지포털(wis.seoul.go.kr)을 선보였다.",
+                     "A. 과자 봉지도 비닐류로 분리배출이 가능합니다!",
+                     "화재 국민행동요령 분류 작성자 홍길동 작성일 2013-09-16 첨부파일 공공누리 출처표시 변경금지."]
+        prose = ["남은 가스는 반드시 바람이 잘 통하는 공간이나 야외에서 빼야한다는 점 잊지 마세요!",
+                 "인플루엔자는 기침, 재채기 등을 통해 사람 간 전파가 됩니다.",
+                 "보건복지부는 3월 5일 「통합돌봄정책위원회」를 개최하였다.",
+                 "자세한 내용은 누리집에서 확인할 수 있습니다(문의 02-123-4567)."]
+        self.assertTrue(all(sst.not_prose_reason(t) for t in fragments))
+        self.assertEqual([None] * len(prose), [sst.not_prose_reason(t) for t in prose])
+        self.assertEqual("일반 쓰레기로 배출해야 해요.", sst.normalize("일반 쓰레기로 배출해야 해요. \u200b\u200b"))
 
     def test_sentence_count_ignores_decimal_points(self):
         self.assertEqual(1, sst.sentence_count("수수료는 3.5%이고 2026.06.22부터 적용합니다."))
