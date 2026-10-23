@@ -39,7 +39,8 @@ export function getFocusableElements(container: HTMLElement): HTMLElement[] {
 // The lock goes on <html>, the page's scroller. Page detail sets overflow on
 // <html> itself, so body overflow would no longer reach the viewport there:
 // the page kept scrolling and the scrollbar padding narrowed the live replay.
-function lockBodyScroll() {
+// Counted, so the phone navigation drawer and a dialog opened from it share it.
+export function lockBodyScroll() {
   if (activeBodyScrollLocks === 0) {
     const root = document.documentElement;
     rootOverflowBeforeLock = root.style.overflow;
@@ -57,7 +58,7 @@ function lockBodyScroll() {
   activeBodyScrollLocks += 1;
 }
 
-function unlockBodyScroll() {
+export function unlockBodyScroll() {
   activeBodyScrollLocks = Math.max(0, activeBodyScrollLocks - 1);
   if (activeBodyScrollLocks === 0) {
     document.documentElement.style.overflow = rootOverflowBeforeLock;
