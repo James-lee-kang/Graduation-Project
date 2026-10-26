@@ -12,10 +12,6 @@ import {
   type EvidenceFrameKind
 } from "./evidence-source";
 import {
-  consumeLiveReportAutomaticRecovery,
-  createLiveReportAutomaticRecoveryState
-} from "./live-report-recovery";
-import {
   advancePageEvidenceLoadingPhase,
   type PageEvidenceLoadingPhase
 } from "./page-evidence-loading-progress";
@@ -36,6 +32,7 @@ import {
   parsePageReplayMessage,
   toPageReplayIssue,
   type DashboardToPageReplayMessage,
+  type LiveDocumentHealthMessage,
   type PageReplayToDashboardMessage,
   type ReplayMarkerDensity,
   type ReplayViewportMetrics
@@ -56,7 +53,6 @@ type LiveReportPortConnection = {
   documentToken: string | null;
   /** The iframe load event of this document was already observed. */
   documentLoaded: boolean;
-  nextInboundSequence: number;
   nextOutboundSequence: number;
   port: MessagePort;
   sessionId: string;
@@ -76,12 +72,57 @@ const LIVE_REPORT_BRIDGE_ACK_TIMEOUT_MS = 4_000;
 // Keep this deadline above that server-side worst case so slow, valid sites get
 // a fair chance to finish before the live-only error state is shown.
 const REPLAY_FRAME_LOAD_TIMEOUT_MS = 120_000;
-// Match the live viewer's bounded INIT_ISSUES input. Overflow remains in the
-// unavailable list rather than waiting for statuses the viewer cannot send.
+// Stays under the viewer's INIT_ISSUES bound (10,000 in bridge-runtime.js).
+// Overflow remains in the unavailable list rather than waiting for statuses
+// the viewer was never asked for.
 const LIVE_REPORT_ISSUE_LIMIT = 5_000;
 // After INIT_ISSUES the viewer reports every issue within a few frames. An
 // issue still unreported after this is listed as not shown on the page.
 const LOCATOR_STATUS_TIMEOUT_MS = 10_000;
+
+type SentReplayViewport = {
+  documentToken: string;
+  scale: number;
+  visualWidth: number;
+  topInset: number;
+  markerDensity: ReplayMarkerDensity;
+  popoverScale: number;
+};
+
+// Replay messages that carry no document lifecycle; they count only for the active document.
+type ActiveDocumentReplayMessage = Exclude<
+  PageReplayToDashboardMessage,
+  { type: "DOCUMENT_LOADING" | "DOCUMENT_UNLOADING" | "READY" | "DOCUMENT_HEALTH" }
+>;
+
+function getFrameSource(
+  frameKind: EvidenceFrameKind,
+  liveSession: LiveReportSession | null,
+  previewRuntimeUrl: string | undefined
+) {
+  const frameRuntimeUrl = frameKind === "live"
+    ? liveSession?.runtimeUrl ?? null
+    : frameKind === "preview"
+      ? previewRuntimeUrl ?? null
+      : null;
+  const frameIdentity = getEvidenceFrameIdentity({
+    frameKind,
+    liveSessionId: liveSession?.sessionId ?? null,
+    previewRuntimeUrl: previewRuntimeUrl ?? null
+  });
+  return { frameRuntimeUrl, frameIdentity };
+}
+
+function isSameReplayViewport(previous: SentReplayViewport | null, next: SentReplayViewport): boolean {
+  return (
+    previous?.documentToken === next.documentToken
+    && Math.abs(previous.scale - next.scale) < 0.001
+    && Math.abs(previous.visualWidth - next.visualWidth) < 0.5
+    && Math.abs(previous.topInset - next.topInset) < 0.5
+    && previous.markerDensity === next.markerDensity
+    && previous.popoverScale === next.popoverScale
+  );
+}
 
 type PageEvidenceConnectionOptions = {
   evaluationRequestId: number | null;
@@ -138,11 +179,8 @@ export function usePageEvidenceConnection({
   const retiredDocumentTokensRef = useRef(new Set<string>());
   const frameLoadObservedRef = useRef(false);
   const replayFrameLoadTimeoutRef = useRef<number | null>(null);
-  const replayFrameLoadWatchdogEpochRef = useRef(0);
   const replayReadyTimeoutRef = useRef<number | null>(null);
-  const replayReadyWatchdogEpochRef = useRef(0);
   const locatorStatusTimeoutRef = useRef<number | null>(null);
-  const locatorStatusWatchdogEpochRef = useRef(0);
   // Set by an iframe load that replaced a connected document. Only then may a
   // new AVAILABLE announcement replace an established bridge connection.
   const liveReconnectAllowedRef = useRef(false);
@@ -150,20 +188,12 @@ export function usePageEvidenceConnection({
     documentToken: string;
     issuesSignature: string;
   } | null>(null);
-  const sentReplayViewportRef = useRef<{
-    documentToken: string;
-    scale: number;
-    visualWidth: number;
-    topInset: number;
-    markerDensity: ReplayMarkerDensity;
-    popoverScale: number;
-  } | null>(null);
+  const sentReplayViewportRef = useRef<SentReplayViewport | null>(null);
   const replayOriginSelectionRef = useRef<{ issueId: number | null } | null>(null);
   const selectedIssueStateRef = useRef(selectedIssueId);
   const selectedIssueFocusRequestIdRef = useRef(0);
-  const automaticLiveRecoveryRef = useRef(
-    createLiveReportAutomaticRecoveryState(evaluationRequestId)
-  );
+  // Each analysis request gets one automatic live-session recovery.
+  const recoveredRequestIdRef = useRef<number | null>(null);
 
   const omitCoordinateBoxes = captureMetadataStatus === "missing" || captureMetadataStatus === "error";
   const replayIssues = useMemo(
@@ -216,16 +246,7 @@ export function usePageEvidenceConnection({
     onLocatorReportChange(locatorReport);
   }, [onLocatorReportChange, locatorReport]);
 
-  const frameRuntimeUrl = activeFrameKind === "live"
-    ? liveSession?.runtimeUrl ?? null
-    : activeFrameKind === "preview"
-      ? previewRuntimeUrl ?? null
-      : null;
-  const frameIdentity = getEvidenceFrameIdentity({
-    frameKind: activeFrameKind,
-    liveSessionId: liveSession?.sessionId ?? null,
-    previewRuntimeUrl: previewRuntimeUrl ?? null
-  });
+  const { frameRuntimeUrl, frameIdentity } = getFrameSource(activeFrameKind, liveSession, previewRuntimeUrl);
   useLayoutEffect(() => {
     activeFrameKindRef.current = activeFrameKind;
   }, [activeFrameKind]);
@@ -241,14 +262,6 @@ export function usePageEvidenceConnection({
     selectedIssueStateRef.current = selectedIssueId;
   }, [selectedIssueId]);
 
-  useLayoutEffect(() => {
-    if (automaticLiveRecoveryRef.current.requestId !== evaluationRequestId) {
-      automaticLiveRecoveryRef.current = createLiveReportAutomaticRecoveryState(
-        evaluationRequestId
-      );
-    }
-  }, [evaluationRequestId]);
-
   function advanceReplayLoadingPhase(nextPhase: PageEvidenceLoadingPhase) {
     setReplayLoadingPhase((currentPhase) =>
       advancePageEvidenceLoadingPhase(currentPhase, nextPhase)
@@ -256,7 +269,6 @@ export function usePageEvidenceConnection({
   }
 
   function clearReplayFrameLoadTimeout() {
-    replayFrameLoadWatchdogEpochRef.current += 1;
     if (replayFrameLoadTimeoutRef.current !== null) {
       window.clearTimeout(replayFrameLoadTimeoutRef.current);
       replayFrameLoadTimeoutRef.current = null;
@@ -264,7 +276,6 @@ export function usePageEvidenceConnection({
   }
 
   function clearReplayReadyTimeout() {
-    replayReadyWatchdogEpochRef.current += 1;
     if (replayReadyTimeoutRef.current !== null) {
       window.clearTimeout(replayReadyTimeoutRef.current);
       replayReadyTimeoutRef.current = null;
@@ -272,7 +283,6 @@ export function usePageEvidenceConnection({
   }
 
   function clearLocatorStatusTimeout() {
-    locatorStatusWatchdogEpochRef.current += 1;
     if (locatorStatusTimeoutRef.current !== null) {
       window.clearTimeout(locatorStatusTimeoutRef.current);
       locatorStatusTimeoutRef.current = null;
@@ -281,11 +291,7 @@ export function usePageEvidenceConnection({
 
   function armLocatorStatusTimeout(issueIds: readonly number[]) {
     clearLocatorStatusTimeout();
-    const watchdogEpoch = locatorStatusWatchdogEpochRef.current;
     locatorStatusTimeoutRef.current = window.setTimeout(() => {
-      if (locatorStatusWatchdogEpochRef.current !== watchdogEpoch) {
-        return;
-      }
       locatorStatusTimeoutRef.current = null;
       settleMissingLocatorStates(issueIds, { status: "UNAVAILABLE", reason: "STATUS_TIMEOUT" });
     }, LOCATOR_STATUS_TIMEOUT_MS);
@@ -317,15 +323,12 @@ export function usePageEvidenceConnection({
     ) {
       cancelPendingLocatorStates();
       const currentRequestId = evaluationRequestIdRef.current;
-      const recovery = consumeLiveReportAutomaticRecovery(
-        automaticLiveRecoveryRef.current,
-        currentRequestId
-      );
-      automaticLiveRecoveryRef.current = recovery.nextState;
+      const shouldRetry = currentRequestId !== null && recoveredRequestIdRef.current !== currentRequestId;
+      if (shouldRetry) recoveredRequestIdRef.current = currentRequestId;
       setFailedLiveSessionId(sessionId);
       setReplayLoadingPhase("request-started");
       setReplayConnectionState("loading");
-      if (recovery.shouldRetry) {
+      if (shouldRetry) {
         retryLiveReportSessionRef.current();
       }
     }
@@ -333,11 +336,7 @@ export function usePageEvidenceConnection({
 
   function armReplayFrameLoadTimeout() {
     clearReplayFrameLoadTimeout();
-    const watchdogEpoch = replayFrameLoadWatchdogEpochRef.current;
     replayFrameLoadTimeoutRef.current = window.setTimeout(() => {
-      if (replayFrameLoadWatchdogEpochRef.current !== watchdogEpoch) {
-        return;
-      }
       replayFrameLoadTimeoutRef.current = null;
       setFallbackIssueId(null);
       const activeSession = liveSessionRef.current;
@@ -351,11 +350,7 @@ export function usePageEvidenceConnection({
 
   function armLiveReportBridgeAckTimeout(sessionId: string) {
     clearReplayReadyTimeout();
-    const watchdogEpoch = replayReadyWatchdogEpochRef.current;
     replayReadyTimeoutRef.current = window.setTimeout(() => {
-      if (replayReadyWatchdogEpochRef.current !== watchdogEpoch) {
-        return;
-      }
       replayReadyTimeoutRef.current = null;
       const connection = liveReportPortRef.current;
       if (
@@ -370,11 +365,7 @@ export function usePageEvidenceConnection({
 
   function armReplayReadyTimeout() {
     clearReplayReadyTimeout();
-    const watchdogEpoch = replayReadyWatchdogEpochRef.current;
     replayReadyTimeoutRef.current = window.setTimeout(() => {
-      if (replayReadyWatchdogEpochRef.current !== watchdogEpoch) {
-        return;
-      }
       replayReadyTimeoutRef.current = null;
       setFallbackIssueId(null);
       const activeSession = liveSessionRef.current;
@@ -495,26 +486,12 @@ export function usePageEvidenceConnection({
 
     closeLiveReportPort();
 
-    let challenge: string;
-    try {
-      challenge = createLiveReportChallenge();
-    } catch {
-      failLiveReportConnection(session.sessionId);
-      return;
-    }
-
-    let channel: MessageChannel;
-    try {
-      channel = new MessageChannel();
-    } catch {
-      failLiveReportConnection(session.sessionId);
-      return;
-    }
+    const challenge = createLiveReportChallenge();
+    const channel = new MessageChannel();
     const connection: LiveReportPortConnection = {
       challenge,
       documentToken: null,
       documentLoaded,
-      nextInboundSequence: 1,
       nextOutboundSequence: 1,
       port: channel.port1,
       sessionId: session.sessionId,
@@ -527,18 +504,12 @@ export function usePageEvidenceConnection({
         return;
       }
 
-      const message = parseLiveReportPortMessage(event.data, {
-        session,
-        challenge,
-        expectedSequence: connection.nextInboundSequence,
-        expectedDocumentToken: connection.documentToken
-      });
+      const message = parseLiveReportPortMessage(event.data, connection.documentToken);
       if (!message) {
         failLiveReportConnection(session.sessionId);
         return;
       }
 
-      connection.nextInboundSequence += 1;
       if (message.type === "ACK") {
         connection.documentToken = message.documentToken;
         liveReconnectAllowedRef.current = false;
@@ -586,29 +557,7 @@ export function usePageEvidenceConnection({
     const topInset = isDocumentScrolled ? Math.min(128, chromeHeight) : 0;
     const markerDensity = replayViewportMetrics.markerDensity ?? "regular";
     const popoverScale = replayViewportMetrics.popoverScale ?? 1;
-    const previous = sentReplayViewportRef.current;
-    if (
-      previous?.documentToken === documentToken
-      && Math.abs(previous.scale - replayViewportMetrics.scale) < 0.001
-      && Math.abs(previous.visualWidth - replayViewportMetrics.visualWidth) < 0.5
-      && Math.abs(previous.topInset - topInset) < 0.5
-      && previous.markerDensity === markerDensity
-      && previous.popoverScale === popoverScale
-    ) {
-      return;
-    }
-
-    postToReplay({
-      source: DASHBOARD_REPLAY_SOURCE,
-      type: "SET_VIEW_SCALE",
-      documentToken,
-      scale: replayViewportMetrics.scale,
-      visualWidth: replayViewportMetrics.visualWidth,
-      topInset,
-      ...(markerDensity === "compact" ? { markerDensity } : {}),
-      ...(popoverScale < 1 ? { popoverScale } : {})
-    });
-    sentReplayViewportRef.current = {
+    const viewport: SentReplayViewport = {
       documentToken,
       scale: replayViewportMetrics.scale,
       visualWidth: replayViewportMetrics.visualWidth,
@@ -616,6 +565,21 @@ export function usePageEvidenceConnection({
       markerDensity,
       popoverScale
     };
+    if (isSameReplayViewport(sentReplayViewportRef.current, viewport)) {
+      return;
+    }
+
+    postToReplay({
+      source: DASHBOARD_REPLAY_SOURCE,
+      type: "SET_VIEW_SCALE",
+      documentToken,
+      scale: viewport.scale,
+      visualWidth: viewport.visualWidth,
+      topInset,
+      ...(markerDensity === "compact" ? { markerDensity } : {}),
+      ...(popoverScale < 1 ? { popoverScale } : {})
+    });
+    sentReplayViewportRef.current = viewport;
   }
 
   function sendInitialIssues() {
@@ -698,185 +662,207 @@ export function usePageEvidenceConnection({
   }, [effectiveLoadState, replayConnectionState]);
 
   function handleReplayProtocolMessage(message: PageReplayToDashboardMessage) {
-    if (message.type === "DOCUMENT_LOADING") {
-      if (
-        retiredDocumentTokensRef.current.has(message.documentToken) ||
-        pendingDocumentTokenRef.current === message.documentToken ||
-        activeDocumentTokenRef.current === message.documentToken
-      ) {
+    switch (message.type) {
+      case "DOCUMENT_LOADING":
+        handleDocumentLoading(message.documentToken);
         return;
-      }
+      case "DOCUMENT_UNLOADING":
+        handleDocumentUnloading(message.documentToken);
+        return;
+      case "READY":
+        handleDocumentReady(message.documentToken);
+        return;
+      case "DOCUMENT_HEALTH":
+        handleDocumentHealth(message);
+        return;
+    }
 
-      const replacesKnownDocument =
-        activeDocumentTokenRef.current !== null || pendingDocumentTokenRef.current !== null;
-      invalidateReplayDocumentSession();
-      pendingDocumentTokenRef.current = message.documentToken;
-      if (replacesKnownDocument) {
-        setReplayLoadingPhase("source-ready");
-      } else {
-        advanceReplayLoadingPhase("source-ready");
-      }
-      awaitNextReplayDocument();
+    if (message.documentToken === activeDocumentTokenRef.current) {
+      handleActiveDocumentMessage(message);
+    }
+  }
+
+  function handleActiveDocumentMessage(message: ActiveDocumentReplayMessage) {
+    switch (message.type) {
+      case "REPORT_FOCUS_EXIT":
+        handleReportFocusExit(message.direction);
+        return;
+      case "DOCUMENT_TITLE":
+        setDocumentTitle(message.title);
+        return;
+      case "DOCUMENT_SCROLL":
+        setIsDocumentScrolled(message.isScrolled);
+        return;
+      case "ISSUE_SELECTED":
+        handleIssueSelected(message.issueId);
+        return;
+      case "ISSUE_DETAIL_FALLBACK":
+        handleIssueDetailFallback(message.issueId);
+        return;
+      case "COMMAND_REJECTED":
+        handleCommandRejected(message.commandType);
+        return;
+      case "LOCATOR_STATUS":
+        handleLocatorStatus(message);
+    }
+  }
+
+  function handleDocumentLoading(documentToken: string) {
+    if (
+      retiredDocumentTokensRef.current.has(documentToken) ||
+      pendingDocumentTokenRef.current === documentToken ||
+      activeDocumentTokenRef.current === documentToken
+    ) {
       return;
     }
 
-    if (message.type === "DOCUMENT_UNLOADING") {
-      if (
-        message.documentToken !== activeDocumentTokenRef.current &&
-        message.documentToken !== pendingDocumentTokenRef.current
-      ) {
-        return;
-      }
-
-      invalidateReplayDocumentSession();
+    const replacesKnownDocument =
+      activeDocumentTokenRef.current !== null || pendingDocumentTokenRef.current !== null;
+    invalidateReplayDocumentSession();
+    pendingDocumentTokenRef.current = documentToken;
+    if (replacesKnownDocument) {
       setReplayLoadingPhase("source-ready");
-      awaitNextReplayDocument();
-      if (activeFrameKindRef.current === "live") {
-        closeLiveReportPort();
-      }
+    } else {
+      advanceReplayLoadingPhase("source-ready");
+    }
+    awaitNextReplayDocument();
+  }
+
+  function handleDocumentUnloading(documentToken: string) {
+    if (
+      documentToken !== activeDocumentTokenRef.current &&
+      documentToken !== pendingDocumentTokenRef.current
+    ) {
       return;
     }
 
-    if (message.type === "READY") {
-      if (
-        retiredDocumentTokensRef.current.has(message.documentToken) ||
-        activeDocumentTokenRef.current === message.documentToken ||
-        (pendingDocumentTokenRef.current !== null &&
-          pendingDocumentTokenRef.current !== message.documentToken)
-      ) {
-        return;
-      }
+    invalidateReplayDocumentSession();
+    setReplayLoadingPhase("source-ready");
+    awaitNextReplayDocument();
+    if (activeFrameKindRef.current === "live") {
+      closeLiveReportPort();
+    }
+  }
 
-      activeDocumentTokenRef.current = message.documentToken;
-      pendingDocumentTokenRef.current = null;
-      // A trusted bridge READY proves that the document executed successfully.
-      // The iframe load event may still be waiting on slow subresources, so it
-      // must no longer be allowed to trip the coarse frame-load watchdog.
-      clearReplayFrameLoadTimeout();
-      readyAwaitingFrameLoadRef.current = frameLoadObservedRef.current
-        ? null
-        : message.documentToken;
-      replayOriginSelectionRef.current = null;
-      advanceReplayLoadingPhase("document-ready");
-      if (activeFrameKindRef.current === "live") {
-        // A live bridge can initialize even when the proxied page has not painted any
-        // meaningful content. Keep the loading shield in place until the bridge reports
-        // actual visible DOM, and give late client rendering a fresh health window.
-        setReplayConnectionState("loading");
-        armReplayReadyTimeout();
-      } else {
-        clearReplayReadyTimeout();
-        advanceReplayLoadingPhase("complete");
-        setReplayConnectionState("ready");
-        setReplayReadyEpoch((current) => current + 1);
-      }
+  function handleDocumentReady(documentToken: string) {
+    if (
+      retiredDocumentTokensRef.current.has(documentToken) ||
+      activeDocumentTokenRef.current === documentToken ||
+      (pendingDocumentTokenRef.current !== null &&
+        pendingDocumentTokenRef.current !== documentToken)
+    ) {
       return;
     }
 
-    if (message.type === "DOCUMENT_HEALTH") {
-      if (
-        activeFrameKindRef.current !== "live" ||
-        message.documentToken !== activeDocumentTokenRef.current ||
-        !isMeaningfulLiveDocumentHealth(message)
-      ) {
-        return;
-      }
-
-      // A late iframe load may have armed a new watchdog after this document was
-      // already confirmed. Every valid health replay must cancel that watchdog,
-      // including duplicate reports for the active document token.
+    activeDocumentTokenRef.current = documentToken;
+    pendingDocumentTokenRef.current = null;
+    // A trusted bridge READY proves that the document executed successfully.
+    // The iframe load event may still be waiting on slow subresources, so it
+    // must no longer be allowed to trip the coarse frame-load watchdog.
+    clearReplayFrameLoadTimeout();
+    readyAwaitingFrameLoadRef.current = frameLoadObservedRef.current
+      ? null
+      : documentToken;
+    replayOriginSelectionRef.current = null;
+    advanceReplayLoadingPhase("document-ready");
+    if (activeFrameKindRef.current === "live") {
+      // A live bridge can initialize even when the proxied page has not painted any
+      // meaningful content. Keep the loading shield in place until the bridge reports
+      // actual visible DOM, and give late client rendering a fresh health window.
+      setReplayConnectionState("loading");
+      armReplayReadyTimeout();
+    } else {
       clearReplayReadyTimeout();
-      if (confirmedLiveDocumentTokenRef.current === message.documentToken) {
-        return;
-      }
-      confirmedLiveDocumentTokenRef.current = message.documentToken;
       advanceReplayLoadingPhase("complete");
       setReplayConnectionState("ready");
       setReplayReadyEpoch((current) => current + 1);
+    }
+  }
+
+  function handleDocumentHealth(message: LiveDocumentHealthMessage) {
+    if (
+      activeFrameKindRef.current !== "live" ||
+      message.documentToken !== activeDocumentTokenRef.current ||
+      !isMeaningfulLiveDocumentHealth(message)
+    ) {
       return;
     }
 
-    if (message.documentToken !== activeDocumentTokenRef.current) {
+    // A late iframe load may have armed a new watchdog after this document was
+    // already confirmed. Every valid health replay must cancel that watchdog,
+    // including duplicate reports for the active document token.
+    clearReplayReadyTimeout();
+    if (confirmedLiveDocumentTokenRef.current === message.documentToken) {
+      return;
+    }
+    confirmedLiveDocumentTokenRef.current = message.documentToken;
+    advanceReplayLoadingPhase("complete");
+    setReplayConnectionState("ready");
+    setReplayReadyEpoch((current) => current + 1);
+  }
+
+  function handleReportFocusExit(direction: ReportFocusDirection) {
+    const frame = iframeRef.current;
+    const active = document.activeElement;
+    // An old exit must not take focus back from a dialog or another page.
+    if (frame && (active === frame ||
+      (active instanceof HTMLElement && active.hasAttribute("data-live-report-focus-guard") &&
+        active.parentElement === frame.parentElement))) {
+      focusOutsideLiveReport(frame, direction);
+    }
+  }
+
+  function handleIssueSelected(issueId: number | null) {
+    if (
+      (issueId === null || replayIssueIds.has(issueId)) &&
+      issueId !== selectedIssueStateRef.current
+    ) {
+      selectedIssueStateRef.current = issueId;
+      replayOriginSelectionRef.current = { issueId };
+      onSelectIssue(issueId);
+    }
+  }
+
+  function handleIssueDetailFallback(issueId: number | null) {
+    if (issueId === null) {
+      setFallbackIssueId(null);
       return;
     }
 
-    if (message.type === "REPORT_FOCUS_EXIT") {
-      const frame = iframeRef.current;
-      const active = document.activeElement;
-      // An old exit must not take focus back from a dialog or another page.
-      if (frame && (active === frame ||
-        (active instanceof HTMLElement && active.hasAttribute("data-live-report-focus-guard") &&
-          active.parentElement === frame.parentElement))) {
-        focusOutsideLiveReport(frame, message.direction);
-      }
+    if (
+      effectiveLoadState === "ready" &&
+      replayConnectionState === "ready" &&
+      replayIssueIds.has(issueId)
+    ) {
+      setFallbackIssueId(issueId);
+    }
+  }
+
+  function handleCommandRejected(commandType: string) {
+    // The viewer kept its sequence but holds no issues: list every finding
+    // as not shown instead of leaving the location check pending.
+    if (commandType === "INIT_ISSUES") {
+      clearLocatorStatusTimeout();
+      settleMissingLocatorStates(
+        transmittedReplayIssues.map((issue) => issue.id),
+        { status: "UNAVAILABLE", reason: "REPLAY_REJECTED" }
+      );
+    }
+  }
+
+  function handleLocatorStatus(message: Extract<PageReplayToDashboardMessage, { type: "LOCATOR_STATUS" }>) {
+    if (!replayIssueIds.has(message.issueId)) {
       return;
     }
 
-    if (message.type === "DOCUMENT_TITLE") {
-      setDocumentTitle(message.title);
-      return;
-    }
-
-    if (message.type === "DOCUMENT_SCROLL") {
-      setIsDocumentScrolled(message.isScrolled);
-      return;
-    }
-
-    if (message.type === "ISSUE_SELECTED") {
-      if (
-        (message.issueId === null || replayIssueIds.has(message.issueId)) &&
-        message.issueId !== selectedIssueStateRef.current
-      ) {
-        selectedIssueStateRef.current = message.issueId;
-        replayOriginSelectionRef.current = { issueId: message.issueId };
-        onSelectIssue(message.issueId);
-      }
-      return;
-    }
-
-    if (message.type === "ISSUE_DETAIL_FALLBACK") {
-      if (message.issueId === null) {
-        setFallbackIssueId(null);
-        return;
-      }
-
-      if (
-        effectiveLoadState === "ready" &&
-        replayConnectionState === "ready" &&
-        replayIssueIds.has(message.issueId)
-      ) {
-        setFallbackIssueId(message.issueId);
-      }
-      return;
-    }
-
-    if (message.type === "COMMAND_REJECTED") {
-      // The viewer kept its sequence but holds no issues: list every finding
-      // as not shown instead of leaving the location check pending.
-      if (message.commandType === "INIT_ISSUES") {
-        clearLocatorStatusTimeout();
-        settleMissingLocatorStates(
-          transmittedReplayIssues.map((issue) => issue.id),
-          { status: "UNAVAILABLE", reason: "REPLAY_REJECTED" }
-        );
-      }
-      return;
-    }
-
-    if (message.type === "LOCATOR_STATUS") {
-      if (!replayIssueIds.has(message.issueId)) {
-        return;
-      }
-
-      const captureMissing = message.status === "UNAVAILABLE" && coordinateOmittedIssueIds.has(message.issueId);
-      enqueueLocatorState(message.issueId, {
-        status: message.status,
-        reason: !captureMissing ? message.reason
-          : captureMetadataStatus === "error" ? "CAPTURE_METADATA_FAILED" : "CAPTURE_METADATA_MISSING",
-        recoverable: message.recoverable,
-        ownerKind: message.ownerKind
-      });
-    }
+    const captureMissing = message.status === "UNAVAILABLE" && coordinateOmittedIssueIds.has(message.issueId);
+    enqueueLocatorState(message.issueId, {
+      status: message.status,
+      reason: !captureMissing ? message.reason
+        : captureMetadataStatus === "error" ? "CAPTURE_METADATA_FAILED" : "CAPTURE_METADATA_MISSING",
+      recoverable: message.recoverable,
+      ownerKind: message.ownerKind
+    });
   }
 
   useLayoutEffect(() => {
@@ -884,6 +870,39 @@ export function usePageEvidenceConnection({
   });
 
   useLayoutEffect(() => {
+    function handleLiveBridgeMessage(event: MessageEvent<unknown>) {
+      const session = liveSessionRef.current;
+      if (!session) {
+        return;
+      }
+      if (
+        parseLiveReportSessionExhaustedEvent(event.data, session, event.origin) !== null
+      ) {
+        failLiveReportConnection(session.sessionId);
+        return;
+      }
+      const available = parseLiveReportBridgeAvailableMessage(event.data, session.sessionId);
+      let targetOrigin: string;
+      try {
+        targetOrigin = getLiveReportConnectTargetOrigin(session, event.origin);
+      } catch {
+        return;
+      }
+      if (!available) {
+        return;
+      }
+      if (!shouldConnectAnnouncedLiveBridge({
+        connection: liveReportPortRef.current,
+        sessionId: session.sessionId,
+        viewerOrigin: targetOrigin,
+        documentToken: available.documentToken,
+        reconnectAllowed: liveReconnectAllowedRef.current
+      })) {
+        return;
+      }
+      liveReportBridgeConnectorRef.current(targetOrigin, liveReconnectAllowedRef.current);
+    }
+
     function handleReplayMessage(event: MessageEvent<unknown>) {
       const iframe = iframeRef.current;
       if (
@@ -894,36 +913,7 @@ export function usePageEvidenceConnection({
       }
 
       if (activeFrameKindRef.current === "live") {
-        const session = liveSessionRef.current;
-        if (!session) {
-          return;
-        }
-        if (
-          parseLiveReportSessionExhaustedEvent(event.data, session, event.origin) !== null
-        ) {
-          failLiveReportConnection(session.sessionId);
-          return;
-        }
-        const available = parseLiveReportBridgeAvailableMessage(event.data, session.sessionId);
-        let targetOrigin: string;
-        try {
-          targetOrigin = getLiveReportConnectTargetOrigin(session, event.origin);
-        } catch {
-          return;
-        }
-        if (!available) {
-          return;
-        }
-        if (!shouldConnectAnnouncedLiveBridge({
-          connection: liveReportPortRef.current,
-          sessionId: session.sessionId,
-          viewerOrigin: targetOrigin,
-          documentToken: available.documentToken,
-          reconnectAllowed: liveReconnectAllowedRef.current
-        })) {
-          return;
-        }
-        liveReportBridgeConnectorRef.current(targetOrigin, liveReconnectAllowedRef.current);
+        handleLiveBridgeMessage(event);
         return;
       }
 
@@ -1014,43 +1004,47 @@ export function usePageEvidenceConnection({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [replayConnectionState, selectedIssueFocusRequestId, selectedVisibleIssueId]);
 
+  function handleLiveFrameLoad() {
+    frameLoadObservedRef.current = true;
+    const activeSession = liveSessionRef.current;
+    const existingConnection = liveReportPortRef.current;
+    if (
+      activeSession !== null &&
+      existingConnection?.sessionId === activeSession.sessionId
+    ) {
+      // The first load belongs to the connected document; a later one means
+      // the iframe now shows another document whose bridge may reconnect.
+      if (existingConnection.documentLoaded) {
+        liveReconnectAllowedRef.current = true;
+      }
+      existingConnection.documentLoaded = true;
+      if (existingConnection.documentToken !== null) {
+        if (!shouldAwaitLiveDocumentHealthAfterFrameLoad({
+          confirmedDocumentToken: confirmedLiveDocumentTokenRef.current,
+          documentToken: existingConnection.documentToken
+        })) {
+          clearReplayReadyTimeout();
+          return;
+        }
+        armReplayReadyTimeout();
+        requestReplayDocumentState();
+      } else {
+        armLiveReportBridgeAckTimeout(activeSession.sessionId);
+      }
+      return;
+    }
+    clearReplayReadyTimeout();
+    closeLiveReportPort();
+    invalidateReplayDocumentSession();
+    setReplayConnectionState("loading");
+    connectLiveReportBridge(undefined, true);
+  }
+
   function handleFrameLoad() {
     clearReplayFrameLoadTimeout();
     advanceReplayLoadingPhase("frame-loaded");
     if (activeFrameKindRef.current === "live") {
-      frameLoadObservedRef.current = true;
-      const activeSession = liveSessionRef.current;
-      const existingConnection = liveReportPortRef.current;
-      if (
-        activeSession !== null &&
-        existingConnection?.sessionId === activeSession.sessionId
-      ) {
-        // The first load belongs to the connected document; a later one means
-        // the iframe now shows another document whose bridge may reconnect.
-        if (existingConnection.documentLoaded) {
-          liveReconnectAllowedRef.current = true;
-        }
-        existingConnection.documentLoaded = true;
-        if (existingConnection.documentToken !== null) {
-          if (!shouldAwaitLiveDocumentHealthAfterFrameLoad({
-            confirmedDocumentToken: confirmedLiveDocumentTokenRef.current,
-            documentToken: existingConnection.documentToken
-          })) {
-            clearReplayReadyTimeout();
-            return;
-          }
-          armReplayReadyTimeout();
-          requestReplayDocumentState();
-        } else {
-          armLiveReportBridgeAckTimeout(activeSession.sessionId);
-        }
-        return;
-      }
-      clearReplayReadyTimeout();
-      closeLiveReportPort();
-      invalidateReplayDocumentSession();
-      setReplayConnectionState("loading");
-      connectLiveReportBridge(undefined, true);
+      handleLiveFrameLoad();
       return;
     }
 
@@ -1092,7 +1086,7 @@ export function usePageEvidenceConnection({
 
   // A retry the user asked for earns one automatic recovery again.
   function resetAutomaticLiveRecovery() {
-    automaticLiveRecoveryRef.current = createLiveReportAutomaticRecoveryState(evaluationRequestIdRef.current);
+    recoveredRequestIdRef.current = null;
   }
 
   function retryFrame() {
@@ -1107,8 +1101,7 @@ export function usePageEvidenceConnection({
       // A live session can have exhausted its bounded request
       // or byte budget. Retrying the same URL can never heal
       // that state, so ask the owner to create a fresh session.
-      automaticLiveRecoveryRef.current =
-        createLiveReportAutomaticRecoveryState(evaluationRequestId);
+      recoveredRequestIdRef.current = null;
       onRetryLiveSession();
     } else {
       setFrameRevision((current) => current + 1);

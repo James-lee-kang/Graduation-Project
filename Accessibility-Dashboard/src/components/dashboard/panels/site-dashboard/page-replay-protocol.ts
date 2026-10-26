@@ -15,7 +15,7 @@ import {
   type IssueCoordinateBox
 } from "./issue-locator";
 import type { RecentIssueRow } from "./types";
-import { hasExactOwnKeys, isDocumentToken, isObjectRecord } from "@/lib/guards";
+import { isDocumentToken, isObjectRecord } from "@/lib/guards";
 
 export const DASHBOARD_REPLAY_SOURCE = "accessibility-dashboard" as const;
 export const PAGE_REPLAY_SOURCE = "accessibility-page-replay" as const;
@@ -37,12 +37,10 @@ export type ReplayViewportMetrics = {
 // Bounds the live viewer enforces on INIT_ISSUES (bridge-runtime.js). One
 // issue outside them makes the viewer reject every issue in the command.
 export const REPLAY_BRIDGE_LIMITS = {
-  issues: 10_000,
   pathSteps: 128
 } as const;
 
 const LOCATOR_REASON_MAX_LENGTH = 128;
-const BLOCKED_LINK_HREF_MAX_LENGTH = 2_048;
 const COMMAND_TYPE_PATTERN = /^[A-Z_]{1,32}$/;
 const LEGACY_TEXT_ANALYSIS_INPUT_MAX_LENGTH = 16_384;
 
@@ -249,18 +247,6 @@ export type PageReplayToDashboardMessage =
       ownerKind?: LocatorOwnerKind;
     }
   | {
-      source: typeof PAGE_REPLAY_SOURCE;
-      type: "LINK_BLOCKED";
-      documentToken: string;
-      href?: string;
-    }
-  | {
-      source: typeof PAGE_REPLAY_SOURCE;
-      type: "FORM_BLOCKED";
-      documentToken: string;
-      method: "GET" | "POST" | "DIALOG";
-    }
-  | {
       /** The viewer refused a command it received in sequence. */
       source: typeof PAGE_REPLAY_SOURCE;
       type: "COMMAND_REJECTED";
@@ -276,25 +262,14 @@ export type LiveDocumentHealthMessage = Extract<
   { type: "DOCUMENT_HEALTH" }
 >;
 
-const LIVE_DOCUMENT_MIN_TEXT_LENGTH = 12;
-const LIVE_DOCUMENT_MIN_CONTROL_COUNT = 2;
-const LIVE_DOCUMENT_MIN_IMAGE_COUNT = 2;
-const LIVE_DOCUMENT_MIN_VISIBLE_VISUAL_AREA = 10_000;
-const LIVE_DOCUMENT_MIN_MEANINGFUL_SAMPLES = 1;
-
+/**
+ * The bridge applies the thresholds itself (bridge-runtime.js measureDocumentHealth)
+ * and reports MEANINGFUL only for a substantive page.
+ */
 export function isMeaningfulLiveDocumentHealth(
   message: LiveDocumentHealthMessage
 ): boolean {
-  const hasSubstantiveContent =
-    message.visibleTextLength >= LIVE_DOCUMENT_MIN_TEXT_LENGTH ||
-    message.visibleControlCount >= LIVE_DOCUMENT_MIN_CONTROL_COUNT ||
-    message.visibleImageCount >= LIVE_DOCUMENT_MIN_IMAGE_COUNT ||
-    message.largestVisibleVisualArea >= LIVE_DOCUMENT_MIN_VISIBLE_VISUAL_AREA;
-  return (
-    message.status === "MEANINGFUL" &&
-    message.consecutiveMeaningfulSamples >= LIVE_DOCUMENT_MIN_MEANINGFUL_SAMPLES &&
-    hasSubstantiveContent
-  );
+  return message.status === "MEANINGFUL";
 }
 
 export function isValidReplayViewportMetrics(
@@ -341,12 +316,7 @@ export function toPageReplayIssue(
     REPLAY_TEXT_LIMITS.code,
     "UNKNOWN"
   );
-  const textAnalysis = row.analyzerType === "AI_TEXT"
-    ? parseLegacyTextAnalysisMessage(row.issue.message)
-    : null;
-  const displayMessage = textAnalysis
-    ? formatTextAnalysisMessage(textAnalysis)
-    : formatIssueDescription(row.issue.message, row.analyzerType, row.issue.ruleId);
+  const { textAnalysis, displayMessage } = describeReplayIssue(row);
   const coordinateOnly = getIssueCoordinateBox(row.issue) !== null;
   const box = omitCoordinateBox ? null : getIssueCoordinateBox(row.issue, deviceScaleFactor);
   const pathSteps = getReplayIssuePathSteps(row.issue);
@@ -387,6 +357,16 @@ export function toPageReplayIssue(
   };
 }
 
+function describeReplayIssue(row: RecentIssueRow) {
+  const textAnalysis = row.analyzerType === "AI_TEXT"
+    ? parseLegacyTextAnalysisMessage(row.issue.message)
+    : null;
+  const displayMessage = textAnalysis
+    ? formatTextAnalysisMessage(textAnalysis)
+    : formatIssueDescription(row.issue.message, row.analyzerType, row.issue.ruleId);
+  return { textAnalysis, displayMessage };
+}
+
 export function parseLegacyTextAnalysisMessage(
   value: string | null | undefined
 ): ReplayTextAnalysisDetail | null {
@@ -401,48 +381,68 @@ function parseTextAnalysisMessage(value: string): ReplayTextAnalysisDetail | nul
   const message = value.replace(/\0/g, "").replace(/\r\n?/g, "\n").trim();
   if (!message.startsWith("text=")) return null;
 
-  const revisionMarker = "\nllm_revision=";
-  const suggestionsMarker = "\nsuggestions=";
-  const flagsMarker = "\nflags=";
-  const revisionIndex = message.lastIndexOf(revisionMarker);
-  const suggestionsBoundary = revisionIndex >= 0 ? revisionIndex : message.length;
-  const suggestionsIndex = message.lastIndexOf(suggestionsMarker, suggestionsBoundary - 1);
-  const flagsBoundary = suggestionsIndex >= 0 ? suggestionsIndex : suggestionsBoundary;
-  const flagsIndex = message.lastIndexOf(flagsMarker, flagsBoundary - 1);
-  if (flagsIndex < "text=".length) return null;
-  if (
-    message.indexOf(flagsMarker) !== flagsIndex
-    || (suggestionsIndex >= 0 && message.indexOf(suggestionsMarker) !== suggestionsIndex)
-    || (revisionIndex >= 0 && message.indexOf(revisionMarker) !== revisionIndex)
-  ) {
-    return null;
-  }
-
-  const sourceText = message.slice("text=".length, flagsIndex).trim();
-  const flagsEnd = suggestionsIndex >= 0 ? suggestionsIndex : suggestionsBoundary;
-  const flags = parseTextAnalysisFlags(
-    message.slice(flagsIndex + flagsMarker.length, flagsEnd)
-  );
+  const sections = splitTextAnalysisSections(message);
+  if (!sections) return null;
+  const flags = parseTextAnalysisFlags(sections.flags);
   if (!flags) return null;
 
-  const suggestions = suggestionsIndex >= 0
-    ? parseTextAnalysisSuggestions(
-        message.slice(suggestionsIndex + suggestionsMarker.length, suggestionsBoundary)
-      )
+  const suggestions = sections.suggestions !== null
+    ? parseTextAnalysisSuggestions(sections.suggestions)
     : [];
-  const revision = revisionIndex >= 0
-    ? parseTextAnalysisRevision(message.slice(revisionIndex + revisionMarker.length))
+  const revision = sections.revision !== null
+    ? parseTextAnalysisRevision(sections.revision)
     : null;
-  if (revisionIndex >= 0 && !revision) return null;
-  if (!sourceText && flags.length === 0 && suggestions.length === 0 && !revision) return null;
+  if (sections.revision !== null && !revision) return null;
 
-  return {
+  const detail: ReplayTextAnalysisDetail = {
     kind: "text-analysis",
-    sourceText,
+    sourceText: sections.sourceText,
     flags,
     suggestions,
     revision
   };
+  return hasTextAnalysisContent(detail) ? detail : null;
+}
+
+const TEXT_ANALYSIS_FLAGS_MARKER = "\nflags=";
+const TEXT_ANALYSIS_SUGGESTIONS_MARKER = "\nsuggestions=";
+const TEXT_ANALYSIS_REVISION_MARKER = "\nllm_revision=";
+
+/** Splits "text=…\nflags=…[\nsuggestions=…][\nllm_revision=…]" into its raw sections. */
+function splitTextAnalysisSections(message: string) {
+  const revisionIndex = message.lastIndexOf(TEXT_ANALYSIS_REVISION_MARKER);
+  const suggestionsBoundary = revisionIndex >= 0 ? revisionIndex : message.length;
+  const suggestionsIndex = message.lastIndexOf(TEXT_ANALYSIS_SUGGESTIONS_MARKER, suggestionsBoundary - 1);
+  const flagsBoundary = suggestionsIndex >= 0 ? suggestionsIndex : suggestionsBoundary;
+  const flagsIndex = message.lastIndexOf(TEXT_ANALYSIS_FLAGS_MARKER, flagsBoundary - 1);
+  if (flagsIndex < "text=".length) return null;
+  if (
+    !isSoleMarker(message, TEXT_ANALYSIS_FLAGS_MARKER, flagsIndex)
+    || !isSoleMarker(message, TEXT_ANALYSIS_SUGGESTIONS_MARKER, suggestionsIndex)
+    || !isSoleMarker(message, TEXT_ANALYSIS_REVISION_MARKER, revisionIndex)
+  ) {
+    return null;
+  }
+
+  return {
+    sourceText: message.slice("text=".length, flagsIndex).trim(),
+    flags: message.slice(flagsIndex + TEXT_ANALYSIS_FLAGS_MARKER.length, flagsBoundary),
+    suggestions: suggestionsIndex >= 0
+      ? message.slice(suggestionsIndex + TEXT_ANALYSIS_SUGGESTIONS_MARKER.length, suggestionsBoundary)
+      : null,
+    revision: revisionIndex >= 0
+      ? message.slice(revisionIndex + TEXT_ANALYSIS_REVISION_MARKER.length)
+      : null
+  };
+}
+
+/** A marker found at `index` (negative when absent) is its only occurrence. */
+function isSoleMarker(message: string, marker: string, index: number): boolean {
+  return index < 0 || message.indexOf(marker) === index;
+}
+
+function hasTextAnalysisContent(detail: ReplayTextAnalysisDetail): boolean {
+  return Boolean(detail.sourceText) || detail.flags.length > 0 || detail.suggestions.length > 0 || detail.revision !== null;
 }
 
 function boundTextAnalysisDetail(
@@ -513,18 +513,22 @@ function parseTextAnalysisRevision(
   try {
     const parsed: unknown = JSON.parse(value.trim());
     if (!isObjectRecord(parsed)) return null;
-    if (
-      (hasOwnKey(parsed, "revised_text") && typeof parsed.revised_text !== "string")
-      || (hasOwnKey(parsed, "reason") && typeof parsed.reason !== "string")
-    ) {
-      return null;
-    }
-    const text = normalizeTextAnalysisText(typeof parsed.revised_text === "string" ? parsed.revised_text : "");
-    const reason = normalizeTextAnalysisText(typeof parsed.reason === "string" ? parsed.reason : "");
+    const revisedText = readOptionalTextField(parsed, "revised_text");
+    const revisionReason = readOptionalTextField(parsed, "reason");
+    if (revisedText === null || revisionReason === null) return null;
+    const text = normalizeTextAnalysisText(revisedText);
+    const reason = normalizeTextAnalysisText(revisionReason);
     return text || reason ? { text, reason } : null;
   } catch {
     return null;
   }
+}
+
+/** The field's text, "" when it is absent, or null when it holds a non-string. */
+function readOptionalTextField(record: Record<string, unknown>, key: string): string | null {
+  const field = record[key];
+  if (typeof field === "string") return field;
+  return hasOwnKey(record, key) ? null : "";
 }
 
 function normalizeTextAnalysisList(
@@ -574,6 +578,18 @@ function formatTextAnalysisMessage(detail: ReplayTextAnalysisDetail): string {
   return sections.join("\n\n");
 }
 
+// Checked in order; the first matching keyword group decides the category.
+const CATEGORY_KEYWORD_PATTERNS: ReadonlyArray<readonly [RegExp, ReplayIssueCategory]> = [
+  [/(?:COLOR|CONTRAST|VISUAL|CV_|명도|대비|색상|시각)/, "visual"],
+  [/(?:IMAGE|IMG|ALT|CAPTION|VIDEO|AUDIO|MEDIA|대체 텍스트|자막|자동 재생)/, "media"],
+  [/(?:LINK|NAV|BYPASS|SKIP|링크|탐색|건너뛰기|참조 위치)/, "navigation"],
+  [/(?:FORM|INPUT|LABEL|AUTH|ERROR|레이블|입력|인증|오류 정정)/, "form"],
+  [/(?:POINTER|TARGET_SIZE|GESTURE|포인터|동작기반|조작 가능|응답시간|사용자 요구)/, "interaction"],
+  [/(?:KEYBOARD|FOCUS|SHORTCUT|키보드|초점|단축키)/, "keyboard"],
+  [/(?:ARIA|ROLE|MARKUP|TABLE|STRUCTURE|SEMANTIC|표의 구성|선형구조|마크업)/, "structure"],
+  [/(?:TEXT_DIFFICULTY|READING|LANG|TITLE|HEADING|TEXT|텍스트|문장|언어|제목)/, "text"]
+];
+
 export function classifyReplayIssueCategory(
   row: Pick<RecentIssueRow, "analyzerType" | "issue">,
   normalizedCode = normalizeIssueCode(row.issue.issueCode)
@@ -592,15 +608,8 @@ export function classifyReplayIssueCategory(
   }
 
   const signature = [normalizedCode, row.issue.issueTitle].join(" ").toUpperCase();
-  if (/(?:COLOR|CONTRAST|VISUAL|CV_|명도|대비|색상|시각)/.test(signature)) return "visual";
-  if (/(?:IMAGE|IMG|ALT|CAPTION|VIDEO|AUDIO|MEDIA|대체 텍스트|자막|자동 재생)/.test(signature)) return "media";
-  if (/(?:LINK|NAV|BYPASS|SKIP|링크|탐색|건너뛰기|참조 위치)/.test(signature)) return "navigation";
-  if (/(?:FORM|INPUT|LABEL|AUTH|ERROR|레이블|입력|인증|오류 정정)/.test(signature)) return "form";
-  if (/(?:POINTER|TARGET_SIZE|GESTURE|포인터|동작기반|조작 가능|응답시간|사용자 요구)/.test(signature)) return "interaction";
-  if (/(?:KEYBOARD|FOCUS|SHORTCUT|키보드|초점|단축키)/.test(signature)) return "keyboard";
-  if (/(?:ARIA|ROLE|MARKUP|TABLE|STRUCTURE|SEMANTIC|표의 구성|선형구조|마크업)/.test(signature)) return "structure";
-  if (/(?:TEXT_DIFFICULTY|READING|LANG|TITLE|HEADING|TEXT|텍스트|문장|언어|제목)/.test(signature)) return "text";
-  return "general";
+  const keywordMatch = CATEGORY_KEYWORD_PATTERNS.find(([pattern]) => pattern.test(signature));
+  return keywordMatch ? keywordMatch[1] : "general";
 }
 
 function toBoundedReplayText(
@@ -623,7 +632,8 @@ function toOptionalBoundedReplayText(
 type ReplayMessageType = PageReplayToDashboardMessage["type"];
 type ReplayMessageFields = Record<string, unknown>;
 // A parser sees a message whose source and document token are already checked
-// and accepts it only when the fields its type adds are exactly right.
+// and accepts it when the fields its type needs are right; fields a newer
+// bridge adds are ignored instead of dropping the message.
 type ReplayMessageParser = (value: ReplayMessageFields, documentToken: string) => PageReplayToDashboardMessage | null;
 
 const locatorConnectionStatuses: readonly unknown[] = ["CONNECTED", "VISIBLE", "OFFSCREEN", "HIDDEN_STATE", "UNAVAILABLE"];
@@ -636,14 +646,9 @@ const documentHealthCounts = [
   "visibleTextLength"
 ] as const;
 
-/** The message carries the common header, then exactly `fields`. */
+/** The message carries every one of `fields` (others are allowed). */
 function hasMessageFields(value: ReplayMessageFields, fields: readonly string[] = []): boolean {
-  return hasExactOwnKeys(value, ["source", "type", "documentToken", ...fields]);
-}
-
-/** The optional fields among `keys` that the message actually carries. */
-function presentFields(value: ReplayMessageFields, keys: readonly string[]): string[] {
-  return keys.filter((key) => hasOwnKey(value, key));
+  return fields.every((field) => hasOwnKey(value, field));
 }
 
 function readBoundedCounts<K extends string>(value: ReplayMessageFields, keys: readonly K[]): Record<K, number> | null {
@@ -667,6 +672,16 @@ function parseIssueReference(type: "ISSUE_SELECTED" | "ISSUE_DETAIL_FALLBACK"): 
     if (!hasMessageFields(value, ["issueId"]) || (issueId !== null && !isIssueId(issueId))) return null;
     return { source: PAGE_REPLAY_SOURCE, type, documentToken, issueId };
   };
+}
+
+/** The optional LOCATOR_STATUS fields are absent or well formed. */
+function hasValidLocatorStatusDetails({ status, reason, recoverable, ownerKind }: ReplayMessageFields): boolean {
+  return (
+    (reason === undefined || (typeof reason === "string" && reason.length <= LOCATOR_REASON_MAX_LENGTH)) &&
+    // Only a hidden-state finding can be brought back on screen.
+    (recoverable === undefined || (typeof recoverable === "boolean" && status === "HIDDEN_STATE")) &&
+    (ownerKind === undefined || locatorOwnerKinds.includes(ownerKind as LocatorOwnerKind))
+  );
 }
 
 const pageReplayMessageParsers: Readonly<Record<ReplayMessageType, ReplayMessageParser>> = {
@@ -707,13 +722,10 @@ const pageReplayMessageParsers: Readonly<Record<ReplayMessageType, ReplayMessage
   LOCATOR_STATUS: (value, documentToken) => {
     const { issueId, status, reason, recoverable, ownerKind } = value;
     const valid =
-      hasMessageFields(value, ["issueId", "status", ...presentFields(value, ["reason", "recoverable", "ownerKind"])]) &&
+      hasMessageFields(value, ["issueId", "status"]) &&
       isIssueId(issueId) &&
       locatorConnectionStatuses.includes(status) &&
-      (reason === undefined || (typeof reason === "string" && reason.length <= LOCATOR_REASON_MAX_LENGTH)) &&
-      // Only a hidden-state finding can be brought back on screen.
-      (recoverable === undefined || (typeof recoverable === "boolean" && status === "HIDDEN_STATE")) &&
-      (ownerKind === undefined || locatorOwnerKinds.includes(ownerKind as LocatorOwnerKind));
+      hasValidLocatorStatusDetails(value);
     if (!valid) return null;
     return {
       source: PAGE_REPLAY_SOURCE,
@@ -725,21 +737,6 @@ const pageReplayMessageParsers: Readonly<Record<ReplayMessageType, ReplayMessage
       ...(typeof recoverable === "boolean" ? { recoverable } : {}),
       ...(ownerKind !== undefined ? { ownerKind: ownerKind as LocatorOwnerKind } : {})
     };
-  },
-
-  FORM_BLOCKED: (value, documentToken) => {
-    const { method } = value;
-    if (!hasMessageFields(value, ["method"]) || (method !== "GET" && method !== "POST" && method !== "DIALOG")) return null;
-    return { source: PAGE_REPLAY_SOURCE, type: "FORM_BLOCKED", documentToken, method };
-  },
-
-  LINK_BLOCKED: (value, documentToken) => {
-    const { href } = value;
-    if (!hasMessageFields(value, presentFields(value, ["href"])) ||
-        (href !== undefined && (typeof href !== "string" || href.length > BLOCKED_LINK_HREF_MAX_LENGTH))) {
-      return null;
-    }
-    return { source: PAGE_REPLAY_SOURCE, type: "LINK_BLOCKED", documentToken, ...(href !== undefined ? { href } : {}) };
   },
 
   COMMAND_REJECTED: (value, documentToken) => {
